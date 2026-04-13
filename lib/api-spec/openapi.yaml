@@ -3,20 +3,27 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Time Tracking API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: clients
+  - name: projects
+  - name: employees
+  - name: holidays
+  - name: timeEntries
+  - name: reports
+  - name: auth
+  - name: dashboard
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +31,688 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ── Clients ────────────────────────────────────────────────────────────────
+  /clients:
+    get:
+      operationId: listClients
+      tags: [clients]
+      summary: List all clients
+      parameters:
+        - name: includeInactive
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of clients
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Client"
+    post:
+      operationId: createClient
+      tags: [clients]
+      summary: Create a client
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+
+  /clients/{id}:
+    get:
+      operationId: getClient
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateClient
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteClient
+      tags: [clients]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ── Projects ────────────────────────────────────────────────────────────────
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List projects
+      parameters:
+        - name: includeInactive
+          in: query
+          schema:
+            type: boolean
+        - name: clientId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+    post:
+      operationId: createProject
+      tags: [projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      tags: [projects]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateProject
+      tags: [projects]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteProject
+      tags: [projects]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ── Employees ────────────────────────────────────────────────────────────────
+  /employees:
+    get:
+      operationId: listEmployees
+      tags: [employees]
+      summary: List employees
+      parameters:
+        - name: includeInactive
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of employees
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Employee"
+    post:
+      operationId: createEmployee
+      tags: [employees]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEmployeeBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+
+  /employees/{id}:
+    get:
+      operationId: getEmployee
+      tags: [employees]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Employee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateEmployee
+      tags: [employees]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateEmployeeBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteEmployee
+      tags: [employees]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  /employees/{id}/reset-pin:
+    post:
+      operationId: resetEmployeePin
+      tags: [employees]
+      summary: Reset employee PIN and generate new token
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPinBody"
+      responses:
+        "200":
+          description: Pin reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+
+  # ── Holiday Calendars & Holidays ────────────────────────────────────────────
+  /holiday-calendars:
+    get:
+      operationId: listHolidayCalendars
+      tags: [holidays]
+      responses:
+        "200":
+          description: List of calendars
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HolidayCalendar"
+    post:
+      operationId: createHolidayCalendar
+      tags: [holidays]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHolidayCalendarBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HolidayCalendar"
+
+  /holiday-calendars/{id}/holidays:
+    get:
+      operationId: listHolidays
+      tags: [holidays]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: year
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of holidays
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Holiday"
+    post:
+      operationId: createHoliday
+      tags: [holidays]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHolidayBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Holiday"
+
+  /holidays/{id}:
+    delete:
+      operationId: deleteHoliday
+      tags: [holidays]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Time Entries ────────────────────────────────────────────────────────────
+  /time-entries:
+    get:
+      operationId: listTimeEntries
+      tags: [timeEntries]
+      parameters:
+        - name: employeeId
+          in: query
+          schema:
+            type: integer
+        - name: projectId
+          in: query
+          schema:
+            type: integer
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: List of time entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimeEntry"
+    post:
+      operationId: createTimeEntry
+      tags: [timeEntries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTimeEntryBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimeEntry"
+
+  /time-entries/bulk:
+    post:
+      operationId: bulkUpsertTimeEntries
+      tags: [timeEntries]
+      summary: Upsert multiple time entries at once (for weekly timesheet save)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkUpsertTimeEntriesBody"
+      responses:
+        "200":
+          description: Upserted entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimeEntry"
+
+  /time-entries/{id}:
+    get:
+      operationId: getTimeEntry
+      tags: [timeEntries]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Time entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimeEntry"
+        "404":
+          description: Not found
+    patch:
+      operationId: updateTimeEntry
+      tags: [timeEntries]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTimeEntryBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimeEntry"
+        "404":
+          description: Not found
+    delete:
+      operationId: deleteTimeEntry
+      tags: [timeEntries]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+
+  # ── Reports ────────────────────────────────────────────────────────────────
+  /reports/utilization:
+    get:
+      operationId: getUtilizationReport
+      tags: [reports]
+      summary: Employee utilization report
+      parameters:
+        - name: startDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: employeeId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Utilization data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UtilizationRow"
+
+  /reports/projects:
+    get:
+      operationId: getProjectReport
+      tags: [reports]
+      summary: Project hours report
+      parameters:
+        - name: startDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Project report
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectReportRow"
+
+  /reports/clients:
+    get:
+      operationId: getClientReport
+      tags: [reports]
+      summary: Client hours report
+      parameters:
+        - name: startDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: endDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Client report
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClientReportRow"
+
+  # ── Dashboard ────────────────────────────────────────────────────────────────
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Dashboard summary for current week
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  # ── Employee Auth (Personal Link) ────────────────────────────────────────────
+  /auth/employee/verify:
+    post:
+      operationId: verifyEmployeePin
+      tags: [auth]
+      summary: Verify employee PIN for personal link access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPinBody"
+      responses:
+        "200":
+          description: Employee info on success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Employee"
+        "401":
+          description: Invalid PIN
+
+  /auth/employee/token/{token}:
+    get:
+      operationId: getEmployeeByToken
+      tags: [auth]
+      summary: Get employee basic info by token (without PIN — used to show the name on the PIN entry page)
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Employee info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmployeePublic"
+        "404":
+          description: Not found
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +723,532 @@ components:
       required:
         - status
 
+    # ── Client ──────────────────────────────────────────────────────────────
+    Client:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        active:
+          type: boolean
+        notes:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - active
+        - notes
+        - createdAt
+
+    CreateClientBody:
+      type: object
+      properties:
+        name:
+          type: string
+        active:
+          type: boolean
+        notes:
+          type: ["string", "null"]
+      required:
+        - name
+
+    UpdateClientBody:
+      type: object
+      properties:
+        name:
+          type: string
+        active:
+          type: boolean
+        notes:
+          type: ["string", "null"]
+
+    # ── Project ──────────────────────────────────────────────────────────────
+    Project:
+      type: object
+      properties:
+        id:
+          type: integer
+        clientId:
+          type: integer
+        clientName:
+          type: ["string", "null"]
+        name:
+          type: string
+        code:
+          type: ["string", "null"]
+        active:
+          type: boolean
+        isBillable:
+          type: boolean
+        budgetHours:
+          type: ["number", "null"]
+        startDate:
+          type: ["string", "null"]
+          format: date
+        endDate:
+          type: ["string", "null"]
+          format: date
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - clientId
+        - clientName
+        - name
+        - code
+        - active
+        - isBillable
+        - budgetHours
+        - startDate
+        - endDate
+        - createdAt
+
+    CreateProjectBody:
+      type: object
+      properties:
+        clientId:
+          type: integer
+        name:
+          type: string
+        code:
+          type: ["string", "null"]
+        active:
+          type: boolean
+        isBillable:
+          type: boolean
+        budgetHours:
+          type: ["number", "null"]
+        startDate:
+          type: ["string", "null"]
+          format: date
+        endDate:
+          type: ["string", "null"]
+          format: date
+      required:
+        - clientId
+        - name
+
+    UpdateProjectBody:
+      type: object
+      properties:
+        clientId:
+          type: integer
+        name:
+          type: string
+        code:
+          type: ["string", "null"]
+        active:
+          type: boolean
+        isBillable:
+          type: boolean
+        budgetHours:
+          type: ["number", "null"]
+        startDate:
+          type: ["string", "null"]
+          format: date
+        endDate:
+          type: ["string", "null"]
+          format: date
+
+    # ── Employee ──────────────────────────────────────────────────────────────
+    Employee:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: ["string", "null"]
+        weeklyCapacityHours:
+          type: number
+        workingDaysMask:
+          type: array
+          items:
+            type: integer
+        holidayCalendarCode:
+          type: ["string", "null"]
+        personalAccessToken:
+          type: string
+        active:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - email
+        - weeklyCapacityHours
+        - workingDaysMask
+        - holidayCalendarCode
+        - personalAccessToken
+        - active
+        - createdAt
+
+    EmployeePublic:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+      required:
+        - id
+        - name
+
+    CreateEmployeeBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: ["string", "null"]
+        weeklyCapacityHours:
+          type: number
+        workingDaysMask:
+          type: array
+          items:
+            type: integer
+        holidayCalendarCode:
+          type: ["string", "null"]
+        active:
+          type: boolean
+        pin:
+          type: string
+      required:
+        - name
+        - weeklyCapacityHours
+        - workingDaysMask
+        - pin
+
+    UpdateEmployeeBody:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: ["string", "null"]
+        weeklyCapacityHours:
+          type: number
+        workingDaysMask:
+          type: array
+          items:
+            type: integer
+        holidayCalendarCode:
+          type: ["string", "null"]
+        active:
+          type: boolean
+
+    ResetPinBody:
+      type: object
+      properties:
+        pin:
+          type: string
+      required:
+        - pin
+
+    # ── Holiday Calendars ──────────────────────────────────────────────────
+    HolidayCalendar:
+      type: object
+      properties:
+        id:
+          type: integer
+        code:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - code
+        - name
+        - createdAt
+
+    CreateHolidayCalendarBody:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+      required:
+        - code
+        - name
+
+    Holiday:
+      type: object
+      properties:
+        id:
+          type: integer
+        calendarId:
+          type: integer
+        date:
+          type: string
+          format: date
+        name:
+          type: string
+      required:
+        - id
+        - calendarId
+        - date
+        - name
+
+    CreateHolidayBody:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        name:
+          type: string
+      required:
+        - date
+        - name
+
+    # ── Time Entry ──────────────────────────────────────────────────────────
+    TimeEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        projectId:
+          type: integer
+        projectName:
+          type: ["string", "null"]
+        clientName:
+          type: ["string", "null"]
+        isBillable:
+          type: ["boolean", "null"]
+        entryDate:
+          type: string
+          format: date
+        hours:
+          type: number
+        note:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - employeeId
+        - projectId
+        - projectName
+        - clientName
+        - isBillable
+        - entryDate
+        - hours
+        - note
+        - createdAt
+        - updatedAt
+
+    CreateTimeEntryBody:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        projectId:
+          type: integer
+        entryDate:
+          type: string
+          format: date
+        hours:
+          type: number
+        note:
+          type: ["string", "null"]
+      required:
+        - employeeId
+        - projectId
+        - entryDate
+        - hours
+
+    UpdateTimeEntryBody:
+      type: object
+      properties:
+        projectId:
+          type: integer
+        entryDate:
+          type: string
+          format: date
+        hours:
+          type: number
+        note:
+          type: ["string", "null"]
+
+    BulkUpsertTimeEntriesBody:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkTimeEntryItem"
+      required:
+        - entries
+
+    BulkTimeEntryItem:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        projectId:
+          type: integer
+        entryDate:
+          type: string
+          format: date
+        hours:
+          type: number
+        note:
+          type: ["string", "null"]
+      required:
+        - employeeId
+        - projectId
+        - entryDate
+        - hours
+
+    VerifyPinBody:
+      type: object
+      properties:
+        token:
+          type: string
+        pin:
+          type: string
+      required:
+        - token
+        - pin
+
+    # ── Reports ──────────────────────────────────────────────────────────────
+    UtilizationRow:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        employeeName:
+          type: string
+        availableHours:
+          type: number
+        billableHours:
+          type: number
+        nonBillableHours:
+          type: number
+        totalBookedHours:
+          type: number
+        billableUtilization:
+          type: number
+        overallUtilization:
+          type: number
+      required:
+        - employeeId
+        - employeeName
+        - availableHours
+        - billableHours
+        - nonBillableHours
+        - totalBookedHours
+        - billableUtilization
+        - overallUtilization
+
+    ProjectReportRow:
+      type: object
+      properties:
+        projectId:
+          type: integer
+        projectName:
+          type: string
+        clientName:
+          type: string
+        isBillable:
+          type: boolean
+        totalHours:
+          type: number
+        billableHours:
+          type: number
+        nonBillableHours:
+          type: number
+      required:
+        - projectId
+        - projectName
+        - clientName
+        - isBillable
+        - totalHours
+        - billableHours
+        - nonBillableHours
+
+    ClientReportRow:
+      type: object
+      properties:
+        clientId:
+          type: integer
+        clientName:
+          type: string
+        totalHours:
+          type: number
+        billableHours:
+          type: number
+        nonBillableHours:
+          type: number
+      required:
+        - clientId
+        - clientName
+        - totalHours
+        - billableHours
+        - nonBillableHours
+
+    DashboardSummary:
+      type: object
+      properties:
+        weekStartDate:
+          type: string
+          format: date
+        weekEndDate:
+          type: string
+          format: date
+        totalBookedHours:
+          type: number
+        billableBookedHours:
+          type: number
+        employeeSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmployeeWeekSummary"
+      required:
+        - weekStartDate
+        - weekEndDate
+        - totalBookedHours
+        - billableBookedHours
+        - employeeSummaries
+
+    EmployeeWeekSummary:
+      type: object
+      properties:
+        employeeId:
+          type: integer
+        employeeName:
+          type: string
+        availableHours:
+          type: number
+        bookedHours:
+          type: number
+        billableHours:
+          type: number
+        utilization:
+          type: number
+      required:
+        - employeeId
+        - employeeName
+        - availableHours
+        - bookedHours
+        - billableHours
+        - utilization

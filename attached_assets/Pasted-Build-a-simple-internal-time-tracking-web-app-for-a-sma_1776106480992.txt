@@ -1,0 +1,261 @@
+Build a simple internal time-tracking web app for a small agency / service business. The product should feel like a better Excel sheet, not like a heavy ERP. Prioritize speed, simplicity, and ease of daily use.
+
+Tech stack:
+- Full-stack TypeScript
+- React frontend
+- Node.js backend
+- PostgreSQL database
+- Simple clean UI optimized for desktop first
+- Use a spreadsheet-like weekly entry interface where possible
+- Keep architecture simple and maintainable
+
+Core concept:
+This is a lightweight version of Productive / MOCO focused only on:
+1. Clients
+2. Projects
+3. Employees
+4. Time entry
+5. Utilization reporting
+6. German holiday calendar for 2026
+7. Very simple employee access via personal protected links instead of full login, if that is faster to implement
+
+Important product decision:
+Do NOT make complex per-user authentication mandatory in V1.
+Instead:
+- There is one main admin area for the owner/manager
+- Each employee gets a personal time-entry link
+- Each personal link must be protected by a simple PIN or password
+- Admin can also open any employee page and enter hours on their behalf
+- This should feel extremely easy, almost like filling in a spreadsheet
+
+User roles in V1:
+1. Admin
+   - full access
+   - manage employees, clients, projects, holidays
+   - enter time for anyone
+   - view all reports
+2. Employee via protected personal link
+   - can only view and edit own time entries
+   - can see only active projects available for booking
+   - can use a very simple weekly timesheet page
+   - no complicated dashboard needed
+
+Main features:
+
+A. Clients
+- Create, edit, archive clients
+- Fields:
+  - id
+  - name
+  - active/inactive
+  - notes
+  - created_at
+
+B. Projects
+- Create, edit, archive projects
+- Each project belongs to one client
+- Fields:
+  - id
+  - client_id
+  - name
+  - code (optional short code)
+  - active/inactive
+  - is_billable (boolean)
+  - budget_hours (optional)
+  - start_date (optional)
+  - end_date (optional)
+  - created_at
+
+C. Employees
+- Create, edit, archive employees
+- Fields:
+  - id
+  - name
+  - email (optional)
+  - weekly_capacity_hours (required, e.g. 40 or 20)
+  - working_days_mask (required)
+    - support Monday-Friday selection at minimum
+    - example values: [1,1,1,1,1,0,0]
+  - holiday_calendar_code
+  - personal_access_token
+  - personal_access_pin_hash
+  - active/inactive
+  - created_at
+- Weekly capacity and working days are critical because utilization must respect part-time availability
+
+D. Holiday calendars
+- Add a holiday calendar table and holiday dates table
+- Preload one calendar:
+  - code: DE-BASE-2026
+  - name: Germany Base Public Holidays 2026
+- Seed these holiday dates exactly:
+  - 2026-01-01 New Year’s Day
+  - 2026-04-03 Good Friday
+  - 2026-04-06 Easter Monday
+  - 2026-05-01 Labour Day
+  - 2026-05-14 Ascension Day
+  - 2026-05-25 Whit Monday
+  - 2026-10-03 German Unity Day
+  - 2026-12-25 Christmas Day
+  - 2026-12-26 Second Day of Christmas
+- Make the calendar assignable to employees
+- Architect it so that region-specific German calendars can easily be added later
+
+E. Time entries
+- Employees and admin can create/edit/delete time entries
+- Fields:
+  - id
+  - employee_id
+  - project_id
+  - entry_date
+  - hours
+  - note (optional)
+  - created_at
+  - updated_at
+- Allow decimal hours, e.g. 0.5, 1.5, 7.5
+- Prevent absurd values like < 0 or > 24
+- Make entry very fast
+
+F. Weekly timesheet page
+This is one of the most important screens.
+Build a super simple weekly entry experience:
+- Select week
+- Rows = projects
+- Columns = Monday to Sunday
+- Cells = hours
+- Add row button for another project
+- Fast save / auto-save behavior
+- Show weekly total
+- Show target available hours for that week
+- Show remaining hours for that week
+- Make it feel like a better spreadsheet
+- Employee sees only own page
+- Admin can switch between employees
+
+G. Admin pages
+Build these pages:
+1. Dashboard
+   - total booked hours this week
+   - billable booked hours this week
+   - utilization summary by employee
+   - simple cards, not too many charts
+2. Clients page
+3. Projects page
+4. Employees page
+5. Holidays page
+6. Reports page
+7. Employee personal-link management page
+
+H. Utilization logic
+This must be correct and is critical.
+
+Definitions:
+- Available hours = theoretical working hours in the selected period based on:
+  - employee weekly_capacity_hours
+  - employee working days
+  - minus holidays from assigned holiday calendar that fall on employee working days
+- Ignore vacation and sick leave in V1
+- If a holiday falls on a non-working day for that employee, do not subtract anything
+
+Daily capacity logic:
+- Daily capacity = weekly_capacity_hours / number_of_active_working_days
+Examples:
+- 40h and Mon-Fri = 8h/day
+- 20h and Mon-Fri = 4h/day
+- 32h and Mon-Thu = 8h/day
+
+Formulas:
+- Billable utilization = billable booked hours / available hours
+- Overall utilization = all booked project hours / available hours
+
+Examples the app should support:
+- Employee works 20h/week, Mon-Fri = 4h/day
+- If one holiday falls on a weekday in that week, available hours become 16 instead of 20
+- If employee books 12h billable and 2h non-billable, billable utilization = 75%, overall utilization = 87.5%
+
+I. Reports
+Create simple reports:
+1. Employee utilization report
+   - filter by week or month
+   - show available hours
+   - show billable hours
+   - show non-billable hours
+   - show billable utilization %
+   - show overall utilization %
+2. Project report
+   - total hours by project
+   - billable vs non-billable
+3. Client report
+   - total hours by client
+
+J. Personal protected links
+This is critical.
+Implement a lightweight access system:
+- Each employee gets a unique URL like /u/{token}
+- On first open, require a PIN or password
+- Store only hashed PIN/password
+- After successful entry, allow access to only that employee’s timesheet
+- Keep the flow minimal and fast
+- Admin can copy/share/reset these links and PINs from admin UI
+- Add a “login as employee link preview” feature for admin if useful
+
+K. UX principles
+- Minimal and clean
+- Very few clicks
+- Focus on fast time entry
+- Prioritize keyboard-friendly input
+- Use simple tables/cards
+- Avoid over-engineering
+- This should feel like an internal operations tool, not polished SaaS complexity
+
+L. Database schema
+Create migrations and seed data for:
+- clients
+- projects
+- employees
+- holiday_calendars
+- holidays
+- time_entries
+
+M. Seed/demo data
+Seed:
+- 2 demo clients
+- 3 demo projects (mix of billable and non-billable)
+- 3 demo employees:
+  - Max Mustermann, 40h, Mon-Fri, DE-BASE-2026
+  - Anna Beispiel, 20h, Mon-Fri, DE-BASE-2026
+  - Paul Teilzeit, 32h, Mon-Thu, DE-BASE-2026
+- Seed sample time entries for current month
+- Seed holidays exactly as listed above
+
+N. Validation/business rules
+- Only active projects can receive new time entries
+- Project must belong to an active client unless archived history is being viewed
+- Hours must be >= 0 and <= 24
+- Show warnings when booked hours exceed available weekly hours
+- Do not block overbooking, just highlight it
+
+O. Deliverables
+Please generate:
+1. Working full-stack app
+2. Database schema and migrations
+3. Seed script
+4. Clean README with run/setup instructions
+5. Clear comments in the utilization calculation logic
+6. Simple but usable UI
+
+P. Nice-to-have if quick to implement
+- CSV export for reports
+- Duplicate last week’s rows in timesheet
+- Notes per day/project cell or per entry
+- Simple search/filter for projects
+- Dark mode not necessary
+
+Q. What to optimize for
+Optimize for:
+- fastest path to usable internal MVP
+- easy manual time entry
+- accurate utilization based on employee capacity and holidays
+- low complexity over perfect enterprise architecture
+
+Start by scaffolding the data model, seed data, holiday calendar, and the weekly timesheet UI first.
