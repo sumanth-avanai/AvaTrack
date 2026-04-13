@@ -28,8 +28,12 @@ export default function Dashboard() {
 
   if (!summary) return null;
 
-  const totalUtilization = summary.totalBookedHours > 0 
-    ? (summary.billableBookedHours / summary.totalBookedHours) * 100 
+  const totalAvailableHours = summary.employeeSummaries.reduce(
+    (sum, e) => sum + e.availableHours,
+    0
+  );
+  const totalUtilization = totalAvailableHours > 0
+    ? (summary.billableBookedHours / totalAvailableHours) * 100
     : 0;
 
   return (
@@ -70,7 +74,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{totalUtilization.toFixed(1)}%</div>
-              <p className="text-xs text-muted-foreground mt-1">Billable / Total</p>
+              <p className="text-xs text-muted-foreground mt-1">Billable / Available</p>
             </CardContent>
           </Card>
         </div>

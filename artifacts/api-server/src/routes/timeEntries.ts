@@ -41,17 +41,21 @@ async function enrichEntries(entries: (typeof timeEntriesTable.$inferSelect)[]) 
 }
 
 router.get("/time-entries", async (req, res): Promise<void> => {
-  const query = ListTimeEntriesQueryParams.safeParse(req.query);
-  if (!query.success) {
-    res.status(400).json({ error: query.error.message });
-    return;
-  }
+  // Parse date strings directly — zod.date() rejects plain "YYYY-MM-DD" strings from query params.
+  const employeeId = req.query.employeeId ? parseInt(String(req.query.employeeId), 10) : undefined;
+  const projectId  = req.query.projectId  ? parseInt(String(req.query.projectId),  10) : undefined;
+
+  const startDateRaw = req.query.startDate;
+  const endDateRaw   = req.query.endDate;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const startDate = typeof startDateRaw === "string" && dateRe.test(startDateRaw) ? startDateRaw : undefined;
+  const endDate   = typeof endDateRaw   === "string" && dateRe.test(endDateRaw)   ? endDateRaw   : undefined;
 
   const conditions = [];
-  if (query.data.employeeId) conditions.push(eq(timeEntriesTable.employeeId, query.data.employeeId));
-  if (query.data.projectId) conditions.push(eq(timeEntriesTable.projectId, query.data.projectId));
-  if (query.data.startDate) conditions.push(gte(timeEntriesTable.entryDate, query.data.startDate));
-  if (query.data.endDate) conditions.push(lte(timeEntriesTable.entryDate, query.data.endDate));
+  if (employeeId && !isNaN(employeeId)) conditions.push(eq(timeEntriesTable.employeeId, employeeId));
+  if (projectId  && !isNaN(projectId))  conditions.push(eq(timeEntriesTable.projectId,  projectId));
+  if (startDate) conditions.push(gte(timeEntriesTable.entryDate, startDate));
+  if (endDate)   conditions.push(lte(timeEntriesTable.entryDate, endDate));
 
   const entries = await db
     .select()
