@@ -21,9 +21,11 @@ export function parseWorkingDaysMask(mask: string): boolean[] {
 
 /**
  * Get the ISO day index (0=Mon, 6=Sun) for a given Date.
+ * MUST use getUTCDay() — dates are always created as UTC midnight,
+ * so getDay() (local time) would return the wrong weekday in non-UTC servers.
  */
 function getIsoDayIndex(date: Date): number {
-  const d = date.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+  const d = date.getUTCDay(); // 0=Sun, 1=Mon ... 6=Sat  (UTC, not local time)
   return d === 0 ? 6 : d - 1; // convert to 0=Mon ... 6=Sun
 }
 

@@ -1,21 +1,29 @@
 import { Router, type IRouter } from "express";
 import { eq, and, gte, lte } from "drizzle-orm";
 import { db, timeEntriesTable, projectsTable, clientsTable, employeesTable, holidaysTable, holidayCalendarsTable } from "@workspace/db";
-import { GetUtilizationReportQueryParams, GetProjectReportQueryParams, GetClientReportQueryParams } from "@workspace/api-zod";
 import { calculateAvailableHours } from "../lib/utilization";
 
 const router: IRouter = Router();
 
+// Parse and validate a "YYYY-MM-DD" date string from query params.
+function parseDateParam(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  return value;
+}
+
 router.get("/reports/utilization", async (req, res): Promise<void> => {
-  const query = GetUtilizationReportQueryParams.safeParse(req.query);
-  if (!query.success) {
-    res.status(400).json({ error: query.error.message });
+  const startDate = parseDateParam(req.query.startDate);
+  const endDate = parseDateParam(req.query.endDate);
+
+  if (!startDate || !endDate) {
+    res.status(400).json({ error: "startDate and endDate (YYYY-MM-DD) are required" });
     return;
   }
 
-  const { startDate, endDate, employeeId } = query.data;
+  const employeeIdRaw = req.query.employeeId;
+  const employeeId = employeeIdRaw ? parseInt(String(employeeIdRaw), 10) : undefined;
 
-  // Fetch all active employees (or just the one requested)
   const employeeFilter = employeeId
     ? and(eq(employeesTable.id, employeeId), eq(employeesTable.active, true))
     : eq(employeesTable.active, true);
@@ -42,7 +50,7 @@ router.get("/reports/utilization", async (req, res): Promise<void> => {
       }
     }
 
-    // Calculate available hours
+    // Calculate available hours — respects capacity, working days mask, and holiday deductions.
     const availableHours = calculateAvailableHours(
       startDate,
       endDate,
@@ -71,7 +79,7 @@ router.get("/reports/utilization", async (req, res): Promise<void> => {
     const nonBillableHours = entries.filter((e) => !e.isBillable).reduce((sum, e) => sum + e.hours, 0);
     const totalBookedHours = billableHours + nonBillableHours;
 
-    // Utilization = booked / available (0 if no available hours)
+    // Utilization = booked / available (available already accounts for holiday deductions)
     const billableUtilization = availableHours > 0 ? Math.round((billableHours / availableHours) * 1000) / 10 : 0;
     const overallUtilization = availableHours > 0 ? Math.round((totalBookedHours / availableHours) * 1000) / 10 : 0;
 
@@ -91,13 +99,13 @@ router.get("/reports/utilization", async (req, res): Promise<void> => {
 });
 
 router.get("/reports/projects", async (req, res): Promise<void> => {
-  const query = GetProjectReportQueryParams.safeParse(req.query);
-  if (!query.success) {
-    res.status(400).json({ error: query.error.message });
+  const startDate = parseDateParam(req.query.startDate);
+  const endDate = parseDateParam(req.query.endDate);
+
+  if (!startDate || !endDate) {
+    res.status(400).json({ error: "startDate and endDate (YYYY-MM-DD) are required" });
     return;
   }
-
-  const { startDate, endDate } = query.data;
 
   const rows = await db
     .select({
@@ -117,7 +125,6 @@ router.get("/reports/projects", async (req, res): Promise<void> => {
       )
     );
 
-  // Aggregate by project
   const projectMap = new Map<number, { projectId: number; projectName: string; clientName: string; isBillable: boolean; totalHours: number; billableHours: number; nonBillableHours: number }>();
 
   for (const row of rows) {
@@ -152,13 +159,13 @@ router.get("/reports/projects", async (req, res): Promise<void> => {
 });
 
 router.get("/reports/clients", async (req, res): Promise<void> => {
-  const query = GetClientReportQueryParams.safeParse(req.query);
-  if (!query.success) {
-    res.status(400).json({ error: query.error.message });
+  const startDate = parseDateParam(req.query.startDate);
+  const endDate = parseDateParam(req.query.endDate);
+
+  if (!startDate || !endDate) {
+    res.status(400).json({ error: "startDate and endDate (YYYY-MM-DD) are required" });
     return;
   }
-
-  const { startDate, endDate } = query.data;
 
   const rows = await db
     .select({
