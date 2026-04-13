@@ -1,0 +1,277 @@
+Refactor and extend the reporting module to support flexible, pivot-style reporting with accurate utilization calculations and strong date filtering.
+
+The reporting system must be simple to use, but powerful enough to support different business questions.
+
+--------------------------------------------------
+1. GOAL OF REPORTING MODULE
+--------------------------------------------------
+
+The reporting module should allow users to:
+
+- analyze utilization across employees, projects, and clients
+- view data aggregated by time (especially months)
+- switch between different perspectives (rows/columns)
+- filter data easily
+- rely on correct utilization calculations based on actual availability
+
+The system should behave like a simplified pivot table.
+
+--------------------------------------------------
+2. DATE RANGE SYSTEM
+--------------------------------------------------
+
+Replace the current manual date selection with a combined preset + custom system.
+
+Add a date preset selector with the following options:
+
+- today
+- this_week
+- last_week
+- this_month
+- last_month
+- this_quarter
+- last_quarter
+- this_year
+- last_year
+- custom
+
+Behavior:
+
+- Selecting a preset automatically sets start_date and end_date
+- If user manually edits dates, preset becomes "custom"
+
+Quarter logic:
+
+- Q1: Jan 1 – Mar 31
+- Q2: Apr 1 – Jun 30
+- Q3: Jul 1 – Sep 30
+- Q4: Oct 1 – Dec 31
+
+"Last quarter" must correctly handle year boundaries.
+
+Example:
+- If current date is Feb 2026 → last_quarter = Q4 2025
+
+--------------------------------------------------
+3. REPORT CONFIGURATION CONTROLS
+--------------------------------------------------
+
+Add a control bar at the top of the reporting page.
+
+Include the following controls:
+
+1. Row Dimension (required)
+Dropdown:
+- employees
+- projects
+- clients
+
+2. Column Dimension (optional)
+Dropdown:
+- none (default)
+- month
+
+3. Metric Selector
+Dropdown:
+- billable_hours
+- total_hours
+- billable_utilization_percent
+- overall_utilization_percent
+
+4. Filters
+- filter by employee (multi-select)
+- filter by project (multi-select)
+- filter by client (multi-select)
+
+--------------------------------------------------
+4. TABLE BEHAVIOR
+--------------------------------------------------
+
+Case 1: Column Dimension = none
+
+- Display a simple table
+- One row per selected row dimension
+- Columns:
+  - available_hours
+  - billable_hours
+  - non_billable_hours
+  - total_hours
+  - billable_utilization_percent
+  - overall_utilization_percent
+
+Case 2: Column Dimension = month
+
+- Display pivot-style table
+- Rows = selected row dimension (employees / projects / clients)
+- Columns = months within selected date range
+
+Example:
+
+| Employee | Jan 2026 | Feb 2026 | Mar 2026 |
+|----------|----------|----------|----------|
+| Jane     | 72%      | 81%      | 65%      |
+
+- Each cell contains the selected metric
+- Months must be sorted chronologically
+
+--------------------------------------------------
+5. MONTH GROUPING LOGIC
+--------------------------------------------------
+
+- Group data by calendar month (YYYY-MM)
+- Display label format: "Jan 2026", "Feb 2026"
+- Include only months that overlap with the selected date range
+
+--------------------------------------------------
+6. UTILIZATION CALCULATION (CRITICAL)
+--------------------------------------------------
+
+Utilization must be calculated correctly and consistently.
+
+Definitions:
+
+Available Hours:
+- Based on employee capacity
+- Must consider:
+  - weekly_capacity_hours
+  - working_days_mask
+  - holidays from assigned holiday calendar
+- Ignore vacation/sick leave in this version
+
+Daily capacity:
+- daily_capacity = weekly_capacity_hours / number_of_working_days
+
+Available hours calculation:
+- Iterate over each day in the selected period
+- If day is:
+  - a working day for the employee
+  - NOT a holiday
+→ add daily_capacity
+
+If holiday falls on non-working day:
+→ ignore (no reduction)
+
+Metrics:
+
+- total_hours = sum of all time entries
+- billable_hours = sum where project.is_billable = true
+- non_billable_hours = total_hours - billable_hours
+
+- billable_utilization_percent = billable_hours / available_hours
+- overall_utilization_percent = total_hours / available_hours
+
+--------------------------------------------------
+7. PIVOT CALCULATION LOGIC
+--------------------------------------------------
+
+When using column dimension:
+
+- group data by:
+  - row_dimension (e.g. employee_id)
+  - column_dimension (e.g. month)
+
+For each cell:
+
+- calculate:
+  - total_hours
+  - billable_hours
+  - available_hours (IMPORTANT: per employee per month)
+
+- then compute selected metric
+
+IMPORTANT:
+- available hours must be calculated per employee per month, not globally
+
+--------------------------------------------------
+8. FILTERING LOGIC
+--------------------------------------------------
+
+Filters must apply before aggregation:
+
+- employee filter limits employees included
+- project filter limits time entries included
+- client filter limits projects included
+
+Filtering affects:
+- rows displayed
+- hours aggregated
+
+--------------------------------------------------
+9. BACKEND REQUIREMENTS
+--------------------------------------------------
+
+- Perform aggregation on backend
+- Do NOT compute pivot logic on frontend
+
+API should return structured data:
+
+Example:
+
+{
+  rows: [
+    {
+      label: "Jane Doe",
+      values: {
+        "2026-01": 0.72,
+        "2026-02": 0.81
+      }
+    }
+  ],
+  columns: ["2026-01", "2026-02"]
+}
+
+--------------------------------------------------
+10. UI REQUIREMENTS
+--------------------------------------------------
+
+- Clean and minimal layout
+- Control bar at top
+- Table below
+- No unnecessary charts in this version
+
+- Table must:
+  - support horizontal scrolling for many months
+  - align numbers properly
+  - show percentages clearly (e.g. 72%)
+
+--------------------------------------------------
+11. VALIDATION & EDGE CASES
+--------------------------------------------------
+
+- If available_hours = 0:
+  → utilization = 0 (avoid division by zero)
+
+- If no data:
+  → show empty state message
+
+- If filters remove all data:
+  → show empty state
+
+--------------------------------------------------
+12. EXPORT
+--------------------------------------------------
+
+- Add "Export CSV" button
+- Export current view exactly as shown in table
+- Include row labels and column headers
+
+--------------------------------------------------
+13. PERFORMANCE
+--------------------------------------------------
+
+- Optimize queries for aggregation
+- Avoid loading raw time entries into frontend
+- Use indexed queries where possible
+
+--------------------------------------------------
+14. OUT OF SCOPE (DO NOT BUILD)
+--------------------------------------------------
+
+- No charts or graphs
+- No forecasting
+- No budgeting logic
+- No drill-down views (future feature)
+
+--------------------------------------------------
+END OF SPEC
+--------------------------------------------------
