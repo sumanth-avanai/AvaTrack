@@ -80,7 +80,7 @@ router.get("/auth/app/me", (req: Request, res: Response): void => {
 //   /auth/employee/*   (employee PIN — has its own auth)
 
 const PUBLIC_EXACT = new Set([
-  "/health",
+  "/healthz",
   "/auth/app/login",
   "/auth/app/logout",
   "/auth/app/me",
