@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { format, addDays, getISODay } from "date-fns";
+import { format, addDays, getISODay, subWeeks } from "date-fns";
 import {
   Table,
   TableBody,
@@ -27,9 +27,12 @@ import {
   getListHolidayCalendarsQueryKey,
   useListHolidays,
   getListHolidaysQueryKey,
+  listTimeEntries,
 } from "@workspace/api-client-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save, CheckCircle2, Loader2 } from "lucide-react";
+import { Save, CheckCircle2, Loader2, Copy, CalendarRange } from "lucide-react";
+import { VacationEntry } from "@/lib/bookable-dates";
+import { RecurringBookingDialog } from "./recurring-booking-dialog";
 
 interface TimesheetGridProps {
   employeeId: number;
@@ -42,15 +45,6 @@ interface TimesheetGridProps {
   onPreviousWeek?: () => void;
   onNextWeek?: () => void;
 }
-
-type VacationEntry = {
-  id: number;
-  employeeId: number;
-  startDate: string;
-  endDate: string;
-  vacationType: string;
-  note: string | null;
-};
 
 const ALL_DAYS_MASK = [1, 1, 1, 1, 1, 1, 1];
 
@@ -68,6 +62,8 @@ export function TimesheetGrid({
   const queryClient = useQueryClient();
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [isDirty, setIsDirty] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "loading" | "done" | "empty">("idle");
+  const [recurringOpen, setRecurringOpen] = useState(false);
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }).map((_, i) => addDays(weekStartDate, i)),
@@ -264,6 +260,44 @@ export function TimesheetGrid({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleSave]);
 
+  // Copy last week's projects into the current week grid
+  const handleCopyLastWeek = useCallback(async () => {
+    if (copyStatus === "loading") return;
+    setCopyStatus("loading");
+
+    const prevWeekStart = subWeeks(weekStartDate, 1);
+    const prevStartDate = format(prevWeekStart, "yyyy-MM-dd");
+    const prevEndDate = format(addDays(prevWeekStart, 6), "yyyy-MM-dd");
+
+    try {
+      const rawEntries = await queryClient.fetchQuery({
+        queryKey: getListTimeEntriesQueryKey({ employeeId, startDate: prevStartDate, endDate: prevEndDate }),
+        queryFn: () => listTimeEntries({ employeeId, startDate: prevStartDate, endDate: prevEndDate }),
+        staleTime: 60_000,
+      });
+
+      const entries = rawEntries as Array<{ projectId: number }>;
+      const prevProjectIds: number[] = [...new Set(entries.map((e) => e.projectId))];
+
+      if (prevProjectIds.length === 0) {
+        setCopyStatus("empty");
+        setTimeout(() => setCopyStatus("idle"), 3000);
+        return;
+      }
+
+      setActiveProjectIds((prev) => {
+        const existing = new Set(prev);
+        const toAdd = prevProjectIds.filter((id) => !existing.has(id));
+        return [...prev, ...toAdd];
+      });
+      setIsDirty(true);
+      setCopyStatus("done");
+      setTimeout(() => setCopyStatus("idle"), 2500);
+    } catch {
+      setCopyStatus("idle");
+    }
+  }, [copyStatus, weekStartDate, employeeId, queryClient]);
+
   const handleCellChange = (projectId: number, date: string, value: string) => {
     if (disabledDates.has(date)) return;
     if (value !== "" && !/^\d*\.?\d*$/.test(value)) return;
@@ -326,10 +360,16 @@ export function TimesheetGrid({
     return <div className="p-8 text-center text-muted-foreground">Loading timesheet...</div>;
   }
 
+  const projectsForDialog = (projects ?? []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    clientName: p.clientName ?? undefined,
+  }));
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
-      <div className="flex items-center justify-between bg-card p-4 rounded-md border border-border shadow-sm">
+      <div className="flex items-center justify-between bg-card p-4 rounded-md border border-border shadow-sm flex-wrap gap-3">
         <div className="flex items-center gap-4">
           <Button variant="outline" onClick={onPreviousWeek} size="sm">
             &larr; Prev Week
@@ -342,7 +382,36 @@ export function TimesheetGrid({
           </Button>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Copy last week */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCopyLastWeek}
+            disabled={copyStatus === "loading"}
+            title="Add last week's projects to this grid"
+          >
+            {copyStatus === "loading" ? (
+              <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Copying…</>
+            ) : copyStatus === "done" ? (
+              <><CheckCircle2 className="h-4 w-4 mr-1.5 text-green-500" /> Copied</>
+            ) : copyStatus === "empty" ? (
+              <><Copy className="h-4 w-4 mr-1.5" /> No last-week entries</>
+            ) : (
+              <><Copy className="h-4 w-4 mr-1.5" /> Copy last week</>
+            )}
+          </Button>
+
+          {/* Repeat booking */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setRecurringOpen(true)}
+            title="Book the same hours across a date range"
+          >
+            <CalendarRange className="h-4 w-4 mr-1.5" /> Repeat booking
+          </Button>
+
           <div
             className={`px-3 py-1.5 rounded-md text-sm font-medium border ${
               isOverCapacity
@@ -491,6 +560,24 @@ export function TimesheetGrid({
           </TableBody>
         </Table>
       </div>
+
+      {/* Recurring booking dialog */}
+      <RecurringBookingDialog
+        open={recurringOpen}
+        onOpenChange={setRecurringOpen}
+        employeeId={employeeId}
+        projects={projectsForDialog}
+        workingDaysMask={workingDaysMask}
+        contractStartDate={contractStartDate}
+        contractEndDate={contractEndDate}
+        calendarId={calendarId}
+        vacations={vacations ?? []}
+        onSuccess={() => {
+          queryClient.invalidateQueries({
+            queryKey: getListTimeEntriesQueryKey({ employeeId, startDate: startDateStr, endDate: endDateStr }),
+          });
+        }}
+      />
     </div>
   );
 }
