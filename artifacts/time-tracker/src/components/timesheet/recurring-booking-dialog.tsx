@@ -82,6 +82,7 @@ export function RecurringBookingDialog({
   const [step, setStep] = useState<Step>("form");
   const [conflictCount, setConflictCount] = useState(0);
   const [pendingDates, setPendingDates] = useState<string[]>([]);
+  const [detectedConflictDates, setDetectedConflictDates] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
 
@@ -150,6 +151,7 @@ export function RecurringBookingDialog({
     setStep("form");
     setConflictCount(0);
     setPendingDates([]);
+    setDetectedConflictDates(new Set());
     setIsSubmitting(false);
     setSubmitError("");
   };
@@ -173,6 +175,7 @@ export function RecurringBookingDialog({
 
       if (conflicts.length > 0) {
         setConflictCount(conflicts.length);
+        setDetectedConflictDates(new Set(conflicts));
         setPendingDates(bookableDates);
         setStep("conflict");
       } else {
@@ -217,13 +220,13 @@ export function RecurringBookingDialog({
   };
 
   const handleSkipConflicts = async () => {
-    const projectId = parseInt(selectedProjectId, 10);
-    const res = await fetch(
-      `/api/time-entries?employeeId=${employeeId}&projectId=${projectId}&startDate=${startDate}&endDate=${endDate}`
-    );
-    const existing: Array<{ entryDate: string }> = res.ok ? await res.json() : [];
-    const existingSet = new Set(existing.map((e) => e.entryDate));
-    const datesToBook = pendingDates.filter((d) => !existingSet.has(d));
+    // Use the conflict set captured during detection — avoids a second fetch
+    // whose failure could silently overwrite existing entries.
+    const datesToBook = pendingDates.filter((d) => !detectedConflictDates.has(d));
+    if (datesToBook.length === 0) {
+      setSubmitError("No new days to book after skipping existing entries.");
+      return;
+    }
     await submitEntries(datesToBook);
   };
 

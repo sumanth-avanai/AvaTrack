@@ -288,9 +288,13 @@ export function TimesheetGrid({
       setActiveProjectIds((prev) => {
         const existing = new Set(prev);
         const toAdd = prevProjectIds.filter((id) => !existing.has(id));
-        return [...prev, ...toAdd];
+        return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
       });
-      setIsDirty(true);
+      // Only mark dirty when new rows are actually added (checked against
+      // current state at fetch time, which is sufficient for deduplication).
+      const alreadyActive = new Set(activeProjectIds);
+      const newRows = prevProjectIds.filter((id) => !alreadyActive.has(id));
+      if (newRows.length > 0) setIsDirty(true);
       setCopyStatus("done");
       setTimeout(() => setCopyStatus("idle"), 2500);
     } catch {
