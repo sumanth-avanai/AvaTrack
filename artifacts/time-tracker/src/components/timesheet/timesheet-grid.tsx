@@ -105,13 +105,14 @@ export function TimesheetGrid({
     return holidayCalendars.find((c) => c.code === holidayCalendarCode)?.id ?? null;
   }, [holidayCalendarCode, holidayCalendars]);
 
-  // Fetch all holidays for this calendar (no year filter → all years cached)
+  // Fetch holidays scoped to the year(s) covered by this week
+  const weekYear = weekDays[0].getFullYear();
   const { data: holidays } = useListHolidays(
     calendarId ?? 0,
-    undefined,
+    { year: weekYear },
     {
       query: {
-        queryKey: getListHolidaysQueryKey(calendarId ?? 0),
+        queryKey: getListHolidaysQueryKey(calendarId ?? 0, { year: weekYear }),
         enabled: !!calendarId,
       },
     }
