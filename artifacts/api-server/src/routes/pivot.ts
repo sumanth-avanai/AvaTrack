@@ -8,15 +8,9 @@
  *   colDimension     none | month
  *   metric           billable_hours | total_hours |
  *                    billable_utilization_percent | overall_utilization_percent
- *   employeeIds      comma-separated IDs  (optional filter)
- *   projectIds       comma-separated IDs  (optional filter)
- *   clientIds        comma-separated IDs  (optional filter)
- *
- * Response (colDimension=none):
- *   { type:"flat", rows:[{id,label,availableHours,billableHours,nonBillableHours,totalHours,billableUtilization,overallUtilization}] }
- *
- * Response (colDimension=month):
- *   { type:"pivot", columns:["2026-01",...], rows:[{id,label,values:{"2026-01":number}}] }
+ *   employeeIds      comma-separated IDs  (optional)
+ *   projectIds       comma-separated IDs  (optional)
+ *   clientIds        comma-separated IDs  (optional)
  */
 
 import { Router, type IRouter } from "express";
@@ -27,10 +21,9 @@ import {
   projectsTable,
   clientsTable,
   employeesTable,
-  holidaysTable,
-  holidayCalendarsTable,
 } from "@workspace/db";
 import { calculateAvailableHours } from "../lib/utilization";
+import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
 
 const router: IRouter = Router();
 
@@ -43,23 +36,15 @@ function parseDateParam(v: unknown): string | null {
 
 function parseIds(raw: unknown): number[] | undefined {
   if (typeof raw !== "string" || !raw.trim()) return undefined;
-  const ids = raw
-    .split(",")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !isNaN(n));
+  const ids = raw.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
   return ids.length > 0 ? ids : undefined;
 }
 
-/** All YYYY-MM strings that overlap with [startDate, endDate]. */
 function getMonthsInRange(startDate: string, endDate: string): string[] {
   const months: string[] = [];
   const end = new Date(endDate + "T00:00:00Z");
   const cur = new Date(
-    Date.UTC(
-      parseInt(startDate.slice(0, 4)),
-      parseInt(startDate.slice(5, 7)) - 1,
-      1
-    )
+    Date.UTC(parseInt(startDate.slice(0, 4)), parseInt(startDate.slice(5, 7)) - 1, 1)
   );
   while (cur <= end) {
     months.push(cur.toISOString().slice(0, 7));
@@ -68,14 +53,9 @@ function getMonthsInRange(startDate: string, endDate: string): string[] {
   return months;
 }
 
-/** Clamp a month's first/last day to [startDate, endDate]. */
-function monthBounds(
-  yyyymm: string,
-  startDate: string,
-  endDate: string
-): { start: string; end: string } {
-  const year = parseInt(yyyymm.slice(0, 4));
-  const mon  = parseInt(yyyymm.slice(5, 7));
+function monthBounds(yyyymm: string, startDate: string, endDate: string): { start: string; end: string } {
+  const year    = parseInt(yyyymm.slice(0, 4));
+  const mon     = parseInt(yyyymm.slice(5, 7));
   const monthFirst = `${yyyymm}-01`;
   const lastDay    = new Date(Date.UTC(year, mon, 0)).getUTCDate();
   const monthLast  = `${yyyymm}-${String(lastDay).padStart(2, "0")}`;
@@ -89,52 +69,16 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
-function computeMetric(
-  metric: string,
-  billableHours: number,
-  totalHours: number,
-  availableHours: number
-): number {
+function computeMetric(metric: string, billableHours: number, totalHours: number, availableHours: number): number {
   switch (metric) {
-    case "billable_hours":             return billableHours;
-    case "total_hours":                return totalHours;
+    case "billable_hours":              return billableHours;
+    case "total_hours":                 return totalHours;
     case "billable_utilization_percent":
       return availableHours > 0 ? round2(billableHours / availableHours) : 0;
     case "overall_utilization_percent":
-      return availableHours > 0 ? round2(totalHours / availableHours) : 0;
+      return availableHours > 0 ? round2(totalHours    / availableHours) : 0;
     default: return billableHours;
   }
-}
-
-// ─── holiday cache ───────────────────────────────────────────────────────────
-
-async function buildHolidayMap(employees: (typeof employeesTable.$inferSelect)[]): Promise<Map<number, string[]>> {
-  const map = new Map<number, string[]>();
-
-  // Group by calendar code to avoid redundant DB queries
-  const calendarCodeToHolidays = new Map<string, string[]>();
-
-  for (const emp of employees) {
-    if (emp.holidayCalendarCode && !calendarCodeToHolidays.has(emp.holidayCalendarCode)) {
-      const [cal] = await db
-        .select()
-        .from(holidayCalendarsTable)
-        .where(eq(holidayCalendarsTable.code, emp.holidayCalendarCode));
-
-      if (cal) {
-        const rows = await db
-          .select({ date: holidaysTable.date })
-          .from(holidaysTable)
-          .where(eq(holidaysTable.calendarId, cal.id));
-        calendarCodeToHolidays.set(emp.holidayCalendarCode, rows.map((r) => r.date));
-      } else {
-        calendarCodeToHolidays.set(emp.holidayCalendarCode, []);
-      }
-    }
-    map.set(emp.id, emp.holidayCalendarCode ? (calendarCodeToHolidays.get(emp.holidayCalendarCode) ?? []) : []);
-  }
-
-  return map;
 }
 
 // ─── main route ─────────────────────────────────────────────────────────────
@@ -147,18 +91,18 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     return;
   }
 
-  const rowDimension = String(req.query.rowDimension  ?? "employees");
-  const colDimension = String(req.query.colDimension  ?? "none");
-  const metric       = String(req.query.metric        ?? "billable_hours");
+  const rowDimension = String(req.query.rowDimension ?? "employees");
+  const colDimension = String(req.query.colDimension ?? "none");
+  const metric       = String(req.query.metric       ?? "billable_hours");
 
   const filterEmpIds  = parseIds(req.query.employeeIds);
   const filterProjIds = parseIds(req.query.projectIds);
   const filterCliIds  = parseIds(req.query.clientIds);
 
-  // ── 1. Resolve in-scope projects ──────────────────────────────────────────
-  const projConds: ReturnType<typeof eq>[] = [];
-  if (filterProjIds) projConds.push(inArray(projectsTable.id, filterProjIds) as any);
-  if (filterCliIds)  projConds.push(inArray(projectsTable.clientId, filterCliIds) as any);
+  // ── 1. In-scope projects ─────────────────────────────────────────────────
+  const projConds: any[] = [];
+  if (filterProjIds) projConds.push(inArray(projectsTable.id, filterProjIds));
+  if (filterCliIds)  projConds.push(inArray(projectsTable.clientId, filterCliIds));
 
   const allProjects = await db
     .select({
@@ -170,76 +114,70 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     })
     .from(projectsTable)
     .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))
-    .where(projConds.length > 0 ? and(...(projConds as any)) : undefined);
+    .where(projConds.length > 0 ? and(...projConds) : undefined);
 
-  const projectById = new Map(allProjects.map((p) => [p.id, p]));
+  const projectById    = new Map(allProjects.map((p) => [p.id, p]));
   const inScopeProjIds = allProjects.map((p) => p.id);
 
-  // ── 2. Resolve in-scope employees ─────────────────────────────────────────
-  const empConds: ReturnType<typeof eq>[] = [eq(employeesTable.active, true) as any];
-  if (filterEmpIds) empConds.push(inArray(employeesTable.id, filterEmpIds) as any);
+  // ── 2. In-scope employees ────────────────────────────────────────────────
+  const empConds: any[] = [eq(employeesTable.active, true)];
+  if (filterEmpIds) empConds.push(inArray(employeesTable.id, filterEmpIds));
 
   const allEmployees = await db
     .select()
     .from(employeesTable)
-    .where(and(...(empConds as any)));
+    .where(and(...empConds));
 
-  const employeeById = new Map(allEmployees.map((e) => [e.id, e]));
-
-  // ── 3. Fetch time entries in range ────────────────────────────────────────
-  const entryConds: ReturnType<typeof eq>[] = [
-    gte(timeEntriesTable.entryDate, startDate) as any,
-    lte(timeEntriesTable.entryDate, endDate)   as any,
+  // ── 3. Time entries in range ─────────────────────────────────────────────
+  const entryConds: any[] = [
+    gte(timeEntriesTable.entryDate, startDate),
+    lte(timeEntriesTable.entryDate, endDate),
   ];
-  if (filterEmpIds)       entryConds.push(inArray(timeEntriesTable.employeeId, filterEmpIds) as any);
-  if (inScopeProjIds.length > 0) entryConds.push(inArray(timeEntriesTable.projectId, inScopeProjIds) as any);
+  if (filterEmpIds)              entryConds.push(inArray(timeEntriesTable.employeeId, filterEmpIds));
+  if (inScopeProjIds.length > 0) entryConds.push(inArray(timeEntriesTable.projectId, inScopeProjIds));
 
   const rawEntries = await db
     .select()
     .from(timeEntriesTable)
-    .where(and(...(entryConds as any)));
+    .where(and(...entryConds));
 
-  // Annotate entries with billable flag
   const entries = rawEntries.map((e) => ({
     ...e,
     isBillable: projectById.get(e.projectId)?.isBillable ?? false,
     clientId:   projectById.get(e.projectId)?.clientId   ?? null,
   }));
 
-  // ── 4. Build holiday map for utilization ──────────────────────────────────
-  const holidayMap = await buildHolidayMap(allEmployees);
+  // ── 4. Employee availability (holidays + vacations + contract dates) ──────
+  const availMap = await fetchEmpAvailabilityMap(allEmployees, startDate, endDate);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CASE A: colDimension = "none"  → flat summary table
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─── CASE A: colDimension = "none"  → flat table ─────────────────────────
   if (colDimension === "none") {
     const flatRows: {
-      id: number;
-      label: string;
-      availableHours: number;
-      billableHours: number;
-      nonBillableHours: number;
-      totalHours: number;
-      billableUtilization: number;
-      overallUtilization: number;
+      id: number; label: string;
+      availableHours: number; billableHours: number; nonBillableHours: number;
+      totalHours: number; billableUtilization: number; overallUtilization: number;
     }[] = [];
 
     if (rowDimension === "employees") {
       for (const emp of allEmployees) {
+        const { holidayDates, vacationDateSet } = availMap.get(emp.id)!;
+        const available = calculateAvailableHours(
+          startDate, endDate,
+          emp.workingDaysMask, emp.weeklyCapacityHours,
+          holidayDates, vacationDateSet,
+          emp.contractStartDate, emp.contractEndDate
+        );
         const empEntries = entries.filter((e) => e.employeeId === emp.id);
         const billable   = empEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         const total      = empEntries.reduce((s, e) => s + e.hours, 0);
-        const available  = calculateAvailableHours(startDate, endDate, emp.workingDaysMask, emp.weeklyCapacityHours, holidayMap.get(emp.id) ?? []);
-
         flatRows.push({
-          id:    emp.id,
-          label: emp.name,
+          id: emp.id, label: emp.name,
           availableHours:     round2(available),
           billableHours:      round2(billable),
           nonBillableHours:   round2(total - billable),
           totalHours:         round2(total),
           billableUtilization: available > 0 ? round2(billable / available) : 0,
-          overallUtilization:  available > 0 ? round2(total   / available) : 0,
+          overallUtilization:  available > 0 ? round2(total    / available) : 0,
         });
       }
 
@@ -248,16 +186,11 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
         const projEntries = entries.filter((e) => e.projectId === proj.id);
         const billable    = projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         const total       = projEntries.reduce((s, e) => s + e.hours, 0);
-
         flatRows.push({
-          id:    proj.id,
-          label: `${proj.name} (${proj.clientName ?? "—"})`,
-          availableHours:     0,
-          billableHours:      round2(billable),
-          nonBillableHours:   round2(total - billable),
-          totalHours:         round2(total),
-          billableUtilization: 0,
-          overallUtilization:  0,
+          id: proj.id, label: `${proj.name} (${proj.clientName ?? "—"})`,
+          availableHours: 0, billableHours: round2(billable),
+          nonBillableHours: round2(total - billable), totalHours: round2(total),
+          billableUtilization: 0, overallUtilization: 0,
         });
       }
 
@@ -265,25 +198,18 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
       const clientMap = new Map<number, { id: number; name: string; billable: number; total: number }>();
       for (const proj of allProjects) {
         if (!proj.clientId) continue;
-        if (!clientMap.has(proj.clientId)) {
-          clientMap.set(proj.clientId, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0 });
-        }
+        if (!clientMap.has(proj.clientId)) clientMap.set(proj.clientId, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0 });
         const projEntries = entries.filter((e) => e.projectId === proj.id);
         const c = clientMap.get(proj.clientId)!;
         c.billable += projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         c.total    += projEntries.reduce((s, e) => s + e.hours, 0);
       }
-
       for (const c of clientMap.values()) {
         flatRows.push({
-          id:    c.id,
-          label: c.name,
-          availableHours:     0,
-          billableHours:      round2(c.billable),
-          nonBillableHours:   round2(c.total - c.billable),
-          totalHours:         round2(c.total),
-          billableUtilization: 0,
-          overallUtilization:  0,
+          id: c.id, label: c.name,
+          availableHours: 0, billableHours: round2(c.billable),
+          nonBillableHours: round2(c.total - c.billable), totalHours: round2(c.total),
+          billableUtilization: 0, overallUtilization: 0,
         });
       }
     }
@@ -292,18 +218,22 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     return;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // CASE B: colDimension = "month"  → pivot table
-  // ─────────────────────────────────────────────────────────────────────────
+  // ─── CASE B: colDimension = "month"  → pivot ─────────────────────────────
   const months = getMonthsInRange(startDate, endDate);
 
-  // Pre-compute available hours per employee per month (clamped to date range)
-  const empMonthAvailable = new Map<string, number>(); // key = `${empId}:${yyyymm}`
+  // Pre-compute available hours per employee per month
+  const empMonthAvail = new Map<string, number>();
   for (const emp of allEmployees) {
+    const { holidayDates, vacationDateSet } = availMap.get(emp.id)!;
     for (const month of months) {
       const { start, end } = monthBounds(month, startDate, endDate);
-      const avail = calculateAvailableHours(start, end, emp.workingDaysMask, emp.weeklyCapacityHours, holidayMap.get(emp.id) ?? []);
-      empMonthAvailable.set(`${emp.id}:${month}`, avail);
+      const avail = calculateAvailableHours(
+        start, end,
+        emp.workingDaysMask, emp.weeklyCapacityHours,
+        holidayDates, vacationDateSet,
+        emp.contractStartDate, emp.contractEndDate
+      );
+      empMonthAvail.set(`${emp.id}:${month}`, avail);
     }
   }
 
@@ -313,12 +243,10 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     for (const emp of allEmployees) {
       const values: Record<string, number> = {};
       for (const month of months) {
-        const monthEntries = entries.filter(
-          (e) => e.employeeId === emp.id && e.entryDate.slice(0, 7) === month
-        );
+        const monthEntries = entries.filter((e) => e.employeeId === emp.id && e.entryDate.slice(0, 7) === month);
         const billable  = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         const total     = monthEntries.reduce((s, e) => s + e.hours, 0);
-        const available = empMonthAvailable.get(`${emp.id}:${month}`) ?? 0;
+        const available = empMonthAvail.get(`${emp.id}:${month}`) ?? 0;
         values[month]   = computeMetric(metric, billable, total, available);
       }
       pivotRows.push({ id: emp.id, label: emp.name, values });
@@ -328,12 +256,9 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     for (const proj of allProjects) {
       const values: Record<string, number> = {};
       for (const month of months) {
-        const monthEntries = entries.filter(
-          (e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month
-        );
+        const monthEntries = entries.filter((e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month);
         const billable = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         const total    = monthEntries.reduce((s, e) => s + e.hours, 0);
-        // For projects: utilization metrics treated as total/billable hours (no capacity)
         values[month]  = computeMetric(metric, billable, total, 0);
       }
       pivotRows.push({ id: proj.id, label: `${proj.name} (${proj.clientName ?? "—"})`, values });
@@ -341,29 +266,21 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
 
   } else if (rowDimension === "clients") {
     const clientMonthData = new Map<string, { id: number; name: string; billable: number; total: number }>();
-    // Populate
     for (const proj of allProjects) {
       if (!proj.clientId) continue;
       for (const month of months) {
         const key = `${proj.clientId}:${month}`;
-        if (!clientMonthData.has(key)) {
-          clientMonthData.set(key, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0 });
-        }
+        if (!clientMonthData.has(key)) clientMonthData.set(key, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0 });
         const c = clientMonthData.get(key)!;
-        const monthEntries = entries.filter(
-          (e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month
-        );
+        const monthEntries = entries.filter((e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month);
         c.billable += monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         c.total    += monthEntries.reduce((s, e) => s + e.hours, 0);
       }
     }
-
-    // Collect unique clients from allProjects
     const uniqueClients = new Map<number, string>();
     for (const proj of allProjects) {
       if (proj.clientId) uniqueClients.set(proj.clientId, proj.clientName ?? "—");
     }
-
     for (const [clientId, clientName] of uniqueClients) {
       const values: Record<string, number> = {};
       for (const month of months) {

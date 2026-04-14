@@ -15,7 +15,8 @@ import {
   FolderKanban, 
   Briefcase, 
   CalendarDays, 
-  BarChart3 
+  BarChart3,
+  CalendarOff,
 } from "lucide-react";
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -27,8 +28,9 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     { title: "Clients", href: "/clients", icon: Briefcase },
     { title: "Projects", href: "/projects", icon: FolderKanban },
     { title: "Employees", href: "/employees", icon: Users },
-    { title: "Holidays", href: "/holidays", icon: CalendarDays },
-    { title: "Reports", href: "/reports", icon: BarChart3 },
+    { title: "Holidays",  href: "/holidays",  icon: CalendarDays },
+    { title: "Vacations", href: "/vacations", icon: CalendarOff },
+    { title: "Reports",   href: "/reports",   icon: BarChart3 },
   ];
 
   return (

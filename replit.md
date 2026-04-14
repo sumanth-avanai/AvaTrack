@@ -30,21 +30,22 @@ A lightweight internal time-tracking web app for small agencies. Feels like a be
 
 ### Admin Area (`/`)
 - **Dashboard** — weekly summary: total/billable hours, per-employee utilization cards
-- **Timesheet** — select any employee, spreadsheet-style grid (projects × Mon-Sun), auto-save with debounce, capacity warnings
+- **Timesheet** — select any employee, spreadsheet-style grid (projects × Mon-Sun), explicit Save button (Ctrl+S), capacity warnings
 - **Clients** — create/edit/archive with active toggle
 - **Projects** — linked to clients, billable flag, budget hours
-- **Employees** — weekly capacity, working days mask, personal link management + PIN reset
+- **Employees** — weekly capacity, working days mask, contract start/end dates, personal link management + PIN reset
 - **Holidays** — manage holiday calendars (DE-BASE-2026 preloaded)
-- **Reports** — Utilization / Projects / Clients tabs with date range filter + CSV export
+- **Vacations** — absence/vacation management per employee (vacation, sick, unpaid leave, other); filterable by employee; correctly deducted from utilization
+- **Reports** — Pivot/flat reporting with 9 date presets, multi-select filters, metric selector, CSV export
 
 ### Employee Personal Links (`/u/:token`)
 - PIN-protected personal URL per employee
 - Shows only own timesheet after PIN verified (stored in sessionStorage)
 
 ## Demo Credentials
-- **Max Mustermann** (40h, Mon-Fri) — PIN: `1234`
-- **Anna Beispiel** (20h, Mon-Fri) — PIN: `5678`
-- **Paul Teilzeit** (32h, Mon-Thu) — PIN: `9999`
+- **Max Mustermann** (40h, Mon-Fri, since 2024-01-01) — PIN: `1234`
+- **Anna Beispiel** (20h, Mon-Fri, since 2025-06-01) — PIN: `5678`
+- **Paul Teilzeit** (32h, Mon-Thu, 2026-01-15 to 2026-12-31) — PIN: `9999`
 
 Employee personal link tokens can be found via `/api/employees` or the Employees admin page.
 
@@ -53,16 +54,19 @@ Employee personal link tokens can be found via `/api/employees` or the Employees
 `artifacts/api-server/src/lib/utilization.ts`
 
 - **Daily capacity** = weeklyCapacityHours / number of working days per week
-- **Available hours** = sum of daily capacity for each working day in period, minus holidays that fall on working days
+- **Available hours** = sum of daily capacity for each working day in period, minus:
+  - Public holidays that fall on working days (from employee's holiday calendar)
+  - Vacation/absence days that fall on working days (from `employee_vacations`)
+  - Days outside the employee's contract period (before `contract_start_date` or after `contract_end_date`)
 - **Billable utilization** = billable hours / available hours
 - **Overall utilization** = total booked hours / available hours
-- Holidays on non-working days: no deduction
 
 ## Database Schema
 
 - `clients` — clients table
 - `projects` — projects (belongs to client, billable flag)
-- `employees` — employees with capacity, working days mask, hashed PIN, access token
+- `employees` — employees with capacity, working days mask, contract dates, hashed PIN, access token
+- `employee_vacations` — absence entries (vacation/sick/unpaid_leave/other) per employee with date ranges
 - `holiday_calendars` — calendar registry (DE-BASE-2026 seeded)
 - `holidays` — individual holiday dates per calendar
 - `time_entries` — time entries (employee, project, date, hours, note)
@@ -72,10 +76,10 @@ Employee personal link tokens can be found via `/api/employees` or the Employees
 ```
 artifacts/
   api-server/      # Express 5 backend
-    src/routes/    # clients, projects, employees, holidays, timeEntries, reports, dashboard, auth
-    src/lib/       # utilization.ts, crypto.ts
+    src/routes/    # clients, projects, employees, holidays, timeEntries, reports, pivot, vacations, dashboard, auth
+    src/lib/       # utilization.ts, employee-availability.ts, crypto.ts
   time-tracker/    # React + Vite frontend
-    src/pages/     # Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Reports, EmployeePortal
+    src/pages/     # Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Vacations, Reports, EmployeePortal
 lib/
   api-spec/        # openapi.yaml (source of truth)
   api-client-react/ # Generated React Query hooks
@@ -84,3 +88,20 @@ lib/
 scripts/
   src/seed.ts      # Demo data seeder
 ```
+
+## API Endpoints (vacation/absence — not in OpenAPI spec, called directly)
+
+```
+GET    /api/vacations?employeeId=X  — list absence entries (all or filtered by employee)
+POST   /api/vacations               — create entry { employeeId, startDate, endDate, vacationType, note }
+PATCH  /api/vacations/:id           — update entry (partial)
+DELETE /api/vacations/:id           — delete entry
+```
+
+## Important Notes
+
+- API server imports `zod/v4` — NOT plain `zod` (esbuild won't resolve plain "zod")
+- `calculateAvailableHours()` signature: (startDate, endDate, mask, weeklyHrs, holidayDates, vacationSet, contractStart?, contractEnd?)
+- `fetchEmpAvailabilityMap()` in `employee-availability.ts` — shared helper for dashboard/reports/pivot to fetch holidays+vacations in one pass
+- Working days mask stored as "1,1,1,1,1,0,0" (Mon=index 0, Sun=index 6); use `getUTCDay()` for weekday detection
+- PINs are SHA-256 hashed; access tokens are base64url random 24 bytes

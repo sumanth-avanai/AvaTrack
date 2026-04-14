@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, boolean, real, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, boolean, real, integer, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -10,6 +10,8 @@ export const employeesTable = pgTable("employees", {
   // Stored as comma-separated "1,1,1,1,1,0,0" (Mon-Sun)
   workingDaysMask: text("working_days_mask").notNull().default("1,1,1,1,1,0,0"),
   holidayCalendarCode: text("holiday_calendar_code"),
+  contractStartDate: date("contract_start_date"),
+  contractEndDate: date("contract_end_date"),
   personalAccessToken: text("personal_access_token").notNull(),
   personalAccessPinHash: text("personal_access_pin_hash").notNull(),
   active: boolean("active").notNull().default(true),

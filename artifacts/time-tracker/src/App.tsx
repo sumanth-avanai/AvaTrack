@@ -11,6 +11,7 @@ import Holidays from "@/pages/holidays";
 import Reports from "@/pages/reports";
 import Timesheet from "@/pages/timesheet";
 import EmployeePortal from "@/pages/employee-portal";
+import Vacations from "@/pages/vacations";
 
 const queryClient = new QueryClient();
 
@@ -20,16 +21,17 @@ function Router() {
       <Route path="/">
         <Redirect to="/dashboard" />
       </Route>
-      <Route path="/dashboard" component={Dashboard} />
-      <Route path="/clients" component={Clients} />
-      <Route path="/projects" component={Projects} />
-      <Route path="/employees" component={Employees} />
-      <Route path="/holidays" component={Holidays} />
-      <Route path="/reports" component={Reports} />
-      <Route path="/timesheet" component={Timesheet} />
-      
+      <Route path="/dashboard"  component={Dashboard} />
+      <Route path="/clients"    component={Clients} />
+      <Route path="/projects"   component={Projects} />
+      <Route path="/employees"  component={Employees} />
+      <Route path="/holidays"   component={Holidays} />
+      <Route path="/vacations"  component={Vacations} />
+      <Route path="/reports"    component={Reports} />
+      <Route path="/timesheet"  component={Timesheet} />
+
       <Route path="/u/:token" component={EmployeePortal} />
-      
+
       <Route component={NotFound} />
     </Switch>
   );

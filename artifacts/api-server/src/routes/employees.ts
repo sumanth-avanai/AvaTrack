@@ -54,6 +54,8 @@ router.post("/employees", async (req, res): Promise<void> => {
       weeklyCapacityHours: parsed.data.weeklyCapacityHours,
       workingDaysMask: (parsed.data.workingDaysMask ?? [1, 1, 1, 1, 1, 0, 0]).join(","),
       holidayCalendarCode: parsed.data.holidayCalendarCode ?? null,
+      contractStartDate: (parsed.data as any).contractStartDate ?? null,
+      contractEndDate:   (parsed.data as any).contractEndDate   ?? null,
       personalAccessToken: token,
       personalAccessPinHash: pinHash,
       active: parsed.data.active ?? true,
@@ -100,6 +102,8 @@ router.patch("/employees/:id", async (req, res): Promise<void> => {
   if (parsed.data.workingDaysMask) {
     updateData.workingDaysMask = parsed.data.workingDaysMask.join(",");
   }
+  if ("contractStartDate" in parsed.data) updateData.contractStartDate = (parsed.data as any).contractStartDate ?? null;
+  if ("contractEndDate"   in parsed.data) updateData.contractEndDate   = (parsed.data as any).contractEndDate   ?? null;
 
   const [emp] = await db
     .update(employeesTable)

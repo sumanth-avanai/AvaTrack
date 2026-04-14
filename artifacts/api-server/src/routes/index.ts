@@ -7,6 +7,7 @@ import holidaysRouter from "./holidays";
 import timeEntriesRouter from "./timeEntries";
 import reportsRouter from "./reports";
 import pivotRouter from "./pivot";
+import vacationsRouter from "./vacations";
 import dashboardRouter from "./dashboard";
 import authRouter from "./auth";
 
@@ -20,6 +21,7 @@ router.use(holidaysRouter);
 router.use(timeEntriesRouter);
 router.use(reportsRouter);
 router.use(pivotRouter);
+router.use(vacationsRouter);
 router.use(dashboardRouter);
 router.use(authRouter);
 

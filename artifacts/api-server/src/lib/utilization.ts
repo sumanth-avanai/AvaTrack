@@ -4,11 +4,10 @@
  * Available hours = theoretical working hours in a period based on:
  *   - employee weekly_capacity_hours and working days mask
  *   - minus holidays from the assigned calendar that fall on employee working days
+ *   - minus vacation/absence days that fall on employee working days
+ *   - constrained to [contractStartDate, contractEndDate] if provided
  *
  * Daily capacity = weekly_capacity_hours / number_of_active_working_days
- * Example: 40h, Mon-Fri → 8h/day. 20h, Mon-Fri → 4h/day. 32h, Mon-Thu → 8h/day.
- *
- * If a holiday falls on a day the employee doesn't work → no deduction.
  */
 
 /**
@@ -21,60 +20,103 @@ export function parseWorkingDaysMask(mask: string): boolean[] {
 
 /**
  * Get the ISO day index (0=Mon, 6=Sun) for a given Date.
- * MUST use getUTCDay() — dates are always created as UTC midnight,
- * so getDay() (local time) would return the wrong weekday in non-UTC servers.
+ * MUST use getUTCDay() — dates are always created as UTC midnight.
  */
 function getIsoDayIndex(date: Date): number {
-  const d = date.getUTCDay(); // 0=Sun, 1=Mon ... 6=Sat  (UTC, not local time)
-  return d === 0 ? 6 : d - 1; // convert to 0=Mon ... 6=Sun
+  const d = date.getUTCDay(); // 0=Sun … 6=Sat
+  return d === 0 ? 6 : d - 1; // convert to 0=Mon … 6=Sun
+}
+
+/**
+ * Expand a list of vacation {startDate, endDate} ranges into a Set of ISO date strings.
+ * Overlapping ranges are deduplicated automatically.
+ */
+export function buildVacationDateSet(
+  vacations: { startDate: string; endDate: string }[]
+): Set<string> {
+  const dates = new Set<string>();
+  for (const v of vacations) {
+    const cur = new Date(v.startDate + "T00:00:00Z");
+    const end = new Date(v.endDate + "T00:00:00Z");
+    while (cur <= end) {
+      dates.add(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+  }
+  return dates;
 }
 
 /**
  * Calculate available working hours for an employee between startDate and endDate (inclusive).
  *
- * @param startDate - ISO date string "YYYY-MM-DD"
- * @param endDate   - ISO date string "YYYY-MM-DD"
- * @param workingDaysMask - stored mask string e.g. "1,1,1,1,1,0,0"
- * @param weeklyCapacityHours - e.g. 40, 20, 32
- * @param holidayDates - array of holiday ISO date strings "YYYY-MM-DD" from the employee's calendar
+ * @param startDate         - ISO date string "YYYY-MM-DD"
+ * @param endDate           - ISO date string "YYYY-MM-DD"
+ * @param workingDaysMask   - mask string e.g. "1,1,1,1,1,0,0"
+ * @param weeklyCapacityHours
+ * @param holidayDates      - array of holiday ISO date strings from the employee's calendar
+ * @param vacationDates     - Set (or array) of ISO date strings covered by vacation/absence
+ * @param contractStartDate - first day of employment (days before → 0 availability)
+ * @param contractEndDate   - last day of employment (days after → 0 availability), or null
  */
 export function calculateAvailableHours(
   startDate: string,
   endDate: string,
   workingDaysMask: string,
   weeklyCapacityHours: number,
-  holidayDates: string[]
+  holidayDates: string[],
+  vacationDates: Set<string> | string[] = [],
+  contractStartDate?: string | null,
+  contractEndDate?: string | null
 ): number {
   const mask = parseWorkingDaysMask(workingDaysMask);
 
-  // Number of active working days per week
   const activeDaysPerWeek = mask.filter(Boolean).length;
   if (activeDaysPerWeek === 0) return 0;
 
-  // Daily capacity in hours
   const dailyCapacity = weeklyCapacityHours / activeDaysPerWeek;
 
-  // Build a Set for fast holiday lookup
-  const holidaySet = new Set(holidayDates);
+  const holidaySet  = new Set(holidayDates);
+  const vacationSet = vacationDates instanceof Set ? vacationDates : new Set(vacationDates);
 
   let availableHours = 0;
   const current = new Date(startDate + "T00:00:00Z");
-  const end = new Date(endDate + "T00:00:00Z");
+  const end     = new Date(endDate   + "T00:00:00Z");
 
   while (current <= end) {
-    const dayIndex = getIsoDayIndex(current);
-    const isWorkingDay = mask[dayIndex];
+    const isoDate = current.toISOString().slice(0, 10);
 
-    if (isWorkingDay) {
-      const isoDate = current.toISOString().slice(0, 10);
-      if (!holidaySet.has(isoDate)) {
-        // Not a holiday → count the full daily capacity
-        availableHours += dailyCapacity;
-      }
-      // If it IS a holiday that falls on a working day → deduct (skip adding)
+    // 1. Contract start — days before contract do not count
+    if (contractStartDate && isoDate < contractStartDate) {
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
     }
-    // If holiday falls on non-working day → no deduction (not counting it either way)
+    // 2. Contract end — days after contract do not count
+    if (contractEndDate && isoDate > contractEndDate) {
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
+    }
 
+    // 3. Non-working day
+    const dayIndex = getIsoDayIndex(current);
+    if (!mask[dayIndex]) {
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
+    }
+
+    // 4. Public holiday
+    if (holidaySet.has(isoDate)) {
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
+    }
+
+    // 5. Vacation / absence
+    if (vacationSet.has(isoDate)) {
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
+    }
+
+    // 6. Working day — add daily capacity
+    availableHours += dailyCapacity;
     current.setUTCDate(current.getUTCDate() + 1);
   }
 
@@ -82,12 +124,12 @@ export function calculateAvailableHours(
 }
 
 /**
- * Returns the Monday of the week containing the given date.
+ * Returns the Monday of the week containing the given date (UTC).
  */
 export function getWeekStart(date: Date): Date {
-  const d = new Date(date);
+  const d   = new Date(date);
   const day = d.getUTCDay();
-  const diff = day === 0 ? -6 : 1 - day; // adjust for Monday start
+  const diff = day === 0 ? -6 : 1 - day;
   d.setUTCDate(d.getUTCDate() + diff);
   return d;
 }
