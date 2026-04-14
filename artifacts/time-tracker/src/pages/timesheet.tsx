@@ -54,10 +54,14 @@ export default function Timesheet() {
         </div>
 
         {selectedEmployeeId && selectedEmployee ? (
-          <TimesheetGrid 
+          <TimesheetGrid
             employeeId={selectedEmployeeId}
             weekStartDate={currentWeekStart}
             capacityHours={selectedEmployee.weeklyCapacityHours}
+            workingDaysMask={selectedEmployee.workingDaysMask}
+            contractStartDate={selectedEmployee.contractStartDate ?? null}
+            contractEndDate={selectedEmployee.contractEndDate ?? null}
+            holidayCalendarCode={selectedEmployee.holidayCalendarCode ?? null}
             onNextWeek={() => setCurrentWeekStart(prev => addWeeks(prev, 1))}
             onPreviousWeek={() => setCurrentWeekStart(prev => subWeeks(prev, 1))}
           />

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { format, addDays } from "date-fns";
+import { format, addDays, getISODay } from "date-fns";
 import {
   Table,
   TableBody,
@@ -23,22 +23,45 @@ import {
   useListTimeEntries,
   getListTimeEntriesQueryKey,
   useBulkUpsertTimeEntries,
+  useListHolidayCalendars,
+  getListHolidayCalendarsQueryKey,
+  useListHolidays,
+  getListHolidaysQueryKey,
 } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save, CheckCircle2, Loader2 } from "lucide-react";
 
 interface TimesheetGridProps {
   employeeId: number;
   weekStartDate: Date;
   capacityHours: number;
+  workingDaysMask?: number[];
+  contractStartDate?: string | null;
+  contractEndDate?: string | null;
+  holidayCalendarCode?: string | null;
   onPreviousWeek?: () => void;
   onNextWeek?: () => void;
 }
+
+type VacationEntry = {
+  id: number;
+  employeeId: number;
+  startDate: string;
+  endDate: string;
+  vacationType: string;
+  note: string | null;
+};
+
+const ALL_DAYS_MASK = [1, 1, 1, 1, 1, 1, 1];
 
 export function TimesheetGrid({
   employeeId,
   weekStartDate,
   capacityHours,
+  workingDaysMask = ALL_DAYS_MASK,
+  contractStartDate = null,
+  contractEndDate = null,
+  holidayCalendarCode = null,
   onPreviousWeek,
   onNextWeek,
 }: TimesheetGridProps) {
@@ -52,7 +75,7 @@ export function TimesheetGrid({
   );
 
   const startDateStr = format(weekDays[0], "yyyy-MM-dd");
-  const endDateStr   = format(weekDays[6], "yyyy-MM-dd");
+  const endDateStr = format(weekDays[6], "yyyy-MM-dd");
 
   const { data: projects } = useListProjects(
     { includeInactive: false },
@@ -69,6 +92,84 @@ export function TimesheetGrid({
     }
   );
 
+  // Holiday calendars — resolve code → numeric calendar ID
+  const { data: holidayCalendars } = useListHolidayCalendars({
+    query: {
+      queryKey: getListHolidayCalendarsQueryKey(),
+      enabled: !!holidayCalendarCode,
+    },
+  });
+
+  const calendarId = useMemo(() => {
+    if (!holidayCalendarCode || !holidayCalendars) return null;
+    return holidayCalendars.find((c) => c.code === holidayCalendarCode)?.id ?? null;
+  }, [holidayCalendarCode, holidayCalendars]);
+
+  // Fetch all holidays for this calendar (no year filter → all years cached)
+  const { data: holidays } = useListHolidays(
+    calendarId ?? 0,
+    undefined,
+    {
+      query: {
+        queryKey: getListHolidaysQueryKey(calendarId ?? 0),
+        enabled: !!calendarId,
+      },
+    }
+  );
+
+  // Fetch vacations for this employee
+  const { data: vacations } = useQuery<VacationEntry[]>({
+    queryKey: ["vacations", employeeId],
+    queryFn: async () => {
+      const res = await fetch(`/api/vacations?employeeId=${employeeId}`);
+      if (!res.ok) throw new Error("Failed to fetch vacations");
+      return res.json() as Promise<VacationEntry[]>;
+    },
+    enabled: !!employeeId,
+  });
+
+  // Build the set of non-bookable dates for this week
+  const disabledDates = useMemo(() => {
+    const disabled = new Set<string>();
+
+    for (const day of weekDays) {
+      const dateStr = format(day, "yyyy-MM-dd");
+
+      // Non-working day: getISODay → 1=Mon … 7=Sun; mask[0]=Mon … mask[6]=Sun
+      const isoDayIndex = getISODay(day) - 1;
+      if (!workingDaysMask[isoDayIndex]) {
+        disabled.add(dateStr);
+        continue;
+      }
+
+      // Before contract start
+      if (contractStartDate && dateStr < contractStartDate) {
+        disabled.add(dateStr);
+        continue;
+      }
+
+      // After contract end
+      if (contractEndDate && dateStr > contractEndDate) {
+        disabled.add(dateStr);
+        continue;
+      }
+
+      // Public holiday — date may arrive as string or Date object from JSON
+      if (holidays?.some((h) => String(h.date).slice(0, 10) === dateStr)) {
+        disabled.add(dateStr);
+        continue;
+      }
+
+      // Vacation / absence
+      if (vacations?.some((v) => v.startDate <= dateStr && dateStr <= v.endDate)) {
+        disabled.add(dateStr);
+        continue;
+      }
+    }
+
+    return disabled;
+  }, [weekDays, workingDaysMask, contractStartDate, contractEndDate, holidays, vacations]);
+
   const bulkUpsert = useBulkUpsertTimeEntries();
 
   const [gridData, setGridData] = useState<Record<number, Record<string, string>>>({});
@@ -77,7 +178,16 @@ export function TimesheetGrid({
   const initializedForParams = useRef<string | null>(null);
   const currentParamsKey = `${employeeId}-${startDateStr}-${endDateStr}`;
 
-  // Re-initialize grid whenever week / employee changes, or after a fresh load
+  // Immediately clear stale rows when week or employee changes
+  useEffect(() => {
+    setIsDirty(false);
+    setSaveStatus("idle");
+    setActiveProjectIds([]);
+    setGridData({});
+    initializedForParams.current = null;
+  }, [currentParamsKey]);
+
+  // Re-initialize grid from DB data once it arrives
   useEffect(() => {
     if (timeEntries && projects && initializedForParams.current !== currentParamsKey) {
       initializedForParams.current = currentParamsKey;
@@ -98,18 +208,9 @@ export function TimesheetGrid({
     }
   }, [timeEntries, projects, currentParamsKey]);
 
-  // Reset dirty flag when switching weeks (new params key)
-  useEffect(() => {
-    setIsDirty(false);
-    setSaveStatus("idle");
-    initializedForParams.current = null;
-  }, [currentParamsKey]);
-
   const handleSave = useCallback(() => {
     if (!isDirty || saveStatus === "saving") return;
 
-    // Build a set of keys that currently exist in the DB so we can send
-    // hours=0 for cleared cells (triggering the backend hard-delete path).
     const existingKeys = new Set(
       (timeEntries ?? []).map((e) => `${e.projectId}-${e.entryDate}`)
     );
@@ -119,11 +220,10 @@ export function TimesheetGrid({
     for (const projectIdStr in gridData) {
       const projectId = parseInt(projectIdStr, 10);
       for (const date in gridData[projectId]) {
+        if (disabledDates.has(date)) continue;
         const rawHours = parseFloat(gridData[projectId][date]);
         const hours = isNaN(rawHours) ? 0 : rawHours;
         const key = `${projectId}-${date}`;
-        // Include if hours > 0 (create/update), or if a DB record exists and
-        // hours = 0 / cell was cleared (delete via backend hard-delete path).
         if (hours > 0 || existingKeys.has(key)) {
           entriesToSave.push({ employeeId, projectId, entryDate: date, hours });
         }
@@ -138,8 +238,6 @@ export function TimesheetGrid({
         onSuccess: () => {
           setSaveStatus("saved");
           setIsDirty(false);
-          // Reset the init guard so the grid re-syncs from the DB refetch,
-          // removing any rows whose entries were just hard-deleted.
           initializedForParams.current = null;
           queryClient.invalidateQueries({
             queryKey: getListTimeEntriesQueryKey({ employeeId, startDate: startDateStr, endDate: endDateStr }),
@@ -151,7 +249,7 @@ export function TimesheetGrid({
         },
       }
     );
-  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr]);
+  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr, disabledDates]);
 
   // Ctrl+S shortcut
   useEffect(() => {
@@ -166,6 +264,7 @@ export function TimesheetGrid({
   }, [handleSave]);
 
   const handleCellChange = (projectId: number, date: string, value: string) => {
+    if (disabledDates.has(date)) return;
     if (value !== "" && !/^\d*\.?\d*$/.test(value)) return;
     setGridData((prev) => ({
       ...prev,
@@ -195,14 +294,15 @@ export function TimesheetGrid({
       if (el) { e.preventDefault(); el.focus(); }
     };
     if (e.key === "Enter" || e.key === "ArrowDown") move(rowIndex + 1, colIndex);
-    else if (e.key === "ArrowUp")    move(rowIndex - 1, colIndex);
+    else if (e.key === "ArrowUp") move(rowIndex - 1, colIndex);
     else if (e.key === "ArrowRight") move(rowIndex, colIndex + 1);
-    else if (e.key === "ArrowLeft")  move(rowIndex, colIndex - 1);
+    else if (e.key === "ArrowLeft") move(rowIndex, colIndex - 1);
   };
 
-  // Totals
+  // Totals — skip disabled dates
   const colTotals = weekDays.map((day) => {
     const dateStr = format(day, "yyyy-MM-dd");
+    if (disabledDates.has(dateStr)) return 0;
     return activeProjectIds.reduce((sum, pId) => {
       const v = parseFloat(gridData[pId]?.[dateStr] || "0");
       return sum + (isNaN(v) ? 0 : v);
@@ -211,12 +311,14 @@ export function TimesheetGrid({
 
   const rowTotals = activeProjectIds.map((pId) =>
     weekDays.reduce((sum, day) => {
-      const v = parseFloat(gridData[pId]?.[format(day, "yyyy-MM-dd")] || "0");
+      const dateStr = format(day, "yyyy-MM-dd");
+      if (disabledDates.has(dateStr)) return sum;
+      const v = parseFloat(gridData[pId]?.[dateStr] || "0");
       return sum + (isNaN(v) ? 0 : v);
     }, 0)
   );
 
-  const grandTotal    = colTotals.reduce((a, b) => a + b, 0);
+  const grandTotal = colTotals.reduce((a, b) => a + b, 0);
   const isOverCapacity = grandTotal > capacityHours;
 
   if (entriesLoading && !initializedForParams.current) {
@@ -240,7 +342,6 @@ export function TimesheetGrid({
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Capacity badge */}
           <div
             className={`px-3 py-1.5 rounded-md text-sm font-medium border ${
               isOverCapacity
@@ -251,7 +352,6 @@ export function TimesheetGrid({
             {grandTotal.toFixed(1)} / {capacityHours} hrs
           </div>
 
-          {/* Save button */}
           <Button
             onClick={handleSave}
             disabled={!isDirty || saveStatus === "saving"}
@@ -270,7 +370,6 @@ export function TimesheetGrid({
         </div>
       </div>
 
-      {/* Unsaved-changes hint */}
       {isDirty && (
         <p className="text-xs text-muted-foreground px-1">
           You have unsaved changes — click <strong>Save</strong> or press <kbd className="px-1 py-0.5 rounded border text-xs">Ctrl+S</kbd>
@@ -283,14 +382,21 @@ export function TimesheetGrid({
           <TableHeader className="bg-muted/50">
             <TableRow>
               <TableHead className="w-[250px]">Project</TableHead>
-              {weekDays.map((day) => (
-                <TableHead key={day.toISOString()} className="text-center w-[100px]">
-                  <div className="flex flex-col items-center">
-                    <span className="font-medium text-foreground">{format(day, "EEE")}</span>
-                    <span className="text-xs text-muted-foreground">{format(day, "MMM d")}</span>
-                  </div>
-                </TableHead>
-              ))}
+              {weekDays.map((day) => {
+                const dateStr = format(day, "yyyy-MM-dd");
+                const isDisabled = disabledDates.has(dateStr);
+                return (
+                  <TableHead
+                    key={day.toISOString()}
+                    className={`text-center w-[100px]${isDisabled ? " opacity-50" : ""}`}
+                  >
+                    <div className="flex flex-col items-center">
+                      <span className="font-medium text-foreground">{format(day, "EEE")}</span>
+                      <span className="text-xs text-muted-foreground">{format(day, "MMM d")}</span>
+                    </div>
+                  </TableHead>
+                );
+              })}
               <TableHead className="text-right w-[100px]">Total</TableHead>
             </TableRow>
           </TableHeader>
@@ -307,6 +413,22 @@ export function TimesheetGrid({
                   </TableCell>
                   {weekDays.map((day, colIndex) => {
                     const dateStr = format(day, "yyyy-MM-dd");
+                    const isDisabled = disabledDates.has(dateStr);
+
+                    if (isDisabled) {
+                      return (
+                        <TableCell
+                          key={dateStr}
+                          className="p-1 bg-muted/50"
+                          title="Not bookable"
+                        >
+                          <div className="h-9 w-full flex items-center justify-center text-muted-foreground/40 text-sm select-none">
+                            —
+                          </div>
+                        </TableCell>
+                      );
+                    }
+
                     return (
                       <TableCell key={dateStr} className="p-1">
                         <Input
@@ -348,11 +470,19 @@ export function TimesheetGrid({
                   </SelectContent>
                 </Select>
               </TableCell>
-              {colTotals.map((total, i) => (
-                <TableCell key={i} className="text-center font-medium text-muted-foreground">
-                  {total > 0 ? total.toFixed(1) : "-"}
-                </TableCell>
-              ))}
+              {weekDays.map((day, i) => {
+                const dateStr = format(day, "yyyy-MM-dd");
+                const isDisabled = disabledDates.has(dateStr);
+                const total = colTotals[i];
+                return (
+                  <TableCell
+                    key={i}
+                    className={`text-center font-medium text-muted-foreground${isDisabled ? " bg-muted/50" : ""}`}
+                  >
+                    {isDisabled ? "—" : total > 0 ? total.toFixed(1) : "-"}
+                  </TableCell>
+                );
+              })}
               <TableCell className="text-right font-bold text-primary">
                 {grandTotal > 0 ? grandTotal.toFixed(1) : "0.0"}
               </TableCell>
