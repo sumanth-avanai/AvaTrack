@@ -35,7 +35,24 @@ app.use(
   }),
 );
 
-app.use(cors({ origin: true, credentials: true }));
+const ALLOWED_ORIGIN_PATTERNS = [
+  /^https?:\/\/localhost(:\d+)?$/,
+  /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+  /\.replit\.dev$/,
+  /\.repl\.co$/,
+];
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    const allowed = ALLOWED_ORIGIN_PATTERNS.some((re) => re.test(origin));
+    callback(allowed ? null : new Error("CORS: origin not allowed"), allowed);
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
