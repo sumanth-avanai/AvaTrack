@@ -10,6 +10,7 @@ import pivotRouter from "./pivot";
 import vacationsRouter from "./vacations";
 import dashboardRouter from "./dashboard";
 import authRouter from "./auth";
+import appAuthRouter from "./app-auth";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(pivotRouter);
 router.use(vacationsRouter);
 router.use(dashboardRouter);
 router.use(authRouter);
+router.use(appAuthRouter);
 
 export default router;

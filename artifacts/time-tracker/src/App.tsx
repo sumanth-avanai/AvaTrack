@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
+import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -12,25 +12,73 @@ import Reports from "@/pages/reports";
 import Timesheet from "@/pages/timesheet";
 import EmployeePortal from "@/pages/employee-portal";
 import Vacations from "@/pages/vacations";
+import Login from "@/pages/login";
+import { useAppAuth } from "@/hooks/use-app-auth";
 
 const queryClient = new QueryClient();
+
+// ─── Auth guard wrapper ───────────────────────────────────────────────────────
+
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const [, navigate] = useLocation();
+  const auth = useAppAuth();
+
+  if (auth === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-muted-foreground text-sm">Loading…</div>
+      </div>
+    );
+  }
+
+  if (auth === "unauthenticated") {
+    // Redirect to login
+    navigate("/login");
+    return null;
+  }
+
+  return <>{children}</>;
+}
+
+// ─── Router ───────────────────────────────────────────────────────────────────
 
 function Router() {
   return (
     <Switch>
-      <Route path="/">
-        <Redirect to="/dashboard" />
-      </Route>
-      <Route path="/dashboard"  component={Dashboard} />
-      <Route path="/clients"    component={Clients} />
-      <Route path="/projects"   component={Projects} />
-      <Route path="/employees"  component={Employees} />
-      <Route path="/holidays"   component={Holidays} />
-      <Route path="/vacations"  component={Vacations} />
-      <Route path="/reports"    component={Reports} />
-      <Route path="/timesheet"  component={Timesheet} />
+      {/* Public routes */}
+      <Route path="/login" component={Login} />
 
-      <Route path="/u/:token" component={EmployeePortal} />
+      {/* Protected routes — wrapped individually so AuthGuard runs per-render */}
+      <Route path="/">
+        <AuthGuard><Redirect to="/dashboard" /></AuthGuard>
+      </Route>
+      <Route path="/dashboard">
+        <AuthGuard><Dashboard /></AuthGuard>
+      </Route>
+      <Route path="/clients">
+        <AuthGuard><Clients /></AuthGuard>
+      </Route>
+      <Route path="/projects">
+        <AuthGuard><Projects /></AuthGuard>
+      </Route>
+      <Route path="/employees">
+        <AuthGuard><Employees /></AuthGuard>
+      </Route>
+      <Route path="/holidays">
+        <AuthGuard><Holidays /></AuthGuard>
+      </Route>
+      <Route path="/vacations">
+        <AuthGuard><Vacations /></AuthGuard>
+      </Route>
+      <Route path="/reports">
+        <AuthGuard><Reports /></AuthGuard>
+      </Route>
+      <Route path="/timesheet">
+        <AuthGuard><Timesheet /></AuthGuard>
+      </Route>
+      <Route path="/u/:token">
+        <AuthGuard><EmployeePortal /></AuthGuard>
+      </Route>
 
       <Route component={NotFound} />
     </Switch>

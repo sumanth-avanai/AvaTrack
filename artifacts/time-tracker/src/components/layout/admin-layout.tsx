@@ -3,6 +3,7 @@ import {
   Sidebar, 
   SidebarContent, 
   SidebarHeader, 
+  SidebarFooter,
   SidebarMenu, 
   SidebarMenuButton, 
   SidebarMenuItem,
@@ -17,10 +18,14 @@ import {
   CalendarDays, 
   BarChart3,
   CalendarOff,
+  LogOut,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
+  const { toast } = useToast();
 
   const navItems = [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -32,6 +37,19 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     { title: "Vacations", href: "/vacations", icon: CalendarOff },
     { title: "Reports",   href: "/reports",   icon: BarChart3 },
   ];
+
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/app/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // Ignore network errors — still navigate away
+    }
+    navigate("/login");
+    toast({ title: "Signed out" });
+  }
 
   return (
     <SidebarProvider>
@@ -58,6 +76,16 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
               ))}
             </SidebarMenu>
           </SidebarContent>
+          <SidebarFooter className="p-2 border-t border-border">
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-3 px-3 text-sm font-medium text-muted-foreground hover:text-foreground"
+              onClick={handleLogout}
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </Button>
+          </SidebarFooter>
         </Sidebar>
         <main className="flex-1 flex flex-col h-screen overflow-hidden">
           <div className="flex-1 overflow-y-auto p-6 md:p-8">
