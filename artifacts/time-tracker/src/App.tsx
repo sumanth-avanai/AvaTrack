@@ -18,8 +18,6 @@ import { useAppAuth } from "@/hooks/use-app-auth";
 
 const queryClient = new QueryClient();
 
-// ─── Auth guard wrapper ───────────────────────────────────────────────────────
-
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const [, navigate] = useLocation();
   const auth = useAppAuth();
@@ -38,55 +36,25 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (auth === "unauthenticated") {
-    return null;
-  }
+  if (auth === "unauthenticated") return null;
 
   return <>{children}</>;
 }
 
-// ─── Router ───────────────────────────────────────────────────────────────────
-
 function Router() {
   return (
     <Switch>
-      {/* Public routes */}
       <Route path="/login" component={Login} />
-
-      {/* Root redirect */}
-      <Route path="/">
-        <Redirect to="/dashboard" />
-      </Route>
-
-      {/* Protected routes */}
-      <Route path="/dashboard">
-        <AuthGuard><Dashboard /></AuthGuard>
-      </Route>
-      <Route path="/clients">
-        <AuthGuard><Clients /></AuthGuard>
-      </Route>
-      <Route path="/projects">
-        <AuthGuard><Projects /></AuthGuard>
-      </Route>
-      <Route path="/employees">
-        <AuthGuard><Employees /></AuthGuard>
-      </Route>
-      <Route path="/holidays">
-        <AuthGuard><Holidays /></AuthGuard>
-      </Route>
-      <Route path="/vacations">
-        <AuthGuard><Vacations /></AuthGuard>
-      </Route>
-      <Route path="/reports">
-        <AuthGuard><Reports /></AuthGuard>
-      </Route>
-      <Route path="/timesheet">
-        <AuthGuard><Timesheet /></AuthGuard>
-      </Route>
-      <Route path="/u/:token">
-        <AuthGuard><EmployeePortal /></AuthGuard>
-      </Route>
-
+      <Route path="/"><Redirect to="/dashboard" /></Route>
+      <Route path="/dashboard"><AuthGuard><Dashboard /></AuthGuard></Route>
+      <Route path="/clients"><AuthGuard><Clients /></AuthGuard></Route>
+      <Route path="/projects"><AuthGuard><Projects /></AuthGuard></Route>
+      <Route path="/employees"><AuthGuard><Employees /></AuthGuard></Route>
+      <Route path="/holidays"><AuthGuard><Holidays /></AuthGuard></Route>
+      <Route path="/vacations"><AuthGuard><Vacations /></AuthGuard></Route>
+      <Route path="/reports"><AuthGuard><Reports /></AuthGuard></Route>
+      <Route path="/timesheet"><AuthGuard><Timesheet /></AuthGuard></Route>
+      <Route path="/u/:token"><AuthGuard><EmployeePortal /></AuthGuard></Route>
       <Route component={NotFound} />
     </Switch>
   );

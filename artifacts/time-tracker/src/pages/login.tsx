@@ -10,11 +10,8 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Redirect if already authenticated
   useEffect(() => {
-    if (auth === "authenticated") {
-      navigate("/dashboard");
-    }
+    if (auth === "authenticated") navigate("/dashboard");
   }, [auth, navigate]);
 
   if (auth === "loading" || auth === "authenticated") return null;
@@ -23,7 +20,6 @@ export default function Login() {
     e.preventDefault();
     setError("");
     setLoading(true);
-
     try {
       const res = await fetch("/api/auth/app/login", {
         method: "POST",
@@ -31,18 +27,12 @@ export default function Login() {
         credentials: "include",
         body: JSON.stringify({ password }),
       });
-
       if (res.ok) {
-        // Immediately update React Query cache so AuthGuard sees authenticated state
         setAuthenticated();
         navigate("/dashboard");
       } else {
         const body = await res.json().catch(() => ({}));
-        if (res.status === 429) {
-          setError("Too many attempts. Please wait before trying again.");
-        } else {
-          setError(body.error ?? "Invalid password");
-        }
+        setError(res.status === 429 ? "Too many attempts. Please wait before trying again." : (body.error ?? "Invalid password"));
         setPassword("");
       }
     } catch {
@@ -55,13 +45,10 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-8">
-        {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Zeit</h1>
           <p className="text-sm text-muted-foreground">Internal access only</p>
         </div>
-
-        {/* Card */}
         <div className="bg-card border border-border rounded-xl shadow-sm p-8">
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
@@ -80,11 +67,7 @@ export default function Login() {
                 placeholder="Enter access password"
               />
             </div>
-
-            {error && (
-              <p className="text-sm text-destructive font-medium">{error}</p>
-            )}
-
+            {error && <p className="text-sm text-destructive font-medium">{error}</p>}
             <button
               type="submit"
               disabled={loading || !password}

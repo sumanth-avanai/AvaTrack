@@ -1,14 +1,4 @@
-/**
- * Global app password authentication routes.
- *
- * POST   /api/auth/app/login   — validate shared password, set session
- * POST   /api/auth/app/logout  — destroy session
- * GET    /api/auth/app/me      — return { authenticated: true } or 401
- *
- * Paths here are relative to the /api mount-point (no /api prefix).
- */
-
-import "../lib/session"; // apply SessionData augmentation
+import "../lib/session";
 
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import rateLimit from "express-rate-limit";
@@ -16,25 +6,18 @@ import rateLimit from "express-rate-limit";
 const router: IRouter = Router();
 
 const loginLimiter = rateLimit({
-  windowMs:               15 * 60 * 1000, // 15-minute window
-  max:                    10,              // 10 attempts per window per IP
+  windowMs:               15 * 60 * 1000,
+  max:                    10,
   standardHeaders:        true,
   legacyHeaders:          false,
-  skipSuccessfulRequests: true,            // only failed attempts count toward limit
+  skipSuccessfulRequests: true,
   message: { error: "Too many login attempts. Please try again later." },
 });
 
 router.post("/auth/app/login", loginLimiter, (req: Request, res: Response): void => {
   const { password } = req.body ?? {};
 
-  const expected = process.env["APP_ACCESS_PASSWORD"];
-  if (!expected) {
-    // Should never happen at runtime (startup validates this), but guard defensively
-    res.status(500).json({ error: "Server misconfiguration" });
-    return;
-  }
-
-  if (typeof password !== "string" || password !== expected) {
+  if (typeof password !== "string" || password !== process.env["APP_ACCESS_PASSWORD"]) {
     res.status(401).json({ error: "Invalid password" });
     return;
   }
@@ -67,17 +50,6 @@ router.get("/auth/app/me", (req: Request, res: Response): void => {
     res.status(401).json({ authenticated: false });
   }
 });
-
-// ─── Auth Guard Middleware ────────────────────────────────────────────────────
-//
-// Applied to the /api router — req.path is relative (no /api prefix).
-//
-// Public routes (no session required):
-//   /health
-//   /auth/app/login
-//   /auth/app/logout
-//   /auth/app/me
-//   /auth/employee/*   (employee PIN — has its own auth)
 
 const PUBLIC_EXACT = new Set([
   "/healthz",
