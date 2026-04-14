@@ -39,6 +39,7 @@ const ALLOWED_ORIGIN_PATTERNS = [
   /^https?:\/\/localhost(:\d+)?$/,
   /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
   /\.replit\.dev$/,
+  /\.replit\.app$/,
   /\.repl\.co$/,
 ];
 
