@@ -573,6 +573,9 @@ export function TimesheetGrid({
         calendarId={calendarId}
         vacations={vacations ?? []}
         onSuccess={() => {
+          // Reset the rehydration guard so the grid re-initialises from the
+          // refreshed server data (same pattern used by handleSave).
+          initializedForParams.current = null;
           queryClient.invalidateQueries({
             queryKey: getListTimeEntriesQueryKey({ employeeId, startDate: startDateStr, endDate: endDateStr }),
           });

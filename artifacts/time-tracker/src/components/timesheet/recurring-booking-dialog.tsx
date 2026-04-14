@@ -125,7 +125,7 @@ export function RecurringBookingDialog({
   }, [startDate, endDate, selectedIsoDays, bookabilityParams]);
 
   const hours = parseFloat(hoursPerDay);
-  const isHoursValid = !isNaN(hours) && hours > 0 && hours <= 24;
+  const isHoursValid = !isNaN(hours) && hours >= 0 && hours <= 24;
   const isFormValid =
     selectedProjectId !== "" &&
     startDate !== "" &&
@@ -312,7 +312,7 @@ export function RecurringBookingDialog({
                 <Label>Hours per day</Label>
                 <Input
                   type="number"
-                  min="0.5"
+                  min="0"
                   max="24"
                   step="0.5"
                   value={hoursPerDay}
@@ -320,7 +320,7 @@ export function RecurringBookingDialog({
                   className="w-32"
                 />
                 {hoursPerDay !== "" && !isHoursValid && (
-                  <p className="text-xs text-destructive">Enter a value between 0.5 and 24.</p>
+                  <p className="text-xs text-destructive">Enter a value between 0 and 24.</p>
                 )}
               </div>
 
