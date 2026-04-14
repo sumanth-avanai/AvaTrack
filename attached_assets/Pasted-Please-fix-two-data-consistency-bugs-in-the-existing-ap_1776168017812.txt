@@ -1,0 +1,154 @@
+Please fix two data consistency bugs in the existing app. Both bugs must be fixed end-to-end, not only in the UI.
+
+==================================================
+BUG 1: contract_start_date is not persisting correctly
+==================================================
+
+Problem:
+The employee form allows entering a contract_start_date, but after saving I do not see the value persisted correctly. It is either not being saved, not being returned, or not being displayed after reload.
+
+Please debug and fix the full data flow for contract_start_date.
+
+Check all layers:
+
+1. Frontend form state
+- Ensure contract_start_date is included in the employee create form state
+- Ensure contract_start_date is included in the employee edit form state
+- Ensure the value is sent in both create and update requests
+- Ensure date format is consistent (prefer YYYY-MM-DD for input and DB compatibility)
+
+2. API request handling
+- Ensure create employee endpoint reads contract_start_date from request body
+- Ensure update employee endpoint reads contract_start_date from request body
+- Validate and persist the field correctly
+
+3. Database / ORM schema
+- Ensure the employees table actually contains contract_start_date
+- Ensure the ORM schema includes contract_start_date
+- If missing, create and run the required migration
+- Ensure the field type is correct for a date value
+
+4. Response serialization
+- Ensure create employee response includes contract_start_date
+- Ensure update employee response includes contract_start_date
+- Ensure employee detail / employee list / employee edit fetch include contract_start_date
+
+5. Frontend display
+- Ensure saved contract_start_date is shown again when reopening employee edit form
+- Ensure date formatting works correctly in date input fields
+
+6. Consistency
+- Use one naming convention consistently across frontend, backend, ORM, and DB
+- Prefer contract_start_date everywhere unless the existing codebase consistently uses camelCase
+
+Verification required:
+- Create an employee with contract_start_date
+- Save employee
+- Reload the page
+- Reopen employee
+- Confirm contract_start_date is still visible
+- Edit contract_start_date
+- Save again
+- Reload and confirm the updated value persists
+
+==================================================
+BUG 2: deleted timesheet entries reappear after reload
+==================================================
+
+Problem:
+When I delete a timesheet entry, it disappears temporarily.
+After reloading the page, the entry appears again in the timesheet.
+However, that same entry is no longer included in utilization calculations.
+
+This means the timesheet UI and reporting/utilization logic are inconsistent.
+
+Please debug and fix the delete flow completely.
+
+Check all layers:
+
+1. Frontend delete behavior
+- Ensure deleting a timesheet entry actually sends a real delete request
+- Ensure the UI is not only removing the entry from local state temporarily
+
+2. Backend delete endpoint
+- Check whether the delete endpoint is actually called
+- Verify whether deletion is implemented as:
+  - hard delete
+  OR
+  - soft delete
+
+3. Choose one consistent deletion strategy
+Preferred for this MVP:
+- use hard delete for time entries
+
+If hard delete is used:
+- remove the record from the database completely
+- make sure it does not come back on reload
+
+If soft delete is already implemented and must stay:
+- ensure all queries consistently exclude deleted entries
+
+4. Timesheet loading query
+- Ensure timesheet read queries follow the same delete logic
+- Deleted entries must never appear again after reload
+
+5. Reporting and utilization queries
+- Ensure utilization and reporting use the same source-of-truth logic as timesheet loading
+- Deleted entries must not appear in timesheet and must not be counted in reporting
+
+6. Cache / stale data
+- After delete, invalidate and refetch correctly
+- Avoid stale cached timesheet data after reload or navigation
+
+Verification required:
+- Create a timesheet entry
+- Confirm it appears in timesheet
+- Delete the entry
+- Confirm it disappears immediately
+- Reload the page
+- Confirm it is still gone
+- Confirm it is not counted in utilization/reporting
+- Confirm timesheet UI and reporting remain consistent
+
+==================================================
+GENERAL REQUIREMENTS
+==================================================
+
+1. Fix both bugs fully end-to-end
+Do not apply superficial UI-only fixes.
+
+2. Check for naming mismatches
+Examples:
+- contractStartDate vs contract_start_date
+- deleted vs is_deleted vs deleted_at
+
+3. Keep behavior consistent across:
+- create
+- update
+- delete
+- reload
+- reporting
+- utilization
+
+4. If database migrations are needed, create and apply them.
+
+5. After implementation, verify both flows manually and ensure persistence works across page reloads.
+
+==================================================
+EXPECTED RESULT
+==================================================
+
+After the fix:
+
+A. Employee contract start date
+- can be created
+- can be edited
+- persists in the database
+- is returned by the API
+- is shown correctly after reload
+
+B. Timesheet entries
+- are truly deleted according to one consistent rule
+- do not reappear after reload
+- are not counted in utilization/reporting
+- timesheet and reporting stay fully consistent
