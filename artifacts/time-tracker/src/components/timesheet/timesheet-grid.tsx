@@ -108,13 +108,23 @@ export function TimesheetGrid({
   const handleSave = useCallback(() => {
     if (!isDirty || saveStatus === "saving") return;
 
+    // Build a set of keys that currently exist in the DB so we can send
+    // hours=0 for cleared cells (triggering the backend hard-delete path).
+    const existingKeys = new Set(
+      (timeEntries ?? []).map((e) => `${e.projectId}-${e.entryDate}`)
+    );
+
     const entriesToSave: { employeeId: number; projectId: number; entryDate: string; hours: number }[] = [];
 
     for (const projectIdStr in gridData) {
       const projectId = parseInt(projectIdStr, 10);
       for (const date in gridData[projectId]) {
-        const hours = parseFloat(gridData[projectId][date]);
-        if (!isNaN(hours) && hours >= 0) {
+        const rawHours = parseFloat(gridData[projectId][date]);
+        const hours = isNaN(rawHours) ? 0 : rawHours;
+        const key = `${projectId}-${date}`;
+        // Include if hours > 0 (create/update), or if a DB record exists and
+        // hours = 0 / cell was cleared (delete via backend hard-delete path).
+        if (hours > 0 || existingKeys.has(key)) {
           entriesToSave.push({ employeeId, projectId, entryDate: date, hours });
         }
       }
@@ -128,6 +138,9 @@ export function TimesheetGrid({
         onSuccess: () => {
           setSaveStatus("saved");
           setIsDirty(false);
+          // Reset the init guard so the grid re-syncs from the DB refetch,
+          // removing any rows whose entries were just hard-deleted.
+          initializedForParams.current = null;
           queryClient.invalidateQueries({
             queryKey: getListTimeEntriesQueryKey({ employeeId, startDate: startDateStr, endDate: endDateStr }),
           });
@@ -138,7 +151,7 @@ export function TimesheetGrid({
         },
       }
     );
-  }, [isDirty, saveStatus, gridData, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr]);
+  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr]);
 
   // Ctrl+S shortcut
   useEffect(() => {

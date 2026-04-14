@@ -878,6 +878,12 @@ components:
           type: string
         active:
           type: boolean
+        contractStartDate:
+          type: ["string", "null"]
+          format: date
+        contractEndDate:
+          type: ["string", "null"]
+          format: date
         createdAt:
           type: string
           format: date-time
@@ -890,6 +896,8 @@ components:
         - holidayCalendarCode
         - personalAccessToken
         - active
+        - contractStartDate
+        - contractEndDate
         - createdAt
 
     EmployeePublic:
@@ -920,12 +928,19 @@ components:
           type: ["string", "null"]
         active:
           type: boolean
+        contractStartDate:
+          type: string
+          format: date
+        contractEndDate:
+          type: ["string", "null"]
+          format: date
         pin:
           type: string
       required:
         - name
         - weeklyCapacityHours
         - workingDaysMask
+        - contractStartDate
         - pin
 
     UpdateEmployeeBody:
@@ -945,6 +960,12 @@ components:
           type: ["string", "null"]
         active:
           type: boolean
+        contractStartDate:
+          type: ["string", "null"]
+          format: date
+        contractEndDate:
+          type: ["string", "null"]
+          format: date
 
     ResetPinBody:
       type: object
