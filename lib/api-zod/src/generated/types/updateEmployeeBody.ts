@@ -14,5 +14,9 @@ export interface UpdateEmployeeBody {
   workingDaysMask?: number[];
   /** @nullable */
   holidayCalendarCode?: string | null;
+  /** @nullable */
+  contractStartDate?: string | null;
+  /** @nullable */
+  contractEndDate?: string | null;
   active?: boolean;
 }
