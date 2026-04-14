@@ -22,10 +22,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { useSetUnauthenticated } from "@/hooks/use-app-auth";
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, navigate] = useLocation();
   const { toast } = useToast();
+  const setUnauthenticated = useSetUnauthenticated();
 
   const navItems = [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -45,8 +47,10 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         credentials: "include",
       });
     } catch {
-      // Ignore network errors — still navigate away
+      // Ignore network errors — still clear local state and navigate
     }
+    // Immediately update cache so AuthGuard sees unauthenticated state
+    setUnauthenticated();
     navigate("/login");
     toast({ title: "Signed out" });
   }

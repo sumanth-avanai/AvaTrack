@@ -5,8 +5,10 @@
  * POST   /api/auth/app/logout  — destroy session
  * GET    /api/auth/app/me      — return { authenticated: true } or 401
  *
- * NOTE: paths here are relative to the /api mount-point (i.e. no /api prefix).
+ * Paths here are relative to the /api mount-point (no /api prefix).
  */
+
+import "../lib/session"; // apply SessionData augmentation
 
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import rateLimit from "express-rate-limit";
@@ -18,7 +20,7 @@ const loginLimiter = rateLimit({
   max:                    10,              // 10 attempts per window per IP
   standardHeaders:        true,
   legacyHeaders:          false,
-  skipSuccessfulRequests: true,            // only failed attempts count
+  skipSuccessfulRequests: true,            // only failed attempts count toward limit
   message: { error: "Too many login attempts. Please try again later." },
 });
 
@@ -27,6 +29,7 @@ router.post("/auth/app/login", loginLimiter, (req: Request, res: Response): void
 
   const expected = process.env["APP_ACCESS_PASSWORD"];
   if (!expected) {
+    // Should never happen at runtime (startup validates this), but guard defensively
     res.status(500).json({ error: "Server misconfiguration" });
     return;
   }
@@ -36,7 +39,7 @@ router.post("/auth/app/login", loginLimiter, (req: Request, res: Response): void
     return;
   }
 
-  (req.session as any).appAuthenticated = true;
+  req.session.appAuthenticated = true;
   req.session.save((err) => {
     if (err) {
       res.status(500).json({ error: "Session error" });
@@ -58,23 +61,23 @@ router.post("/auth/app/logout", (req: Request, res: Response): void => {
 });
 
 router.get("/auth/app/me", (req: Request, res: Response): void => {
-  if ((req.session as any)?.appAuthenticated) {
+  if (req.session.appAuthenticated) {
     res.json({ authenticated: true });
   } else {
     res.status(401).json({ authenticated: false });
   }
 });
 
-// ─── Auth Guard Middleware ──────────────────────────────────────────────────
+// ─── Auth Guard Middleware ────────────────────────────────────────────────────
 //
-// Applied to the /api router. req.path is relative (no /api prefix).
+// Applied to the /api router — req.path is relative (no /api prefix).
 //
-// Public (no session required):
+// Public routes (no session required):
 //   /health
 //   /auth/app/login
 //   /auth/app/logout
 //   /auth/app/me
-//   /auth/employee/*   (employee PIN — has own auth)
+//   /auth/employee/*   (employee PIN — has its own auth)
 
 const PUBLIC_EXACT = new Set([
   "/health",
@@ -91,7 +94,7 @@ export function requireAppAuth(req: Request, res: Response, next: NextFunction):
     return;
   }
 
-  if ((req.session as any)?.appAuthenticated) {
+  if (req.session.appAuthenticated) {
     next();
     return;
   }

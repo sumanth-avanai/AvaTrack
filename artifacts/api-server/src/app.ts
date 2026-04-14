@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import session from "express-session";
 import pinoHttp from "pino-http";
+import "./lib/session"; // apply express-session SessionData augmentation
 import router from "./routes";
 import { requireAppAuth } from "./routes/app-auth";
 import { logger } from "./lib/logger";

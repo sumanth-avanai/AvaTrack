@@ -1,23 +1,23 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useSetAuthenticated, useAppAuth } from "@/hooks/use-app-auth";
 
 export default function Login() {
   const [, navigate] = useLocation();
+  const auth = useAppAuth();
+  const setAuthenticated = useSetAuthenticated();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [checking, setChecking] = useState(true);
 
-  // Redirect to dashboard if already authenticated
+  // Redirect if already authenticated
   useEffect(() => {
-    fetch("/api/auth/app/me", { credentials: "include" })
-      .then((r) => {
-        if (r.ok) navigate("/dashboard");
-      })
-      .finally(() => setChecking(false));
-  }, []);
+    if (auth === "authenticated") {
+      navigate("/dashboard");
+    }
+  }, [auth, navigate]);
 
-  if (checking) return null;
+  if (auth === "loading" || auth === "authenticated") return null;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,6 +33,8 @@ export default function Login() {
       });
 
       if (res.ok) {
+        // Immediately update React Query cache so AuthGuard sees authenticated state
+        setAuthenticated();
         navigate("/dashboard");
       } else {
         const body = await res.json().catch(() => ({}));
