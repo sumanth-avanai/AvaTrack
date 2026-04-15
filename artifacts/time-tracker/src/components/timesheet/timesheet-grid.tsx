@@ -242,11 +242,29 @@ export function TimesheetGrid({
 
     const entriesToSave: { employeeId: number; projectId: number; entryDate: string; hours: number }[] = [];
 
-    for (const projectIdStr in gridData) {
-      const projectId = parseInt(projectIdStr, 10);
-      for (const date in gridData[projectId]) {
+    for (const projectId of activeProjectIds) {
+      const projectDates = gridData[projectId];
+
+      // Compute the 7-day row total for this project
+      const rowTotal = weekDays.reduce((sum, day) => {
+        const dateStr = format(day, "yyyy-MM-dd");
+        if (disabledDateReasons.has(dateStr)) return sum;
+        const v = parseFloat(projectDates?.[dateStr] ?? "0");
+        return sum + (isNaN(v) ? 0 : v);
+      }, 0);
+
+      // Check whether any existing DB entries need to be deleted (hours → 0)
+      const hasExistingEntries = weekDays.some((day) => {
+        const dateStr = format(day, "yyyy-MM-dd");
+        return existingKeys.has(`${projectId}-${dateStr}`);
+      });
+
+      // Skip rows that have no DB entries AND no hours typed — nothing to save
+      if (rowTotal === 0 && !hasExistingEntries) continue;
+
+      for (const date in projectDates) {
         if (disabledDateReasons.has(date)) continue;
-        const rawHours = parseFloat(gridData[projectId][date]);
+        const rawHours = parseFloat(projectDates[date]);
         const hours = isNaN(rawHours) ? 0 : rawHours;
         const key = `${projectId}-${date}`;
         if (hours > 0 || existingKeys.has(key)) {
