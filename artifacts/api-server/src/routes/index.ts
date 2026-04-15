@@ -11,6 +11,7 @@ import vacationsRouter from "./vacations";
 import dashboardRouter from "./dashboard";
 import authRouter from "./auth";
 import appAuthRouter from "./app-auth";
+import savedReportsRouter from "./savedReports";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use(vacationsRouter);
 router.use(dashboardRouter);
 router.use(authRouter);
 router.use(appAuthRouter);
+router.use(savedReportsRouter);
 
 export default router;

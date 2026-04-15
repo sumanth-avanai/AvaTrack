@@ -34,8 +34,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Download, X } from "lucide-react";
+import { Download, X, Save, Trash2, BookOpen } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 // ─── Date preset helpers ────────────────────────────────────────────────────
 
@@ -109,6 +117,49 @@ interface PivotRow {
 type ReportData =
   | { type: "flat"; rowDimension: string; rows: FlatRow[] }
   | { type: "pivot"; rowDimension: string; colDimension: string; metric: string; columns: string[]; rows: PivotRow[] };
+
+// ─── Saved report types & helpers ────────────────────────────────────────────
+
+interface ReportConfig {
+  preset: Preset;
+  startDate: string;
+  endDate: string;
+  rowDimension: RowDimension;
+  colDimension: ColDimension;
+  metric: Metric;
+  filterEmployees: number[];
+  filterProjects: number[];
+  filterClients: number[];
+}
+
+interface SavedReportRow {
+  id: string;
+  name: string;
+  config: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+async function fetchSavedReports(): Promise<SavedReportRow[]> {
+  const res = await fetch("/api/saved-reports");
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function apiCreateSavedReport(name: string, config: ReportConfig): Promise<SavedReportRow> {
+  const res = await fetch("/api/saved-reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, config: JSON.stringify(config) }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function apiDeleteSavedReport(id: string): Promise<void> {
+  const res = await fetch(`/api/saved-reports/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) throw new Error(await res.text());
+}
 
 // ─── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -255,6 +306,71 @@ export default function Reports() {
   const [filterEmployees, setFilterEmployees] = useState<number[]>([]);
   const [filterProjects, setFilterProjects]   = useState<number[]>([]);
   const [filterClients, setFilterClients]     = useState<number[]>([]);
+
+  // ── Saved reports state ──────────────────────────────────────────────────
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveName, setSaveName]             = useState("");
+  const [saveError, setSaveError]           = useState("");
+
+  const queryClient = useQueryClient();
+
+  const { data: savedReports = [] } = useQuery<SavedReportRow[]>({
+    queryKey: ["saved-reports"],
+    queryFn: fetchSavedReports,
+  });
+
+  const createReport = useMutation({
+    mutationFn: ({ name, config }: { name: string; config: ReportConfig }) =>
+      apiCreateSavedReport(name, config),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["saved-reports"] });
+      setSaveDialogOpen(false);
+      setSaveName("");
+      setSaveError("");
+    },
+  });
+
+  const deleteReport = useMutation({
+    mutationFn: (id: string) => apiDeleteSavedReport(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["saved-reports"] }),
+  });
+
+  const handleOpenSaveDialog = () => {
+    setSaveName("");
+    setSaveError("");
+    setSaveDialogOpen(true);
+  };
+
+  const handleConfirmSave = () => {
+    const trimmed = saveName.trim();
+    if (!trimmed) {
+      setSaveError("Please enter a name for the report.");
+      return;
+    }
+    const config: ReportConfig = {
+      preset, startDate, endDate,
+      rowDimension, colDimension, metric,
+      filterEmployees, filterProjects, filterClients,
+    };
+    createReport.mutate({ name: trimmed, config });
+  };
+
+  const handleLoadReport = (row: SavedReportRow) => {
+    try {
+      const cfg: ReportConfig = JSON.parse(row.config);
+      setPreset(cfg.preset ?? "custom");
+      setStartDate(cfg.startDate);
+      setEndDate(cfg.endDate);
+      setRowDimension(cfg.rowDimension ?? "employees");
+      setColDimension(cfg.colDimension ?? "none");
+      setMetric(cfg.metric ?? "billable_utilization_percent");
+      setFilterEmployees(cfg.filterEmployees ?? []);
+      setFilterProjects(cfg.filterProjects ?? []);
+      setFilterClients(cfg.filterClients ?? []);
+    } catch {
+      // malformed config — ignore
+    }
+  };
 
   const { data: employees } = useListEmployees();
   const { data: projects }  = useListProjects({ includeInactive: false });
@@ -437,8 +553,61 @@ export default function Reports() {
           </div>
         </div>
 
+        {/* ── Saved Reports list ──────────────────────────────────────── */}
+        {savedReports.length > 0 && (
+          <div className="border rounded-lg bg-card p-3 shadow-sm space-y-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <BookOpen className="h-4 w-4" />
+              Saved Reports
+            </div>
+            <div className="divide-y divide-border">
+              {savedReports.map((r) => {
+                let summary = "";
+                try {
+                  const cfg: ReportConfig = JSON.parse(r.config);
+                  const presetLabel = cfg.preset !== "custom" ? PRESET_LABELS[cfg.preset] : `${cfg.startDate} → ${cfg.endDate}`;
+                  summary = `${presetLabel} · ${cfg.rowDimension}`;
+                } catch { /* empty */ }
+                return (
+                  <div
+                    key={r.id}
+                    className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
+                  >
+                    <button
+                      className="flex-1 text-left hover:text-primary transition-colors min-w-0"
+                      onClick={() => handleLoadReport(r)}
+                    >
+                      <span className="font-medium text-sm truncate block">{r.name}</span>
+                      {summary && (
+                        <span className="text-xs text-muted-foreground">{summary}</span>
+                      )}
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                      disabled={deleteReport.isPending}
+                      onClick={() => deleteReport.mutate(r.id)}
+                      title="Delete saved report"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── Table ───────────────────────────────────────────────────── */}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenSaveDialog}
+          >
+            <Save className="h-4 w-4 mr-2" /> Save Report
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -584,6 +753,45 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      {/* ── Save Report Dialog ─────────────────────────────────────────── */}
+      <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Save Report Configuration</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="save-report-name">Report Name</Label>
+              <Input
+                id="save-report-name"
+                placeholder="e.g. Q1 Billable Utilization"
+                value={saveName}
+                onChange={(e) => { setSaveName(e.target.value); setSaveError(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter") handleConfirmSave(); }}
+                autoFocus
+              />
+              {saveError && (
+                <p className="text-xs text-destructive">{saveError}</p>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Saves the current date range, grouping, metric, and filters.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleConfirmSave}
+              disabled={createReport.isPending}
+            >
+              {createReport.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AdminLayout>
   );
 }
