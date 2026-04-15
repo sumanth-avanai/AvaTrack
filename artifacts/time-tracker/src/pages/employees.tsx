@@ -74,7 +74,7 @@ export default function Employees() {
           contractStartDate:   (fd.get("contractStartDate") as string) || null,
           contractEndDate:     (fd.get("contractEndDate") as string) || null,
           active:              fd.get("active") === "on",
-          workingDaysMask:     [0, 1, 1, 1, 1, 1, 0],
+          workingDaysMask:     [1, 1, 1, 1, 1, 0, 0],
           pin:                 fd.get("pin") as string,
         } as any,
       },
