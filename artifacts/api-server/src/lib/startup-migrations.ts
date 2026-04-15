@@ -2,12 +2,13 @@
  * Startup migrations — idempotent DB fixes that run once on server boot.
  * Safe to run repeatedly.
  */
-import { db, employeesTable } from "@workspace/db";
+import { db, employeesTable, timeEntriesTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
 export async function runStartupMigrations(): Promise<void> {
   await fixWorkingDaysMasks();
+  await deleteZeroHourEntries();
 }
 
 /**
@@ -30,5 +31,27 @@ async function fixWorkingDaysMasks(): Promise<void> {
     }
   } catch (err) {
     logger.error({ err }, "startup-migration: fixWorkingDaysMasks failed");
+  }
+}
+
+/**
+ * Delete any time_entries rows where hours = 0. These should never exist
+ * (the bulkUpsert endpoint deletes them), but a cleanup pass is harmless.
+ */
+async function deleteZeroHourEntries(): Promise<void> {
+  try {
+    const result = await db
+      .delete(timeEntriesTable)
+      .where(sql`${timeEntriesTable.hours} = 0`)
+      .returning({ id: timeEntriesTable.id });
+
+    if (result.length > 0) {
+      logger.info(
+        { count: result.length },
+        `startup-migration: deleted ${result.length} zero-hour time entr(ies)`
+      );
+    }
+  } catch (err) {
+    logger.error({ err }, "startup-migration: deleteZeroHourEntries failed");
   }
 }

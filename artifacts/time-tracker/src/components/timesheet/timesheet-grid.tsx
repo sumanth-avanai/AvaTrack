@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useDirtyGuard } from "@/contexts/dirty-guard";
 import { format, addDays, getISODay, subWeeks } from "date-fns";
 import {
   Table,
@@ -60,10 +61,21 @@ export function TimesheetGrid({
   onNextWeek,
 }: TimesheetGridProps) {
   const queryClient = useQueryClient();
+  const dirtyGuard = useDirtyGuard();
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [isDirty, setIsDirty] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"idle" | "loading" | "done" | "empty">("idle");
   const [recurringOpen, setRecurringOpen] = useState(false);
+
+  // Snapshot of the previous week's grid — shown while new data is loading
+  const previousDisplayRef = useRef<{
+    activeProjectIds: number[];
+    gridData: Record<number, Record<string, string>>;
+  } | null>(null);
+
+  // Always-fresh refs so effects can read latest state without stale closures
+  const activeProjectIdsRef = useRef<number[]>([]);
+  const gridDataRef = useRef<Record<number, Record<string, string>>>({});
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }).map((_, i) => addDays(weekStartDate, i)),
@@ -173,16 +185,30 @@ export function TimesheetGrid({
   const [gridData, setGridData] = useState<Record<number, Record<string, string>>>({});
   const [activeProjectIds, setActiveProjectIds] = useState<number[]>([]);
 
+  // Keep always-fresh refs in sync
+  activeProjectIdsRef.current = activeProjectIds;
+  gridDataRef.current = gridData;
+
   const initializedForParams = useRef<string | null>(null);
   const currentParamsKey = `${employeeId}-${startDateStr}-${endDateStr}`;
 
   // Immediately clear stale rows when week or employee changes
   useEffect(() => {
+    // Snapshot the outgoing data so we can show it dimmed during the next load
+    if (activeProjectIdsRef.current.length > 0) {
+      previousDisplayRef.current = {
+        activeProjectIds: activeProjectIdsRef.current,
+        gridData: gridDataRef.current,
+      };
+    } else {
+      previousDisplayRef.current = null;
+    }
     setIsDirty(false);
     setSaveStatus("idle");
     setActiveProjectIds([]);
     setGridData({});
     initializedForParams.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentParamsKey]);
 
   // Re-initialize grid from DB data once it arrives
@@ -236,18 +262,22 @@ export function TimesheetGrid({
         onSuccess: () => {
           setSaveStatus("saved");
           setIsDirty(false);
+          dirtyGuard.reportDirty(false);
           initializedForParams.current = null;
           queryClient.invalidateQueries({
             queryKey: getListTimeEntriesQueryKey({ employeeId, startDate: startDateStr, endDate: endDateStr }),
           });
           setTimeout(() => setSaveStatus("idle"), 2500);
+          // Execute any navigation that was deferred pending save
+          const pendingNav = dirtyGuard.consumePendingNavAfterSave();
+          if (pendingNav) pendingNav();
         },
         onError: () => {
           setSaveStatus("idle");
         },
       }
     );
-  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr, disabledDateReasons]);
+  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr, disabledDateReasons, dirtyGuard]);
 
   // Ctrl+S shortcut
   useEffect(() => {
@@ -260,6 +290,40 @@ export function TimesheetGrid({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleSave]);
+
+  // Sync dirty state to the global dirty-guard context
+  useEffect(() => {
+    dirtyGuard.reportDirty(isDirty);
+  }, [isDirty, dirtyGuard]);
+
+  // Register save handler whenever it changes; unregister on unmount
+  useEffect(() => {
+    dirtyGuard.registerSave(handleSave);
+  }, [handleSave, dirtyGuard]);
+
+  // Register a stable clear-dirty handler on mount
+  useEffect(() => {
+    dirtyGuard.registerClearDirty(() => {
+      setIsDirty(false);
+      setSaveStatus("idle");
+    });
+    return () => {
+      dirtyGuard.unregister();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Warn the browser if the user tries to close/refresh with unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
 
   // Copy last week's projects into the current week grid
   const handleCopyLastWeek = useCallback(async () => {
@@ -339,21 +403,30 @@ export function TimesheetGrid({
     else if (e.key === "ArrowLeft") move(rowIndex, colIndex - 1);
   };
 
+  // While the new week is loading, show previous week dimmed; only hard-block on first load
+  const isWeekLoading = entriesLoading && !initializedForParams.current;
+  const displayProjectIds = isWeekLoading && previousDisplayRef.current
+    ? previousDisplayRef.current.activeProjectIds
+    : activeProjectIds;
+  const displayGridData = isWeekLoading && previousDisplayRef.current
+    ? previousDisplayRef.current.gridData
+    : gridData;
+
   // Totals — skip disabled dates
   const colTotals = weekDays.map((day) => {
     const dateStr = format(day, "yyyy-MM-dd");
     if (disabledDateReasons.has(dateStr)) return 0;
-    return activeProjectIds.reduce((sum, pId) => {
-      const v = parseFloat(gridData[pId]?.[dateStr] || "0");
+    return displayProjectIds.reduce((sum, pId) => {
+      const v = parseFloat(displayGridData[pId]?.[dateStr] || "0");
       return sum + (isNaN(v) ? 0 : v);
     }, 0);
   });
 
-  const rowTotals = activeProjectIds.map((pId) =>
+  const rowTotals = displayProjectIds.map((pId) =>
     weekDays.reduce((sum, day) => {
       const dateStr = format(day, "yyyy-MM-dd");
       if (disabledDateReasons.has(dateStr)) return sum;
-      const v = parseFloat(gridData[pId]?.[dateStr] || "0");
+      const v = parseFloat(displayGridData[pId]?.[dateStr] || "0");
       return sum + (isNaN(v) ? 0 : v);
     }, 0)
   );
@@ -361,7 +434,7 @@ export function TimesheetGrid({
   const grandTotal = colTotals.reduce((a, b) => a + b, 0);
   const isOverCapacity = grandTotal > capacityHours;
 
-  if (entriesLoading && !initializedForParams.current) {
+  if (isWeekLoading && !previousDisplayRef.current) {
     return <div className="p-8 text-center text-muted-foreground">Loading timesheet...</div>;
   }
 
@@ -372,17 +445,17 @@ export function TimesheetGrid({
   }));
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 transition-opacity duration-150 ${isWeekLoading && previousDisplayRef.current ? "opacity-50 pointer-events-none select-none" : ""}`}>
       {/* Toolbar */}
       <div className="flex items-center justify-between bg-card p-4 rounded-md border border-border shadow-sm flex-wrap gap-3">
         <div className="flex items-center gap-4">
-          <Button variant="outline" onClick={onPreviousWeek} size="sm">
+          <Button variant="outline" onClick={() => dirtyGuard.guardNavigate(onPreviousWeek)} size="sm">
             &larr; Prev Week
           </Button>
           <div className="font-medium text-sm">
             {format(weekDays[0], "MMM d")} – {format(weekDays[6], "MMM d, yyyy")}
           </div>
-          <Button variant="outline" onClick={onNextWeek} size="sm">
+          <Button variant="outline" onClick={() => dirtyGuard.guardNavigate(onNextWeek)} size="sm">
             Next Week &rarr;
           </Button>
         </div>
@@ -476,7 +549,7 @@ export function TimesheetGrid({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {activeProjectIds.map((projectId, rowIndex) => {
+            {displayProjectIds.map((projectId, rowIndex) => {
               const project = projects?.find((p) => p.id === projectId);
               return (
                 <TableRow key={projectId}>
@@ -510,7 +583,7 @@ export function TimesheetGrid({
                           type="text"
                           inputMode="decimal"
                           className="h-9 w-full text-center border-transparent hover:border-input focus:border-ring rounded-sm bg-transparent"
-                          value={gridData[projectId]?.[dateStr] ?? ""}
+                          value={displayGridData[projectId]?.[dateStr] ?? ""}
                           onChange={(e) => handleCellChange(projectId, dateStr, e.target.value)}
                           onKeyDown={(e) => handleKeyDown(e, rowIndex, colIndex)}
                           data-row={rowIndex}

@@ -15,6 +15,7 @@ import EmployeePortal from "@/pages/employee-portal";
 import Vacations from "@/pages/vacations";
 import Login from "@/pages/login";
 import { useAppAuth } from "@/hooks/use-app-auth";
+import { DirtyGuardProvider } from "@/contexts/dirty-guard";
 
 const queryClient = new QueryClient();
 
@@ -64,10 +65,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
+        <DirtyGuardProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+            <Router />
+          </WouterRouter>
+          <Toaster />
+        </DirtyGuardProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );

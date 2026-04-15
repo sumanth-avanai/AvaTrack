@@ -1,4 +1,4 @@
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { 
   Sidebar, 
   SidebarContent, 
@@ -18,14 +18,15 @@ import {
   CalendarDays, 
   BarChart3,
   CalendarOff,
-  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useSetUnauthenticated } from "@/hooks/use-app-auth";
+import { useDirtyGuard } from "@/contexts/dirty-guard";
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, navigate] = useLocation();
+  const { guardNavigate } = useDirtyGuard();
   const { toast } = useToast();
   const setUnauthenticated = useSetUnauthenticated();
 
@@ -66,15 +67,18 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             <SidebarMenu className="p-2 gap-1">
               {navItems.map((item) => (
                 <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton 
-                    asChild 
+                  <SidebarMenuButton
                     isActive={location.startsWith(item.href)}
                     className="w-full"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      guardNavigate(() => navigate(item.href));
+                    }}
                   >
-                    <Link href={item.href} className="flex items-center gap-3 px-3 py-2 text-sm font-medium">
+                    <div className="flex items-center gap-3 px-3 py-2 text-sm font-medium w-full cursor-pointer">
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>
-                    </Link>
+                    </div>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
