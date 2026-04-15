@@ -125,9 +125,9 @@ export function TimesheetGrid({
     enabled: !!employeeId,
   });
 
-  // Build the set of non-bookable dates for this week
-  const disabledDates = useMemo(() => {
-    const disabled = new Set<string>();
+  // Build a map of non-bookable dates → tooltip reason for this week
+  const disabledDateReasons = useMemo(() => {
+    const reasons = new Map<string, string>();
 
     for (const day of weekDays) {
       const dateStr = format(day, "yyyy-MM-dd");
@@ -135,36 +135,37 @@ export function TimesheetGrid({
       // Non-working day: getISODay → 1=Mon … 7=Sun; mask[0]=Mon … mask[6]=Sun
       const isoDayIndex = getISODay(day) - 1;
       if (!workingDaysMask[isoDayIndex]) {
-        disabled.add(dateStr);
+        reasons.set(dateStr, "Non-working day");
         continue;
       }
 
       // Before contract start
       if (contractStartDate && dateStr < contractStartDate) {
-        disabled.add(dateStr);
+        reasons.set(dateStr, "Outside contract period");
         continue;
       }
 
       // After contract end
       if (contractEndDate && dateStr > contractEndDate) {
-        disabled.add(dateStr);
+        reasons.set(dateStr, "Outside contract period");
         continue;
       }
 
       // Public holiday — date may arrive as string or Date object from JSON
-      if (holidays?.some((h) => String(h.date).slice(0, 10) === dateStr)) {
-        disabled.add(dateStr);
+      const matchedHoliday = holidays?.find((h) => String(h.date).slice(0, 10) === dateStr);
+      if (matchedHoliday) {
+        reasons.set(dateStr, `Public holiday: ${matchedHoliday.name}`);
         continue;
       }
 
       // Vacation / absence
       if (vacations?.some((v) => v.startDate <= dateStr && dateStr <= v.endDate)) {
-        disabled.add(dateStr);
+        reasons.set(dateStr, "Vacation / absence");
         continue;
       }
     }
 
-    return disabled;
+    return reasons;
   }, [weekDays, workingDaysMask, contractStartDate, contractEndDate, holidays, vacations]);
 
   const bulkUpsert = useBulkUpsertTimeEntries();
@@ -217,7 +218,7 @@ export function TimesheetGrid({
     for (const projectIdStr in gridData) {
       const projectId = parseInt(projectIdStr, 10);
       for (const date in gridData[projectId]) {
-        if (disabledDates.has(date)) continue;
+        if (disabledDateReasons.has(date)) continue;
         const rawHours = parseFloat(gridData[projectId][date]);
         const hours = isNaN(rawHours) ? 0 : rawHours;
         const key = `${projectId}-${date}`;
@@ -246,7 +247,7 @@ export function TimesheetGrid({
         },
       }
     );
-  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr, disabledDates]);
+  }, [isDirty, saveStatus, gridData, timeEntries, employeeId, bulkUpsert, queryClient, startDateStr, endDateStr, disabledDateReasons]);
 
   // Ctrl+S shortcut
   useEffect(() => {
@@ -303,7 +304,7 @@ export function TimesheetGrid({
   }, [copyStatus, weekStartDate, employeeId, queryClient]);
 
   const handleCellChange = (projectId: number, date: string, value: string) => {
-    if (disabledDates.has(date)) return;
+    if (disabledDateReasons.has(date)) return;
     if (value !== "" && !/^\d*\.?\d*$/.test(value)) return;
     setGridData((prev) => ({
       ...prev,
@@ -341,7 +342,7 @@ export function TimesheetGrid({
   // Totals — skip disabled dates
   const colTotals = weekDays.map((day) => {
     const dateStr = format(day, "yyyy-MM-dd");
-    if (disabledDates.has(dateStr)) return 0;
+    if (disabledDateReasons.has(dateStr)) return 0;
     return activeProjectIds.reduce((sum, pId) => {
       const v = parseFloat(gridData[pId]?.[dateStr] || "0");
       return sum + (isNaN(v) ? 0 : v);
@@ -351,7 +352,7 @@ export function TimesheetGrid({
   const rowTotals = activeProjectIds.map((pId) =>
     weekDays.reduce((sum, day) => {
       const dateStr = format(day, "yyyy-MM-dd");
-      if (disabledDates.has(dateStr)) return sum;
+      if (disabledDateReasons.has(dateStr)) return sum;
       const v = parseFloat(gridData[pId]?.[dateStr] || "0");
       return sum + (isNaN(v) ? 0 : v);
     }, 0)
@@ -458,7 +459,7 @@ export function TimesheetGrid({
               <TableHead className="w-[250px]">Project</TableHead>
               {weekDays.map((day) => {
                 const dateStr = format(day, "yyyy-MM-dd");
-                const isDisabled = disabledDates.has(dateStr);
+                const isDisabled = disabledDateReasons.has(dateStr);
                 return (
                   <TableHead
                     key={day.toISOString()}
@@ -487,14 +488,14 @@ export function TimesheetGrid({
                   </TableCell>
                   {weekDays.map((day, colIndex) => {
                     const dateStr = format(day, "yyyy-MM-dd");
-                    const isDisabled = disabledDates.has(dateStr);
+                    const isDisabled = disabledDateReasons.has(dateStr);
 
                     if (isDisabled) {
                       return (
                         <TableCell
                           key={dateStr}
                           className="p-1 bg-muted/50"
-                          title="Not bookable"
+                          title={disabledDateReasons.get(dateStr) ?? "Not bookable"}
                         >
                           <div className="h-9 w-full flex items-center justify-center text-muted-foreground/40 text-sm select-none">
                             —
@@ -546,7 +547,7 @@ export function TimesheetGrid({
               </TableCell>
               {weekDays.map((day, i) => {
                 const dateStr = format(day, "yyyy-MM-dd");
-                const isDisabled = disabledDates.has(dateStr);
+                const isDisabled = disabledDateReasons.has(dateStr);
                 const total = colTotals[i];
                 return (
                   <TableCell

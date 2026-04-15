@@ -1,6 +1,15 @@
 import { Router, type IRouter } from "express";
 import { eq, and, gte, lte, inArray } from "drizzle-orm";
-import { db, timeEntriesTable, projectsTable, clientsTable } from "@workspace/db";
+import {
+  db,
+  timeEntriesTable,
+  projectsTable,
+  clientsTable,
+  employeesTable,
+  holidayCalendarsTable,
+  holidaysTable,
+  employeeVacationsTable,
+} from "@workspace/db";
 import {
   ListTimeEntriesQueryParams,
   CreateTimeEntryBody,
@@ -100,6 +109,104 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+
+  // ── Bookability validation ────────────────────────────────────────────────
+  // Reject entries with hours > 0 on non-bookable days (0-hour entries are
+  // deletions and are always allowed through).
+  const empIds = [...new Set(parsed.data.entries.map((e) => e.employeeId))];
+
+  const employees = await db
+    .select()
+    .from(employeesTable)
+    .where(inArray(employeesTable.id, empIds));
+  const empMap = new Map(employees.map((e) => [e.id, e]));
+
+  // Fetch all holidays grouped by calendar code
+  const calendarCodes = [
+    ...new Set(employees.flatMap((e) => (e.holidayCalendarCode ? [e.holidayCalendarCode] : []))),
+  ];
+  const calendarCodeToHolidays = new Map<string, Set<string>>();
+
+  if (calendarCodes.length > 0) {
+    const rows = await db
+      .select({
+        calendarCode: holidayCalendarsTable.code,
+        date: holidaysTable.date,
+      })
+      .from(holidaysTable)
+      .innerJoin(holidayCalendarsTable, eq(holidaysTable.calendarId, holidayCalendarsTable.id))
+      .where(inArray(holidayCalendarsTable.code, calendarCodes));
+
+    for (const row of rows) {
+      if (!calendarCodeToHolidays.has(row.calendarCode)) {
+        calendarCodeToHolidays.set(row.calendarCode, new Set());
+      }
+      calendarCodeToHolidays.get(row.calendarCode)!.add(String(row.date).slice(0, 10));
+    }
+  }
+
+  // Fetch vacations for all involved employees
+  const vacations = await db
+    .select()
+    .from(employeeVacationsTable)
+    .where(inArray(employeeVacationsTable.employeeId, empIds));
+  const vacationsByEmp = new Map<number, { startDate: string; endDate: string }[]>();
+  for (const v of vacations) {
+    if (!vacationsByEmp.has(v.employeeId)) vacationsByEmp.set(v.employeeId, []);
+    vacationsByEmp.get(v.employeeId)!.push({ startDate: v.startDate, endDate: v.endDate });
+  }
+
+  // Validate each entry
+  const rejections: { employeeId: number; entryDate: string; reason: string }[] = [];
+
+  for (const item of parsed.data.entries) {
+    if (item.hours === 0) continue; // 0-hour = delete existing, always allowed
+
+    const dateStr = String(item.entryDate).slice(0, 10);
+    const emp = empMap.get(item.employeeId);
+    if (!emp) {
+      rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "Employee not found" });
+      continue;
+    }
+
+    // Working day mask: index 0=Mon … 6=Sun
+    const mask = emp.workingDaysMask.split(",").map(Number);
+    const utcDay = new Date(dateStr + "T00:00:00Z").getUTCDay(); // 0=Sun, 1=Mon … 6=Sat
+    const maskIdx = utcDay === 0 ? 6 : utcDay - 1;
+    if (!mask[maskIdx]) {
+      rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "Non-working day" });
+      continue;
+    }
+
+    if (emp.contractStartDate && dateStr < emp.contractStartDate) {
+      rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "Before contract start date" });
+      continue;
+    }
+    if (emp.contractEndDate && dateStr > emp.contractEndDate) {
+      rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "After contract end date" });
+      continue;
+    }
+
+    if (emp.holidayCalendarCode) {
+      const holidayDates = calendarCodeToHolidays.get(emp.holidayCalendarCode);
+      if (holidayDates?.has(dateStr)) {
+        rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "Public holiday" });
+        continue;
+      }
+    }
+
+    const empVacations = vacationsByEmp.get(item.employeeId) ?? [];
+    if (empVacations.some((v) => v.startDate <= dateStr && dateStr <= v.endDate)) {
+      rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "Vacation / absence" });
+      continue;
+    }
+  }
+
+  if (rejections.length > 0) {
+    res.status(422).json({ error: "Some entries are on non-bookable days", rejections });
+    return;
+  }
+  // ── End validation ─────────────────────────────────────────────────────────
 
   const results: (typeof timeEntriesTable.$inferSelect)[] = [];
 
