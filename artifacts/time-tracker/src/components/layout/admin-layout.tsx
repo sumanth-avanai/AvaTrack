@@ -18,6 +18,7 @@ import {
   CalendarDays, 
   BarChart3,
   CalendarOff,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";

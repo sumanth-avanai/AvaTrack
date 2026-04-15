@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -435,7 +436,42 @@ export function TimesheetGrid({
   const isOverCapacity = grandTotal > capacityHours;
 
   if (isWeekLoading && !previousDisplayRef.current) {
-    return <div className="p-8 text-center text-muted-foreground">Loading timesheet...</div>;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between bg-card p-4 rounded-md border border-border shadow-sm flex-wrap gap-3">
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-8 w-24 rounded-md" />
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="h-8 w-24 rounded-md" />
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-28 rounded-md" />
+            <Skeleton className="h-8 w-28 rounded-md" />
+            <Skeleton className="h-8 w-20 rounded-md" />
+            <Skeleton className="h-8 w-16 rounded-md" />
+          </div>
+        </div>
+        <div className="border rounded-md bg-card overflow-hidden">
+          <div className="bg-muted/50 p-3 grid grid-cols-9 gap-2">
+            <Skeleton className="h-4 col-span-2" />
+            {Array.from({ length: 7 }).map((_, i) => (
+              <Skeleton key={i} className="h-4" />
+            ))}
+          </div>
+          {Array.from({ length: 3 }).map((_, ri) => (
+            <div key={ri} className="p-3 grid grid-cols-9 gap-2 border-t border-border/50">
+              <div className="col-span-2 space-y-1">
+                <Skeleton className="h-3 w-3/4" />
+                <Skeleton className="h-2 w-1/2" />
+              </div>
+              {Array.from({ length: 7 }).map((_, ci) => (
+                <Skeleton key={ci} className="h-8 rounded-sm" />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   const projectsForDialog = (projects ?? []).map((p) => ({
