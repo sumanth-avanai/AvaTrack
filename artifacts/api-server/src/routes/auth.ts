@@ -49,7 +49,7 @@ router.get("/auth/employee/token/:token", async (req, res): Promise<void> => {
   }
 
   const [emp] = await db
-    .select({ id: employeesTable.id, name: employeesTable.name })
+    .select()
     .from(employeesTable)
     .where(eq(employeesTable.personalAccessToken, params.data.token));
 
@@ -58,7 +58,19 @@ router.get("/auth/employee/token/:token", async (req, res): Promise<void> => {
     return;
   }
 
-  res.json(emp);
+  res.json({
+    id: emp.id,
+    name: emp.name,
+    email: emp.email,
+    weeklyCapacityHours: emp.weeklyCapacityHours,
+    workingDaysMask: emp.workingDaysMask.split(",").map(Number),
+    holidayCalendarCode: emp.holidayCalendarCode,
+    contractStartDate: emp.contractStartDate,
+    contractEndDate: emp.contractEndDate,
+    personalAccessToken: emp.personalAccessToken,
+    active: emp.active,
+    createdAt: emp.createdAt,
+  });
 });
 
 export default router;

@@ -90,6 +90,10 @@ export interface Employee {
   workingDaysMask: number[];
   /** @nullable */
   holidayCalendarCode: string | null;
+  /** @nullable */
+  contractStartDate: string | null;
+  /** @nullable */
+  contractEndDate: string | null;
   personalAccessToken: string;
   active: boolean;
   createdAt: string;
@@ -98,6 +102,19 @@ export interface Employee {
 export interface EmployeePublic {
   id: number;
   name: string;
+  /** @nullable */
+  email: string | null;
+  weeklyCapacityHours: number;
+  workingDaysMask: number[];
+  /** @nullable */
+  holidayCalendarCode: string | null;
+  /** @nullable */
+  contractStartDate: string | null;
+  /** @nullable */
+  contractEndDate: string | null;
+  personalAccessToken: string;
+  active: boolean;
+  createdAt: string;
 }
 
 export interface CreateEmployeeBody {

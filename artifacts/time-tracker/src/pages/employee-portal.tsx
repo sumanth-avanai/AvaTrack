@@ -149,6 +149,10 @@ export default function EmployeePortal() {
             employeeId={employee.id}
             weekStartDate={currentWeekStart}
             capacityHours={employee.weeklyCapacityHours || 40}
+            workingDaysMask={employee.workingDaysMask}
+            contractStartDate={employee.contractStartDate}
+            contractEndDate={employee.contractEndDate}
+            holidayCalendarCode={employee.holidayCalendarCode}
             onNextWeek={() => setCurrentWeekStart(prev => addWeeks(prev, 1))}
             onPreviousWeek={() => setCurrentWeekStart(prev => subWeeks(prev, 1))}
           />
