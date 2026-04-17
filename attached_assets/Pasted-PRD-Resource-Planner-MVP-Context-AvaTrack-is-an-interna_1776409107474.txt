@@ -1,0 +1,236 @@
+PRD: Resource Planner (MVP)
+Context
+AvaTrack is an internal time tracking and utilization tool built with React, Node.js, PostgreSQL, and Prisma. It already has time tracking for actual hours. Now we need a Resource Planner for planned hours – a Gantt-style view showing who is assigned to which project, and for how long.
+
+Goal: Plan team capacity in advance, see who's available, prevent overbooking.
+
+IMPORTANT: All existing data in the database must be preserved. Only additive, non-destructive migrations allowed.
+
+Scope: Resource Planner MVP
+1. FEATURE: Resource Planner View
+Sidebar:
+
+Add new sidebar item: "Resource Planner" (place it after "Reports")
+Layout:
+
+Gantt-style view:
+Rows: Employees (collapsible, showing their project bookings underneath)
+Columns: Timeline with days visible, grouped by weeks/months (similar to Productive.io)
+Bars: Project allocations as colored horizontal bars
+Timeline controls:
+
+Horizontal scrolling through time
+Zoom levels: Week view / Month view / Quarter view
+"Today" marker (vertical line highlighting current date)
+Navigation: "← Prev Month" / "Next Month →" buttons or scroll to specific month
+Employee rows:
+
+Show employee name + weekly capacity (e.g., "Regina Strobl (20h)")
+Collapsed by default, expandable to see individual project bookings
+"+ Booking" button per employee to add new allocation
+2. FEATURE: Booking Modal
+Trigger:
+
+Click "+ Booking" on employee row
+OR click empty space in timeline for that employee
+Modal title: "New booking"
+
+Fields:
+
+Tabelle
+
+
+Field	Type	Required	Description
+Project	Dropdown	Yes	Select from active projects (show project name + client)
+Date range	Date picker	Yes	Start date – End date
+Allocation	Number input	Yes	Amount per week
+Allocation unit	Dropdown	Yes	Options: "hours/week", "days/week", "%"
+Notes	Textarea	No	Internal notes for this booking
+Allocation logic:
+
+"hours/week": use value directly (e.g., 8 hours/week)
+"days/week": convert to hours (e.g., 2 days/week × 8h = 16 hours/week)
+"%": calculate from employee capacity (e.g., 50% of 40h = 20 hours/week)
+Calculated display in modal:
+
+Show summary below fields: "Scheduled: 8h/week over 13 weeks = 104h total"
+Calculate total weeks and total hours automatically
+Buttons:
+
+[Cancel] – close modal without saving
+[Create booking] – save and close
+Edit mode:
+
+Same modal opens when clicking existing booking bar
+Pre-fill all fields with current values
+Change button to [Save changes]
+Add [Delete booking] button (with confirmation)
+3. FEATURE: Capacity & Conflict Visualization
+Per employee row header:
+
+Show utilization indicator for visible time range
+Small bar or percentage showing planned capacity
+Weekly capacity coloring (in timeline cells):
+
+Green: <80% of weekly capacity planned
+Yellow: 80-100% planned
+Red: >100% overbooked
+Conflict warning:
+
+When creating/editing a booking that causes >100% utilization for any week
+Show warning message in modal: "⚠️ This booking will cause overbooking in some weeks"
+Allow saving anyway (soft warning, not blocking)
+4. FEATURE: Bar Styling & Interaction
+Bar appearance:
+
+Color: Unique color per Project (auto-assign from a color palette)
+Height: Fill most of the row height
+Border-radius: Slightly rounded corners
+Text on bar: Show project name if bar is wide enough, otherwise show on hover
+Tooltip on hover:
+
+Project name
+Client name
+Allocation (e.g., "8h/week")
+Date range (e.g., "Apr 27 – Jul 26, 2026")
+Total hours
+Click interaction:
+
+Click bar → open edit modal with booking details
+MVP limitations (no drag & drop):
+
+Cannot drag bars to move them
+Cannot resize bars
+All changes through edit modal only
+5. DATABASE: Schema Changes
+Add new model to Prisma schema:
+
+
+Kopieren
+prisma
+model ResourceBooking {
+  id            String   @id @default(uuid())
+  employeeId    String
+  projectId     String
+  startDate     DateTime
+  endDate       DateTime
+  hoursPerWeek  Float
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+Migration instructions:
+
+Create new table only
+Do NOT modify any existing tables
+Add relations to Employee and Project models if not auto-inferred
+Also add to Project model (for colors):
+
+
+Kopieren
+prisma
+// Add to existing Project model
+color         String?   // Hex color code, e.g., "#6366f1"
+6. API ENDPOINTS
+Create these new endpoints:
+
+Tabelle
+
+
+Method	Endpoint	Description
+GET	/api/resource-bookings	List all bookings (with employee & project data)
+GET	/api/resource-bookings?employeeId=X	Filter bookings by employee
+GET	/api/resource-bookings?startDate=X&endDate=Y	Filter by date range
+POST	/api/resource-bookings	Create new booking
+PUT	/api/resource-bookings/:id	Update booking
+DELETE	/api/resource-bookings/:id	Delete booking
+Booking response should include:
+
+Booking fields
+Employee name and capacity
+Project name, client name, and color
+7. FRONTEND COMPONENTS
+Create these new components:
+
+/components/ResourcePlanner/
+  ├── ResourcePlannerPage.tsx      // Main page component
+  ├── Timeline.tsx                  // Timeline header (dates/weeks/months)
+  ├── EmployeeRow.tsx              // Single employee row with bookings
+  ├── BookingBar.tsx               // Individual booking bar
+  ├── BookingModal.tsx             // Create/edit booking modal
+  ├── CapacityIndicator.tsx        // Utilization indicator
+  └── utils/
+      ├── dateUtils.ts             // Date calculations for timeline
+      └── colorUtils.ts            // Project color generation
+Timeline library suggestion:
+
+Option A: Build custom with CSS Grid (more control)
+Option B: Use react-calendar-timeline library
+Choose whichever is faster to implement
+UI Reference (ASCII Mockup)
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  Resource Planner                                    [← Prev] Apr 2026 [Next →] │
+├────────────────────┬────────────────────────────────────────────────────────────┤
+│                    │ 13  │ 20  │ 27  │  4  │ 11  │ 18  │ 25  │  1  │  8  │ ... │
+│     People         │ Apr │ Apr │ Apr │ May │ May │ May │ May │ Jun │ Jun │     │
+├────────────────────┼────────────────────────────────────────────────────────────┤
+│ ▼ Aemal Sayer      │     │█████████████████████│     │     │     │     │     │
+│   (40h)            │     │ n8n Workshops (8h/w) │     │     │     │     │     │
+│   + Booking        │     │     │     │     │     │     │     │     │     │     │
+├────────────────────┼────────────────────────────────────────────────────────────┤
+│ ▼ Regina Strobl    │     │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│     │     │     │
+│   (20h)            │     │ n8n Workshops (4h/w)           │     │     │     │
+│   + Booking        │     │     │     │     │     │     │     │     │     │     │
+├────────────────────┼────────────────────────────────────────────────────────────┤
+│ ▶ Christian Voigt  │     │     │     │     │     │     │     │     │     │     │
+│   (40h)            │     │     │     │     │     │     │     │     │     │     │
+│   + Booking        │     │     │     │     │     │     │     │     │     │     │
+└────────────────────┴────────────────────────────────────────────────────────────┘
+Acceptance Criteria
+Tabelle
+
+
+#	Item	Done when...
+1	Sidebar	"Resource Planner" link appears in sidebar after "Reports"
+2	Page loads	Resource Planner page shows all employees as rows
+3	Timeline	Horizontal timeline shows weeks/months, can scroll/navigate
+4	Today marker	Vertical line shows current date
+5	Create booking	Click "+ Booking" → modal opens → fill fields → save → bar appears
+6	Allocation units	Can enter hours/week, days/week, or percentage
+7	Bars display	Saved bookings appear as colored bars on correct date range
+8	Project colors	Each project has unique color, consistent across all bars
+9	Tooltip	Hover bar → shows project, client, hours/week, dates
+10	Edit booking	Click bar → modal opens with data → can edit and save
+11	Delete booking	Can delete booking from edit modal with confirmation
+12	Capacity warning	Creating booking that causes >100% shows warning
+13	Capacity colors	Employee rows show green/yellow/red based on utilization
+Out of Scope (MVP)
+Plan vs. Actual comparison (planned hours vs. timesheet entries)
+Drag & drop bars to move dates
+Resize bars to change duration
+Approval workflow for bookings
+Budget integration
+Absence/vacation display in planner
+Filter by project or client
+Export functionality
+Future Enhancements (Post-MVP)
+After MVP is stable, consider adding:
+
+Plan vs. Actual: compare ResourceBooking to TimeEntry, show variance
+Drag & resize bars for faster editing
+Show vacations/holidays as blocked/greyed periods
+Filter view by project, client, or team
+Export to PDF/Excel
+Notifications for overbooking
+Implementation Order
+Database: Add ResourceBooking model and migrate
+API: Create CRUD endpoints for resource bookings
+Basic view: Resource Planner page with employee rows and timeline
+Booking modal: Create and save bookings
+Bars: Display bookings as colored bars
+Edit/Delete: Click bar to edit or delete
+Capacity indicators: Add utilization colors and warnings
+Start with step 1 (database) and proceed in order. Test each step before moving to the next.

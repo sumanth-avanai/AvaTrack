@@ -19,6 +19,7 @@ import {
   BarChart3,
   CalendarOff,
   LogOut,
+  CalendarRange,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -39,7 +40,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     { title: "Employees", href: "/employees", icon: Users },
     { title: "Holidays",  href: "/holidays",  icon: CalendarDays },
     { title: "Vacations", href: "/vacations", icon: CalendarOff },
-    { title: "Reports",   href: "/reports",   icon: BarChart3 },
+    { title: "Reports",          href: "/reports",           icon: BarChart3 },
+    { title: "Resource Planner", href: "/resource-planner",  icon: CalendarRange },
   ];
 
   async function handleLogout() {

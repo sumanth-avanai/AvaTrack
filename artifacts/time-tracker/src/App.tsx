@@ -14,6 +14,7 @@ import Timesheet from "@/pages/timesheet";
 import EmployeePortal from "@/pages/employee-portal";
 import Vacations from "@/pages/vacations";
 import Login from "@/pages/login";
+import ResourcePlanner from "@/pages/resource-planner";
 import { useAppAuth } from "@/hooks/use-app-auth";
 import { DirtyGuardProvider } from "@/contexts/dirty-guard";
 
@@ -54,6 +55,7 @@ function Router() {
       <Route path="/holidays"><AuthGuard><Holidays /></AuthGuard></Route>
       <Route path="/vacations"><AuthGuard><Vacations /></AuthGuard></Route>
       <Route path="/reports"><AuthGuard><Reports /></AuthGuard></Route>
+      <Route path="/resource-planner"><AuthGuard><ResourcePlanner /></AuthGuard></Route>
       <Route path="/timesheet"><AuthGuard><Timesheet /></AuthGuard></Route>
       <Route path="/u/:token"><AuthGuard><EmployeePortal /></AuthGuard></Route>
       <Route component={NotFound} />

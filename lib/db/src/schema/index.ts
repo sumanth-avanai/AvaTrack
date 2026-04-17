@@ -5,3 +5,4 @@ export * from "./holidayCalendars";
 export * from "./timeEntries";
 export * from "./vacations";
 export * from "./savedReports";
+export * from "./resourceBookings";

@@ -13,6 +13,7 @@ export const projectsTable = pgTable("projects", {
   budgetHours: real("budget_hours"),
   startDate: date("start_date"),
   endDate: date("end_date"),
+  color: text("color"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

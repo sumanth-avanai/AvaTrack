@@ -12,6 +12,7 @@ import dashboardRouter from "./dashboard";
 import authRouter from "./auth";
 import appAuthRouter from "./app-auth";
 import savedReportsRouter from "./savedReports";
+import resourceBookingsRouter from "./resourceBookings";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(dashboardRouter);
 router.use(authRouter);
 router.use(appAuthRouter);
 router.use(savedReportsRouter);
+router.use(resourceBookingsRouter);
 
 export default router;
