@@ -4,14 +4,8 @@
  */
 import { db, employeesTable, timeEntriesTable, projectsTable } from "@workspace/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { PROJECT_COLORS } from "@workspace/api-zod";
 import { logger } from "./logger";
-
-const PROJECT_COLORS = [
-  "#6366f1","#f59e0b","#10b981","#3b82f6","#ec4899",
-  "#8b5cf6","#f97316","#14b8a6","#ef4444","#84cc16",
-  "#06b6d4","#a855f7","#d946ef","#0ea5e9","#22c55e",
-  "#fb923c","#e11d48","#7c3aed","#2563eb","#059669",
-];
 
 export async function runStartupMigrations(): Promise<void> {
   await fixWorkingDaysMasks();

@@ -8,19 +8,9 @@ import {
   projectsTable,
   clientsTable,
 } from "@workspace/db";
+import { resolveProjectColor } from "@workspace/api-zod";
 
 const router: IRouter = Router();
-
-// ── Color palette (matches frontend) ─────────────────────────────────────────
-const PROJECT_COLORS = [
-  "#6366f1", "#f59e0b", "#10b981", "#3b82f6", "#ec4899",
-  "#8b5cf6", "#f97316", "#14b8a6", "#ef4444", "#84cc16",
-  "#06b6d4", "#a855f7", "#d946ef", "#0ea5e9", "#22c55e",
-  "#fb923c", "#e11d48", "#7c3aed", "#2563eb", "#059669",
-];
-function resolveColor(projectId: number, storedColor: string | null): string {
-  return storedColor ?? PROJECT_COLORS[projectId % PROJECT_COLORS.length];
-}
 
 // ── Shared SELECT query ───────────────────────────────────────────────────────
 function buildSelect() {
@@ -50,7 +40,7 @@ function buildSelect() {
 function enrichRow(row: Awaited<ReturnType<typeof buildSelect>>[number]) {
   return {
     ...row,
-    projectColor: resolveColor(row.projectId, row.projectColor),
+    projectColor: resolveProjectColor(row.projectId, row.projectColor),
   };
 }
 

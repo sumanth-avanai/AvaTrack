@@ -44,17 +44,7 @@ import {
   useListProjects,
   getListProjectsQueryKey,
 } from "@workspace/api-client-react";
-
-// ── Color palette ──────────────────────────────────────────────────────────────
-const PROJECT_COLORS = [
-  "#6366f1","#f59e0b","#10b981","#3b82f6","#ec4899",
-  "#8b5cf6","#f97316","#14b8a6","#ef4444","#84cc16",
-  "#06b6d4","#a855f7","#d946ef","#0ea5e9","#22c55e",
-  "#fb923c","#e11d48","#7c3aed","#2563eb","#059669",
-];
-function resolveColor(projectId: number, stored: string | null): string {
-  return stored ?? PROJECT_COLORS[projectId % PROJECT_COLORS.length];
-}
+import { resolveProjectColor } from "@workspace/api-zod";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface ResourceBookingFull {
@@ -749,7 +739,7 @@ export default function ResourcePlannerPage() {
                       cellWidth
                     );
                     if (!bounds) return null;
-                    const color = resolveColor(b.projectId, b.projectColor);
+                    const color = resolveProjectColor(b.projectId, b.projectColor);
 
                     return (
                       <Tooltip key={b.id}>

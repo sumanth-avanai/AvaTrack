@@ -14,7 +14,6 @@
     "@workspace/db": "workspace:*",
     "zod": "catalog:",
     "cookie-parser": "^1.4.7",
-    "zod": "catalog:",
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
