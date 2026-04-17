@@ -48,6 +48,8 @@ export interface Project {
   startDate: string | null;
   /** @nullable */
   endDate: string | null;
+  /** @nullable */
+  color: string | null;
   createdAt: string;
 }
 
@@ -64,6 +66,8 @@ export interface CreateProjectBody {
   startDate?: string | null;
   /** @nullable */
   endDate?: string | null;
+  /** @nullable */
+  color?: string | null;
 }
 
 export interface UpdateProjectBody {
@@ -79,6 +83,8 @@ export interface UpdateProjectBody {
   startDate?: string | null;
   /** @nullable */
   endDate?: string | null;
+  /** @nullable */
+  color?: string | null;
 }
 
 export interface Employee {

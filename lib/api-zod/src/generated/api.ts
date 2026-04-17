@@ -92,6 +92,7 @@ export const ListProjectsResponseItem = zod.object({
   budgetHours: zod.number().nullable(),
   startDate: zod.coerce.date().nullable(),
   endDate: zod.coerce.date().nullable(),
+  color: zod.string().nullable(),
   createdAt: zod.coerce.date(),
 });
 export const ListProjectsResponse = zod.array(ListProjectsResponseItem);
@@ -105,6 +106,7 @@ export const CreateProjectBody = zod.object({
   budgetHours: zod.number().nullish(),
   startDate: zod.coerce.date().nullish(),
   endDate: zod.coerce.date().nullish(),
+  color: zod.string().nullish(),
 });
 
 export const GetProjectParams = zod.object({
@@ -122,6 +124,7 @@ export const GetProjectResponse = zod.object({
   budgetHours: zod.number().nullable(),
   startDate: zod.coerce.date().nullable(),
   endDate: zod.coerce.date().nullable(),
+  color: zod.string().nullable(),
   createdAt: zod.coerce.date(),
 });
 
@@ -138,6 +141,7 @@ export const UpdateProjectBody = zod.object({
   budgetHours: zod.number().nullish(),
   startDate: zod.coerce.date().nullish(),
   endDate: zod.coerce.date().nullish(),
+  color: zod.string().nullish(),
 });
 
 export const UpdateProjectResponse = zod.object({
@@ -151,6 +155,7 @@ export const UpdateProjectResponse = zod.object({
   budgetHours: zod.number().nullable(),
   startDate: zod.coerce.date().nullable(),
   endDate: zod.coerce.date().nullable(),
+  color: zod.string().nullable(),
   createdAt: zod.coerce.date(),
 });
 

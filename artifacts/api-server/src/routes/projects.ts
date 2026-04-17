@@ -41,6 +41,7 @@ router.get("/projects", async (req, res): Promise<void> => {
       budgetHours: projectsTable.budgetHours,
       startDate: projectsTable.startDate,
       endDate: projectsTable.endDate,
+      color: projectsTable.color,
       createdAt: projectsTable.createdAt,
     })
     .from(projectsTable)
@@ -69,6 +70,7 @@ router.post("/projects", async (req, res): Promise<void> => {
       budgetHours: parsed.data.budgetHours ?? null,
       startDate: parsed.data.startDate ?? null,
       endDate: parsed.data.endDate ?? null,
+      color: parsed.data.color ?? null,
     })
     .returning();
 
@@ -95,6 +97,7 @@ router.get("/projects/:id", async (req, res): Promise<void> => {
       budgetHours: projectsTable.budgetHours,
       startDate: projectsTable.startDate,
       endDate: projectsTable.endDate,
+      color: projectsTable.color,
       createdAt: projectsTable.createdAt,
     })
     .from(projectsTable)

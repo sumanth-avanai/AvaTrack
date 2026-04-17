@@ -22,5 +22,7 @@ export interface Project {
   startDate: Date | null;
   /** @nullable */
   endDate: Date | null;
+  /** @nullable */
+  color: string | null;
   createdAt: Date;
 }

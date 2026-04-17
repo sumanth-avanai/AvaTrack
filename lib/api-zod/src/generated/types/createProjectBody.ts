@@ -19,4 +19,6 @@ export interface CreateProjectBody {
   startDate?: Date | null;
   /** @nullable */
   endDate?: Date | null;
+  /** @nullable */
+  color?: string | null;
 }

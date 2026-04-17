@@ -10,7 +10,6 @@ import {
   getListClientsQueryKey
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { 
   Table, 
   TableBody, 
@@ -48,11 +47,68 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 
+const DEFAULT_COLOR = "#6366f1";
+
+const PRESET_COLORS = [
+  "#6366f1", "#f59e0b", "#10b981", "#3b82f6", "#ec4899",
+  "#8b5cf6", "#f97316", "#14b8a6", "#ef4444", "#84cc16",
+  "#06b6d4", "#a855f7", "#d946ef", "#0ea5e9", "#22c55e",
+  "#fb923c", "#e11d48", "#7c3aed", "#2563eb", "#059669",
+];
+
+function ColorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {PRESET_COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => onChange(c)}
+            className="w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+            style={{
+              backgroundColor: c,
+              borderColor: value === c ? "white" : "transparent",
+              boxShadow: value === c ? `0 0 0 2px ${c}` : "none",
+            }}
+            title={c}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <div
+          className="w-8 h-8 rounded-md border border-border flex-shrink-0"
+          style={{ backgroundColor: value }}
+        />
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-8 h-8 rounded cursor-pointer border-0 bg-transparent p-0"
+          title="Custom color"
+        />
+        <Input
+          value={value}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (/^#[0-9a-fA-F]{0,6}$/.test(v)) onChange(v);
+          }}
+          className="font-mono text-sm w-28"
+          maxLength={7}
+          placeholder="#000000"
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function Projects() {
   const queryClient = useQueryClient();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<any>(null);
+  const [createColor, setCreateColor] = useState(DEFAULT_COLOR);
+  const [editColor, setEditColor] = useState(DEFAULT_COLOR);
 
   const { data: projects, isLoading: projectsLoading } = useListProjects(
     { includeInactive: true },
@@ -82,12 +138,14 @@ export default function Projects() {
           isBillable: formData.get("isBillable") === "on",
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
+          color: createColor,
         }
       },
       {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
           setIsCreateOpen(false);
+          setCreateColor(DEFAULT_COLOR);
         }
       }
     );
@@ -109,6 +167,7 @@ export default function Projects() {
           isBillable: formData.get("isBillable") === "on",
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
+          color: editColor,
         }
       },
       {
@@ -149,7 +208,10 @@ export default function Projects() {
       <div className="space-y-6 max-w-6xl mx-auto">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Projects</h1>
-          <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+          <Dialog open={isCreateOpen} onOpenChange={(open) => {
+            setIsCreateOpen(open);
+            if (open) setCreateColor(DEFAULT_COLOR);
+          }}>
             <DialogTrigger asChild>
               <Button><Plus className="h-4 w-4 mr-2" /> Add Project</Button>
             </DialogTrigger>
@@ -183,6 +245,10 @@ export default function Projects() {
                   <Label htmlFor="budgetHours">Budget Hours (Optional)</Label>
                   <Input id="budgetHours" name="budgetHours" type="number" step="0.5" placeholder="100" />
                 </div>
+                <div className="space-y-2">
+                  <Label>Project Color</Label>
+                  <ColorPicker value={createColor} onChange={setCreateColor} />
+                </div>
                 <div className="flex items-center space-x-6">
                   <div className="flex items-center space-x-2">
                     <Switch id="isBillable" name="isBillable" defaultChecked />
@@ -208,6 +274,7 @@ export default function Projects() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-[32px]"></TableHead>
                 <TableHead>Client</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Code</TableHead>
@@ -220,6 +287,7 @@ export default function Projects() {
               {projectsLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
+                    <TableCell><Skeleton className="h-4 w-4 rounded-full" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-[150px]" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-[200px]" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-[80px]" /></TableCell>
@@ -230,13 +298,20 @@ export default function Projects() {
                 ))
               ) : projects?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
                     No projects found.
                   </TableCell>
                 </TableRow>
               ) : (
                 projects?.map((project) => (
                   <TableRow key={project.id} className={!project.active ? "opacity-60" : ""}>
+                    <TableCell>
+                      <div
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: project.color ?? DEFAULT_COLOR }}
+                        title={project.color ?? DEFAULT_COLOR}
+                      />
+                    </TableCell>
                     <TableCell className="font-medium text-muted-foreground">
                       {project.clientName || "Unknown"}
                     </TableCell>
@@ -274,6 +349,7 @@ export default function Projects() {
                           <DropdownMenuItem 
                             onClick={() => {
                               setSelectedProject(project);
+                              setEditColor(project.color ?? DEFAULT_COLOR);
                               setIsEditOpen(true);
                             }}
                           >
@@ -328,6 +404,10 @@ export default function Projects() {
                 <div className="space-y-2">
                   <Label htmlFor="edit-budgetHours">Budget Hours</Label>
                   <Input id="edit-budgetHours" name="budgetHours" type="number" step="0.5" defaultValue={selectedProject.budgetHours || ""} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Project Color</Label>
+                  <ColorPicker value={editColor} onChange={setEditColor} />
                 </div>
                 <div className="flex items-center space-x-6">
                   <div className="flex items-center space-x-2">
