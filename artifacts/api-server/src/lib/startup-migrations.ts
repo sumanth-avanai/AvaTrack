@@ -2,13 +2,21 @@
  * Startup migrations — idempotent DB fixes that run once on server boot.
  * Safe to run repeatedly.
  */
-import { db, employeesTable, timeEntriesTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, employeesTable, timeEntriesTable, projectsTable } from "@workspace/db";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { logger } from "./logger";
+
+const PROJECT_COLORS = [
+  "#6366f1","#f59e0b","#10b981","#3b82f6","#ec4899",
+  "#8b5cf6","#f97316","#14b8a6","#ef4444","#84cc16",
+  "#06b6d4","#a855f7","#d946ef","#0ea5e9","#22c55e",
+  "#fb923c","#e11d48","#7c3aed","#2563eb","#059669",
+];
 
 export async function runStartupMigrations(): Promise<void> {
   await fixWorkingDaysMasks();
   await deleteZeroHourEntries();
+  await backfillProjectColors();
 }
 
 /**
@@ -53,5 +61,36 @@ async function deleteZeroHourEntries(): Promise<void> {
     }
   } catch (err) {
     logger.error({ err }, "startup-migration: deleteZeroHourEntries failed");
+  }
+}
+
+/**
+ * Assign a palette color (derived from project ID) to every project whose
+ * color column is NULL. Uses the same 20-color palette and modulo formula
+ * as the Resource Planner's `resolveColor` helper so Gantt bars match.
+ */
+async function backfillProjectColors(): Promise<void> {
+  try {
+    const nullColorProjects = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(isNull(projectsTable.color));
+
+    if (nullColorProjects.length === 0) return;
+
+    for (const { id } of nullColorProjects) {
+      const color = PROJECT_COLORS[id % PROJECT_COLORS.length];
+      await db
+        .update(projectsTable)
+        .set({ color })
+        .where(and(eq(projectsTable.id, id), isNull(projectsTable.color)));
+    }
+
+    logger.info(
+      { count: nullColorProjects.length },
+      `startup-migration: backfilled colors for ${nullColorProjects.length} project(s)`
+    );
+  } catch (err) {
+    logger.error({ err }, "startup-migration: backfillProjectColors failed");
   }
 }
