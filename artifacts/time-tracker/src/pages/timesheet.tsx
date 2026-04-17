@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { TimesheetGrid } from "@/components/timesheet/timesheet-grid";
+import { ResourceBookingsPanel } from "@/components/timesheet/resource-bookings-panel";
 import { startOfWeek, addWeeks, subWeeks } from "date-fns";
 
 export default function Timesheet() {
@@ -52,6 +53,13 @@ export default function Timesheet() {
             </Select>
           </div>
         </div>
+
+        {selectedEmployeeId && selectedEmployee && (
+          <ResourceBookingsPanel
+            employeeId={selectedEmployeeId}
+            weekStart={currentWeekStart}
+          />
+        )}
 
         {selectedEmployeeId && selectedEmployee ? (
           <TimesheetGrid
