@@ -608,9 +608,15 @@ export function TimesheetGrid({
               return (
                 <TableRow key={projectId}>
                   <TableCell className="font-medium">
-                    <div className="flex flex-col">
-                      <span className="truncate">{project?.name || `Project ${projectId}`}</span>
-                      <span className="text-xs text-muted-foreground truncate">{project?.clientName}</span>
+                    <div className="flex items-start gap-2">
+                      <span
+                        className="mt-0.5 shrink-0 w-2.5 h-2.5 rounded-full"
+                        style={{ backgroundColor: project?.color ?? "#6366f1" }}
+                      />
+                      <div className="flex flex-col min-w-0">
+                        <span className="truncate">{project?.name || `Project ${projectId}`}</span>
+                        <span className="text-xs text-muted-foreground truncate">{project?.clientName}</span>
+                      </div>
                     </div>
                   </TableCell>
                   {weekDays.map((day, colIndex) => {

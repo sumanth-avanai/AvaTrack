@@ -374,7 +374,16 @@ export default function Reports() {
 
   const { data: employees } = useListEmployees();
   const { data: projects }  = useListProjects({ includeInactive: false });
+  const { data: allProjects } = useListProjects({ includeInactive: true });
   const { data: clients }   = useListClients();
+
+  const projectColorMap = useMemo(() => {
+    const map = new Map<number, string>();
+    (allProjects ?? []).forEach((p) => {
+      map.set(p.id, p.color ?? "#6366f1");
+    });
+    return map;
+  }, [allProjects]);
 
   const employeeOptions = useMemo(
     () => (employees ?? []).map((e) => ({ id: e.id, label: e.name })),
@@ -666,7 +675,17 @@ export default function Reports() {
                 ) : (
                   data.rows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell className="font-medium">{row.label}</TableCell>
+                      <TableCell className="font-medium">
+                        {rowDimension === "projects" ? (
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="shrink-0 w-2.5 h-2.5 rounded-full"
+                              style={{ backgroundColor: projectColorMap.get(row.id) ?? "#6366f1" }}
+                            />
+                            {row.label}
+                          </div>
+                        ) : row.label}
+                      </TableCell>
                       {showAvailableHours && (
                         <TableCell className="text-right text-muted-foreground">
                           {row.availableHours.toFixed(1)}
@@ -727,7 +746,15 @@ export default function Reports() {
                   data.rows.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell className="font-medium sticky left-0 bg-card z-10">
-                        {row.label}
+                        {rowDimension === "projects" ? (
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="shrink-0 w-2.5 h-2.5 rounded-full"
+                              style={{ backgroundColor: projectColorMap.get(row.id) ?? "#6366f1" }}
+                            />
+                            {row.label}
+                          </div>
+                        ) : row.label}
                       </TableCell>
                       {data.columns.map((col) => {
                         const val = row.values[col] ?? 0;
