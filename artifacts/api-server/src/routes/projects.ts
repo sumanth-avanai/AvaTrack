@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
+
 import { db, projectsTable, clientsTable } from "@workspace/db";
+import { PROJECT_COLORS } from "@workspace/api-zod";
 import {
   ListProjectsQueryParams,
   CreateProjectBody,
@@ -59,20 +61,34 @@ router.post("/projects", async (req, res): Promise<void> => {
     return;
   }
 
-  const [project] = await db
-    .insert(projectsTable)
-    .values({
-      clientId: parsed.data.clientId,
-      name: parsed.data.name,
-      code: parsed.data.code ?? null,
-      active: parsed.data.active ?? true,
-      isBillable: parsed.data.isBillable ?? true,
-      budgetHours: parsed.data.budgetHours ?? null,
-      startDate: parsed.data.startDate ?? null,
-      endDate: parsed.data.endDate ?? null,
-      color: parsed.data.color ?? null,
-    })
-    .returning();
+  const project = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(projectsTable)
+      .values({
+        clientId: parsed.data.clientId,
+        name: parsed.data.name,
+        code: parsed.data.code ?? null,
+        active: parsed.data.active ?? true,
+        isBillable: parsed.data.isBillable ?? true,
+        budgetHours: parsed.data.budgetHours ?? null,
+        startDate: parsed.data.startDate ?? null,
+        endDate: parsed.data.endDate ?? null,
+        color: parsed.data.color ?? null,
+      })
+      .returning();
+
+    if (parsed.data.color == null) {
+      const paletteColor = PROJECT_COLORS[inserted.id % PROJECT_COLORS.length];
+      const [updated] = await tx
+        .update(projectsTable)
+        .set({ color: paletteColor })
+        .where(eq(projectsTable.id, inserted.id))
+        .returning();
+      return updated;
+    }
+
+    return inserted;
+  });
 
   const enriched = await enrichProject(project);
   res.status(201).json(enriched);
