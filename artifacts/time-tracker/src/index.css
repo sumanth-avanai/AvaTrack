@@ -73,6 +73,7 @@
   /* Brand gradient */
   --gradient-brand: linear-gradient(135deg, #8B5CF6 0%, #06B6D4 100%);
   --gradient-brand-h: linear-gradient(90deg, #8B5CF6 0%, #06B6D4 100%);
+  --gradient-brand-horizontal: var(--gradient-brand-h);
 
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);
