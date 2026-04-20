@@ -1,0 +1,152 @@
+FEATURE + UI: Role assignment filtering & Project allocation overview.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== FEATURE 1: Role dropdown filter by assignment ===
+
+CONTEXT:
+- In Project > Manage Roles, employees can be assigned to roles
+- When creating a booking in Resource Planner, the Role dropdown should prioritize/filter based on this
+
+CURRENT BEHAVIOR:
+- Role dropdown shows ALL roles for the project
+- No indication which roles the employee is assigned to
+
+NEW BEHAVIOR:
+
+In booking modal, after selecting Project, the Role dropdown should:
+
+Option A (recommended):
+- Show assigned roles FIRST, with label "(assigned)"
+- Then separator line "──── Other roles ────"
+- Then show unassigned roles below (still selectable)
+
+Example for Keshav on "n8n extention":
+┌─────────────────────────────────────┐
+│ Engineering Manager (assigned)      │
+│ Tech Lead (assigned)                │
+│ ──────── Other roles ──────────     │
+│ DevOps Engineer                     │
+│ PM                                  │
+└─────────────────────────────────────┘
+
+- All roles remain bookable (not blocked)
+- But assigned roles are highlighted/prioritized
+- If employee has only 1 assigned role → auto-select it
+
+=== FEATURE 2: Project Allocation Overview ===
+
+LOCATION: Project detail page → new tab "Allocations" (next to "Roles")
+
+This view shows WHO is allocated to this project, on which role, for how long.
+
+TABLE STRUCTURE:
+
+┌───────────────────────────────────────────────────────────────────────────────────┐
+│ Project: n8n extention (Bayer)                                                    │
+│ [Details] [Roles] [Allocations]                                                   │
+├───────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│ ROLE: Engineering Manager                                                         │
+│ Budget: 50 days | Planned: 35 days | Booked: 28 days | Remaining: 15 days        │
+│ ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│ │ Employee      │ Allocated    │ Period              │ Booked  │ Status      │  │
+│ ├─────────────────────────────────────────────────────────────────────────────┤  │
+│ │ Keshav Reddy  │ 20 days      │ Apr 20 – Jun 15     │ 15 days │ [████░] 75% │  │
+│ │ Regina Strobl │ 15 days      │ May 1 – Jun 30      │ 13 days │ [███░░] 87% │  │
+│ └─────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                   │
+│ ROLE: DevOps Engineer                                                             │
+│ Budget: 30 days | Planned: 30 days | Booked: 20 days | Remaining: 0 days         │
+│ ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│ │ Employee      │ Allocated    │ Period              │ Booked  │ Status      │  │
+│ ├─────────────────────────────────────────────────────────────────────────────┤  │
+│ │ Midhun        │ 30 days      │ Apr 20 – Jul 15     │ 20 days │ [███░░] 67% │  │
+│ └─────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                   │
+│ ROLE: PM                                                                          │
+│ Budget: 20 days | Planned: 0 days | Booked: 0 days | Remaining: 20 days          │
+│ (No allocations yet)                                                              │
+│                                                                                   │
+├───────────────────────────────────────────────────────────────────────────────────┤
+│ TOTALS                                                                            │
+│ Budget: 100 days | Planned: 65 days | Booked: 48 days | Remaining: 35 days       │
+│ Value: €125.000 budget | €78.000 booked                                           │
+└───────────────────────────────────────────────────────────────────────────────────┘
+
+COLUMNS EXPLAINED:
+- Employee: Name of allocated person
+- Allocated: Total days from ResourceBooking (planned)
+- Period: Start – End date of the booking
+- Booked: Actual TimeEntry hours converted to days (booked)
+- Status: Progress bar (Booked / Allocated)
+
+PER ROLE SUMMARY:
+- Budget: from ProjectRole.budgetedDays
+- Planned: SUM of all ResourceBookings for this role
+- Booked: SUM of all TimeEntries for this role
+- Remaining: Budget - Planned (or Budget - Booked, clarify which is more useful)
+
+COLOR CODING:
+- Remaining > 20%: normal (black text)
+- Remaining < 20%: yellow/orange
+- Remaining = 0 or negative: red (overbooked/fully used)
+
+ACTIONS:
+- Click on employee row → opens booking in Resource Planner (optional)
+- Click on role header → opens role edit modal (optional)
+
+=== DATA SOURCES ===
+
+For this view, query:
+1. All ProjectRoles for this project
+2. All ResourceBookings per role (grouped by employee)
+3. All TimeEntries per role (grouped by employee)
+
+Calculate:
+- Allocated days = ResourceBooking hours / 8
+- Booked days = TimeEntry hours / 8
+
+=== API ===
+
+GET /api/projects/:projectId/allocations
+
+Returns:
+{
+  projectId: "...",
+  projectName: "n8n extention",
+  clientName: "Bayer",
+  roles: [
+    {
+      roleId: "...",
+      roleName: "Engineering Manager",
+      dayRate: 1256.64,
+      budgetedDays: 50,
+      plannedDays: 35,
+      bookedDays: 28,
+      remainingDays: 15,
+      allocations: [
+        {
+          employeeId: "...",
+          employeeName: "Keshav Reddy",
+          allocatedDays: 20,
+          period: { start: "2026-04-20", end: "2026-06-15" },
+          bookedDays: 15,
+          percentage: 75
+        },
+        ...
+      ]
+    },
+    ...
+  ],
+  totals: {
+    budgetedDays: 100,
+    plannedDays: 65,
+    bookedDays: 48,
+    remainingDays: 35,
+    budgetValue: 125000,
+    bookedValue: 78000
+  }
+}
+
+Preserve all existing data.
