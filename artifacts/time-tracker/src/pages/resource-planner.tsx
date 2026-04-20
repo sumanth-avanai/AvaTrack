@@ -1848,38 +1848,55 @@ export default function ResourcePlannerPage() {
                             )}
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent side="top" className="text-xs space-y-0.5 max-w-[240px]">
-                          <div className="font-semibold">{b.projectName}</div>
-                          {b.clientName && (
-                            <div className="text-muted-foreground">{b.clientName}</div>
-                          )}
-                          {b.projectRoleName && (
-                            <div className="text-primary font-medium">
-                              {b.projectRoleName}
-                              {b.dayRate ? ` — €${b.dayRate.toLocaleString("de-DE")}/day` : ""}
+                        <TooltipContent
+                          side="top"
+                          className="text-xs max-w-[240px] bg-white text-gray-900 border border-gray-200 shadow-md p-0"
+                        >
+                          {/* Header: project + client */}
+                          <div className="px-3 pt-2.5 pb-1.5">
+                            <div className="font-semibold text-gray-900">{b.projectName}</div>
+                            {b.clientName && (
+                              <div className="text-gray-500">{b.clientName}</div>
+                            )}
+                          </div>
+
+                          {/* Details: role, allocation, dates, total */}
+                          <div className="px-3 pb-2 space-y-0.5 border-t border-gray-100 pt-1.5">
+                            {b.projectRoleName && (
+                              <div className="text-blue-700 font-medium">
+                                {b.projectRoleName}
+                                {b.dayRate ? ` — €${b.dayRate.toLocaleString("de-DE")}/day` : ""}
+                              </div>
+                            )}
+                            <div className="text-gray-700">{b.hoursPerWeek.toFixed(1)}h/week</div>
+                            <div className="text-gray-700">
+                              {format(parseISO(b.startDate), "MMM d")} –{" "}
+                              {format(parseISO(b.endDate), "MMM d, yyyy")}
                             </div>
-                          )}
-                          <div>{b.hoursPerWeek.toFixed(1)}h/week</div>
-                          <div>
-                            {format(parseISO(b.startDate), "MMM d")} –{" "}
-                            {format(parseISO(b.endDate), "MMM d, yyyy")}
+                            <div className="text-gray-700">
+                              Total: {(totalWeeks(b.startDate, b.endDate) * b.hoursPerWeek).toFixed(0)}h
+                            </div>
+                            {b.notes && (
+                              <div className="text-gray-500 italic">{b.notes}</div>
+                            )}
                           </div>
-                          <div>
-                            Total:{" "}
-                            {(totalWeeks(b.startDate, b.endDate) * b.hoursPerWeek).toFixed(0)}h
-                          </div>
+
+                          {/* Budget strip — full width, colored background */}
                           {b.projectRoleId && (() => {
                             const rb = roleBudgetMap.get(b.projectRoleId);
                             if (!rb || rb.budgetedDays == null) return null;
+                            const isOver = rb.plannedDays > rb.budgetedDays;
                             return (
-                              <div className="text-muted-foreground">
-                                Role budget: {rb.plannedDays.toFixed(1)} / {rb.budgetedDays}d planned
+                              <div className={`px-3 py-1.5 border-t ${
+                                isOver
+                                  ? "bg-red-50 text-red-600 font-semibold border-red-100"
+                                  : "bg-green-50 text-green-700 border-green-100"
+                              }`}>
+                                {isOver ? "⚠ Over budget: " : "✓ Budget: "}
+                                {rb.plannedDays.toFixed(1)} / {rb.budgetedDays}d planned
                               </div>
                             );
                           })()}
-                          {b.notes && (
-                            <div className="text-muted-foreground italic">{b.notes}</div>
-                          )}
                         </TooltipContent>
                       </Tooltip>
                     );
