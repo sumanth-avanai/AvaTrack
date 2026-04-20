@@ -1861,9 +1861,9 @@ export default function ResourcePlannerPage() {
                           </div>
 
                           {/* Details: role, allocation, dates, total */}
-                          <div className="px-3 pb-2 space-y-0.5 border-t border-gray-100 pt-1.5">
+                          <div className="px-3 pb-2 space-y-0.5 border-t border-gray-200 pt-1.5">
                             {b.projectRoleName && (
-                              <div className="text-blue-700 font-medium">
+                              <div className="text-primary font-medium">
                                 {b.projectRoleName}
                                 {b.dayRate ? ` — €${b.dayRate.toLocaleString("de-DE")}/day` : ""}
                               </div>
@@ -1887,10 +1887,10 @@ export default function ResourcePlannerPage() {
                             if (!rb || rb.budgetedDays == null) return null;
                             const isOver = rb.plannedDays > rb.budgetedDays;
                             return (
-                              <div className={`px-3 py-1.5 border-t ${
+                              <div className={`px-3 py-1.5 border-t border-gray-200 ${
                                 isOver
-                                  ? "bg-red-50 text-red-600 font-semibold border-red-100"
-                                  : "bg-green-50 text-green-700 border-green-100"
+                                  ? "bg-red-50 text-red-600 font-semibold"
+                                  : "bg-green-50 text-green-700"
                               }`}>
                                 {isOver ? "⚠ Over budget: " : "✓ Budget: "}
                                 {rb.plannedDays.toFixed(1)} / {rb.budgetedDays}d planned
