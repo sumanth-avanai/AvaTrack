@@ -121,7 +121,11 @@ function useCreateBooking() {
       if (!res.ok) throw new Error("Failed to create booking");
       return res.json();
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["resource-bookings"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
+      qc.invalidateQueries({ queryKey: ["project-budget"] });
+      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    },
   });
 }
 
@@ -138,7 +142,11 @@ function useUpdateBooking() {
       if (!res.ok) throw new Error("Failed to update booking");
       return res.json();
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["resource-bookings"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
+      qc.invalidateQueries({ queryKey: ["project-budget"] });
+      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    },
   });
 }
 
@@ -152,7 +160,11 @@ function useDeleteBooking() {
       });
       if (!res.ok) throw new Error("Failed to delete booking");
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["resource-bookings"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
+      qc.invalidateQueries({ queryKey: ["project-budget"] });
+      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    },
   });
 }
 
@@ -871,7 +883,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                       <span>{thisDays}d</span>
                     </div>
                     {afterDays != null && (
-                      <div className={`flex justify-between font-medium ${isOver ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"}`}>
+                      <div className={`flex justify-between font-medium ${isOver ? "text-destructive" : "text-green-700 dark:text-green-400"}`}>
                         {isOver
                           ? <><span>Over budget by</span><span>{Math.round(Math.abs(afterDays) * 10) / 10}d</span></>
                           : <><span>Remaining after</span><span>{afterDays}d</span></>
