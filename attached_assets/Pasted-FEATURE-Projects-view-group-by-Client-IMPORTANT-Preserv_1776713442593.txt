@@ -1,0 +1,87 @@
+FEATURE: Projects view – group by Client.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== CURRENT STATE ===
+- Projects listed as flat list
+- Hard to see which projects belong to which client
+- Unübersichtlich when many projects
+
+=== NEW BEHAVIOR ===
+
+Group projects by Client in collapsible sections:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Projects                                           [+ New Project] [Filter]│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ View: [Grouped by Client ▼]     Search: [________________]                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│ ▼ Bayer (3 projects)                                          [Edit Client]│
+│   ┌─────────────────────────────────────────────────────────────────────┐  │
+│   │ n8n extention          │ Active  │ 3 roles │ 65/100 days │ [Edit]  │  │
+│   │ n8n Workshops 2026     │ Active  │ 2 roles │ 20/40 days  │ [Edit]  │  │
+│   │ AI Implementation      │ Closed  │ 4 roles │ 50/50 days  │ [Edit]  │  │
+│   └─────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ▼ Telekom (2 projects)                                        [Edit Client]│
+│   ┌─────────────────────────────────────────────────────────────────────┐  │
+│   │ Data Migration         │ Active  │ 2 roles │ 30/60 days  │ [Edit]  │  │
+│   │ Chatbot MVP            │ Active  │ 3 roles │ 15/45 days  │ [Edit]  │  │
+│   └─────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│ ▶ Internal (1 project)                                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+=== FEATURES ===
+
+1. GROUPED DISPLAY:
+   - Projects grouped under Client name
+   - Collapsible sections (▼ expanded, ▶ collapsed)
+   - Show project count per client: "Bayer (3 projects)"
+   - Remember collapsed state in localStorage
+
+2. CLIENT HEADER:
+   - Client name (bold)
+   - Project count
+   - [Edit Client] button (pencil icon) – opens modal to edit client name
+   - Optional: show total budget/revenue per client
+
+3. PROJECT ROW INFO:
+   - Project name
+   - Status (Active/Closed badge)
+   - Number of roles
+   - Budget usage: "65/100 days" with mini progress bar
+   - [Edit] button → opens project detail
+
+4. VIEW TOGGLE (optional):
+   - Dropdown: "Grouped by Client" / "Flat list"
+   - Default: Grouped by Client
+
+5. SEARCH:
+   - Search filters both client names AND project names
+   - If search matches: show matching projects, expand their client group
+
+6. PROJECTS WITHOUT CLIENT:
+   - Group at bottom: "No Client" or "Unassigned"
+   - Allow assigning client from project edit
+
+=== NO SEPARATE CLIENT PAGE NEEDED ===
+
+- Remove standalone "Clients" page from sidebar (optional)
+- Or keep it but make it redirect to Projects view filtered by that client
+- Client editing happens inline via [Edit Client] button
+
+=== SIDEBAR CHANGE (optional) ===
+
+Current:
+- Clients
+- Projects
+
+New:
+- Projects (grouped by client, clients editable inline)
+
+Or keep both if there's a reason to have dedicated client management.
+
+Preserve all existing data.
