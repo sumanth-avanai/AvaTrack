@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
-import { db, projectsTable, clientsTable } from "@workspace/db";
+import { db, projectsTable, clientsTable, projectRolesTable } from "@workspace/db";
 import { PROJECT_COLORS } from "@workspace/api-zod";
 import {
   ListProjectsQueryParams,
@@ -45,6 +45,7 @@ router.get("/projects", async (req, res): Promise<void> => {
       endDate: projectsTable.endDate,
       color: projectsTable.color,
       createdAt: projectsTable.createdAt,
+      roleCount: sql<number>`(select count(*)::int from ${projectRolesTable} where ${projectRolesTable.projectId} = ${projectsTable.id})`,
     })
     .from(projectsTable)
     .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))

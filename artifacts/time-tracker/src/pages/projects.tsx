@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { 
   useListProjects, 
@@ -7,7 +7,8 @@ import {
   useUpdateProject,
   useDeleteProject,
   useListClients,
-  getListClientsQueryKey
+  getListClientsQueryKey,
+  useUpdateClient,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
@@ -38,7 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, MoreHorizontal, Pencil, Trash2, Layers } from "lucide-react";
+import { Plus, MoreHorizontal, Pencil, Trash2, Layers, ChevronDown, ChevronRight, List, LayoutList, Search } from "lucide-react";
 import { ProjectRolesSheet } from "@/components/projects/project-roles-sheet";
 import { 
   DropdownMenu,
@@ -103,14 +104,98 @@ function ColorPicker({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
+function readLocalStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw !== null ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+type Project = {
+  id: number;
+  clientId: number | null;
+  clientName: string | null;
+  name: string;
+  code: string | null;
+  active: boolean;
+  isBillable: boolean;
+  budgetHours: number | null;
+  color: string | null;
+  roleCount?: number | null;
+  [key: string]: unknown;
+};
+
+type ClientGroup = {
+  key: string;
+  clientId: number | null;
+  clientName: string | null;
+  projects: Project[];
+};
+
+function ProjectActionsMenu({
+  project,
+  onManageRoles,
+  onEdit,
+  onDelete,
+  updatePending,
+}: {
+  project: Project;
+  onManageRoles: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  updatePending: boolean;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" className="h-8 w-8 p-0">
+          <span className="sr-only">Open menu</span>
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={onManageRoles}>
+          <Layers className="mr-2 h-4 w-4" />
+          Manage Roles
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onEdit}>
+          <Pencil className="mr-2 h-4 w-4" />
+          Edit
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="text-destructive focus:text-destructive"
+          onClick={onDelete}
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          Archive
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export default function Projects() {
   const queryClient = useQueryClient();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<any>(null);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [createColor, setCreateColor] = useState(DEFAULT_COLOR);
   const [editColor, setEditColor] = useState(DEFAULT_COLOR);
   const [rolesProject, setRolesProject] = useState<{ id: number; name: string } | null>(null);
+
+  const [view, setView] = useState<"grouped" | "flat">(() =>
+    readLocalStorage("projects-view", "grouped" as "grouped" | "flat")
+  );
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() =>
+    readLocalStorage("projects-collapsed", {} as Record<string, boolean>)
+  );
+
+  const [editClientOpen, setEditClientOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<{ id: number; name: string } | null>(null);
+  const [editClientName, setEditClientName] = useState("");
 
   const { data: projects, isLoading: projectsLoading } = useListProjects(
     { includeInactive: true },
@@ -125,30 +210,77 @@ export default function Projects() {
   const createProject = useCreateProject();
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
+  const updateClient = useUpdateClient();
+
+  const filtered = useMemo<Project[]>(() => {
+    const all = (projects as Project[] | undefined) ?? [];
+    if (!search.trim()) return all;
+    const q = search.toLowerCase();
+    return all.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.clientName && p.clientName.toLowerCase().includes(q))
+    );
+  }, [projects, search]);
+
+  const groups = useMemo<ClientGroup[]>(() => {
+    const map = new Map<string, ClientGroup>();
+    for (const p of filtered) {
+      const key = p.clientId != null ? String(p.clientId) : "__unassigned__";
+      if (!map.has(key)) {
+        map.set(key, { key, clientId: p.clientId ?? null, clientName: p.clientName ?? null, projects: [] });
+      }
+      map.get(key)!.projects.push(p);
+    }
+    return [...map.values()].sort((a, b) => {
+      if (a.key === "__unassigned__") return 1;
+      if (b.key === "__unassigned__") return -1;
+      return (a.clientName ?? "").localeCompare(b.clientName ?? "");
+    });
+  }, [filtered]);
+
+  useEffect(() => {
+    if (search.trim()) {
+      const expanded: Record<string, boolean> = {};
+      for (const g of groups) expanded[g.key] = false;
+      setCollapsed(expanded);
+    }
+  }, [search]);
+
+  function toggleGroup(key: string) {
+    const next = { ...collapsed, [key]: !collapsed[key] };
+    setCollapsed(next);
+    localStorage.setItem("projects-collapsed", JSON.stringify(next));
+  }
+
+  function setViewPersist(v: "grouped" | "flat") {
+    setView(v);
+    localStorage.setItem("projects-view", JSON.stringify(v));
+  }
 
   const handleCreate = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const budgetHours = formData.get("budgetHours") as string;
-    
+
     createProject.mutate(
       {
         data: {
           name: formData.get("name") as string,
           clientId: Number(formData.get("clientId")),
-          code: formData.get("code") as string || null,
+          code: (formData.get("code") as string) || null,
           isBillable: formData.get("isBillable") === "on",
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
           color: createColor,
-        }
+        },
       },
       {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
           setIsCreateOpen(false);
           setCreateColor(DEFAULT_COLOR);
-        }
+        },
       }
     );
   };
@@ -165,18 +297,18 @@ export default function Projects() {
         data: {
           name: formData.get("name") as string,
           clientId: Number(formData.get("clientId")),
-          code: formData.get("code") as string || null,
+          code: (formData.get("code") as string) || null,
           isBillable: formData.get("isBillable") === "on",
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
           color: editColor,
-        }
+        },
       },
       {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
           setIsEditOpen(false);
-        }
+        },
       }
     );
   };
@@ -187,7 +319,7 @@ export default function Projects() {
       {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
-        }
+        },
       }
     );
   };
@@ -199,23 +331,126 @@ export default function Projects() {
         {
           onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
-          }
+          },
         }
       );
     }
   };
 
+  const handleEditClientSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingClient || !editClientName.trim()) return;
+    updateClient.mutate(
+      { id: editingClient.id, data: { name: editClientName.trim() } },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
+          queryClient.invalidateQueries({ queryKey: getListClientsQueryKey({ includeInactive: true }) });
+          setEditClientOpen(false);
+        },
+      }
+    );
+  };
+
+  function openEditProject(p: Project) {
+    setSelectedProject(p);
+    setEditColor(p.color ?? DEFAULT_COLOR);
+    setIsEditOpen(true);
+  }
+
+  function openEditClient(clientId: number, clientName: string) {
+    setEditingClient({ id: clientId, name: clientName });
+    setEditClientName(clientName);
+    setEditClientOpen(true);
+  }
+
+  const projectRow = (project: Project) => (
+    <TableRow key={project.id} className={!project.active ? "opacity-60" : ""}>
+      <TableCell>
+        <div
+          className="w-3 h-3 rounded-full flex-shrink-0"
+          style={{ backgroundColor: project.color ?? DEFAULT_COLOR }}
+          title={project.color ?? DEFAULT_COLOR}
+        />
+      </TableCell>
+      <TableCell className="font-semibold">{project.name}</TableCell>
+      <TableCell className="text-muted-foreground font-mono text-xs">
+        {project.code || "—"}
+      </TableCell>
+      <TableCell>
+        {project.active ? (
+          <Badge variant="default" className="bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 font-normal border-0">
+            Active
+          </Badge>
+        ) : (
+          <Badge variant="secondary" className="font-normal">
+            Inactive
+          </Badge>
+        )}
+      </TableCell>
+      <TableCell className="text-muted-foreground text-sm">
+        {project.roleCount != null ? (
+          <span>{project.roleCount} {project.roleCount === 1 ? "role" : "roles"}</span>
+        ) : (
+          <span>—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <ProjectActionsMenu
+          project={project}
+          onManageRoles={() => setRolesProject({ id: project.id, name: project.name })}
+          onEdit={() => openEditProject(project)}
+          onDelete={() => handleDelete(project.id)}
+          updatePending={updateProject.isPending}
+        />
+      </TableCell>
+    </TableRow>
+  );
+
+  const flatTableHeaders = (
+    <TableHeader>
+      <TableRow>
+        <TableHead className="w-[32px]"></TableHead>
+        <TableHead>Client</TableHead>
+        <TableHead>Name</TableHead>
+        <TableHead>Code</TableHead>
+        <TableHead>Status</TableHead>
+        <TableHead>Roles</TableHead>
+        <TableHead className="w-[50px]"></TableHead>
+      </TableRow>
+    </TableHeader>
+  );
+
+  const groupedTableHeaders = (
+    <TableHeader>
+      <TableRow>
+        <TableHead className="w-[32px]"></TableHead>
+        <TableHead>Name</TableHead>
+        <TableHead>Code</TableHead>
+        <TableHead>Status</TableHead>
+        <TableHead>Roles</TableHead>
+        <TableHead className="w-[50px]"></TableHead>
+      </TableRow>
+    </TableHeader>
+  );
+
   return (
     <AdminLayout>
       <div className="space-y-6 max-w-6xl mx-auto">
+        {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Projects</h1>
-          <Dialog open={isCreateOpen} onOpenChange={(open) => {
-            setIsCreateOpen(open);
-            if (open) setCreateColor(DEFAULT_COLOR);
-          }}>
+          <Dialog
+            open={isCreateOpen}
+            onOpenChange={(open) => {
+              setIsCreateOpen(open);
+              if (open) setCreateColor(DEFAULT_COLOR);
+            }}
+          >
             <DialogTrigger asChild>
-              <Button><Plus className="h-4 w-4 mr-2" /> Add Project</Button>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" /> Add Project
+              </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
@@ -230,7 +465,9 @@ export default function Projects() {
                     </SelectTrigger>
                     <SelectContent>
                       {clients?.map((c) => (
-                        <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
+                        <SelectItem key={c.id} value={c.id.toString()}>
+                          {c.name}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -262,7 +499,9 @@ export default function Projects() {
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
+                  <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>
+                    Cancel
+                  </Button>
                   <Button type="submit" disabled={createProject.isPending}>
                     {createProject.isPending ? "Creating..." : "Create Project"}
                   </Button>
@@ -272,121 +511,193 @@ export default function Projects() {
           </Dialog>
         </div>
 
-        <div className="border rounded-md bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[32px]"></TableHead>
-                <TableHead>Client</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Code</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Active</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projectsLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell><Skeleton className="h-4 w-4 rounded-full" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-[150px]" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-[200px]" /></TableCell>
-                    <TableCell><Skeleton className="h-4 w-[80px]" /></TableCell>
-                    <TableCell><Skeleton className="h-5 w-[60px] rounded-full" /></TableCell>
-                    <TableCell><Skeleton className="h-5 w-9 rounded-full" /></TableCell>
-                    <TableCell><Skeleton className="h-8 w-8" /></TableCell>
-                  </TableRow>
-                ))
-              ) : projects?.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
-                    No projects found.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                projects?.map((project) => (
-                  <TableRow key={project.id} className={!project.active ? "opacity-60" : ""}>
-                    <TableCell>
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: project.color ?? DEFAULT_COLOR }}
-                        title={project.color ?? DEFAULT_COLOR}
-                      />
-                    </TableCell>
-                    <TableCell className="font-medium text-muted-foreground">
-                      {project.clientName || "Unknown"}
-                    </TableCell>
-                    <TableCell className="font-semibold">{project.name}</TableCell>
-                    <TableCell className="text-muted-foreground font-mono text-xs">
-                      {project.code || "—"}
-                    </TableCell>
-                    <TableCell>
-                      {project.isBillable ? (
-                        <Badge variant="default" className="bg-primary/10 text-primary hover:bg-primary/20 font-normal">
-                          Billable
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="font-normal">
-                          Non-billable
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Switch 
-                        checked={project.active} 
-                        onCheckedChange={() => handleToggleActive(project.id, project.active)}
-                        disabled={updateProject.isPending}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" className="h-8 w-8 p-0">
-                            <span className="sr-only">Open menu</span>
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={() => setRolesProject({ id: project.id, name: project.name })}
-                          >
-                            <Layers className="mr-2 h-4 w-4" />
-                            Manage Roles
-                          </DropdownMenuItem>
-                          <DropdownMenuItem 
-                            onClick={() => {
-                              setSelectedProject(project);
-                              setEditColor(project.color ?? DEFAULT_COLOR);
-                              setIsEditOpen(true);
-                            }}
-                          >
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem 
-                            className="text-destructive focus:text-destructive"
-                            onClick={() => handleDelete(project.id)}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Archive
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+        {/* Toolbar: search + view toggle */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Search projects or clients…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+          <div className="flex items-center border rounded-md overflow-hidden">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`rounded-none px-3 ${view === "grouped" ? "bg-muted" : ""}`}
+              onClick={() => setViewPersist("grouped")}
+              title="Grouped by client"
+            >
+              <LayoutList className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`rounded-none px-3 border-l ${view === "flat" ? "bg-muted" : ""}`}
+              onClick={() => setViewPersist("flat")}
+              title="Flat list"
+            >
+              <List className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
+        {/* Grouped view */}
+        {view === "grouped" && (
+          <div className="space-y-3">
+            {projectsLoading ? (
+              Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="border rounded-md bg-card overflow-hidden">
+                  <div className="px-4 py-3 bg-muted/40 flex items-center gap-2">
+                    <Skeleton className="h-4 w-4" />
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-5 w-6 rounded-full" />
+                  </div>
+                </div>
+              ))
+            ) : groups.length === 0 ? (
+              <div className="border rounded-md bg-card px-4 py-10 text-center text-muted-foreground">
+                No projects found.
+              </div>
+            ) : (
+              groups.map((group) => {
+                const isCollapsed = !!collapsed[group.key];
+                return (
+                  <div key={group.key} className="border rounded-md bg-card overflow-hidden">
+                    {/* Group header */}
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(group.key)}
+                      className="w-full flex items-center gap-2 px-4 py-3 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      )}
+                      <span className="font-semibold text-sm">
+                        {group.clientName ?? "Unassigned"}
+                      </span>
+                      <Badge variant="secondary" className="text-xs font-normal px-1.5 py-0">
+                        {group.projects.length}
+                      </Badge>
+                      {/* Edit client button */}
+                      {group.clientId != null && (
+                        <div
+                          className="ml-auto"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-muted-foreground hover:text-foreground"
+                            onClick={() => openEditClient(group.clientId!, group.clientName!)}
+                          >
+                            <Pencil className="h-3 w-3 mr-1" />
+                            Edit Client
+                          </Button>
+                        </div>
+                      )}
+                    </button>
+                    {/* Projects table */}
+                    {!isCollapsed && (
+                      <Table>
+                        {groupedTableHeaders}
+                        <TableBody>
+                          {group.projects.map((project) => projectRow(project))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* Flat view */}
+        {view === "flat" && (
+          <div className="border rounded-md bg-card">
+            <Table>
+              {flatTableHeaders}
+              <TableBody>
+                {projectsLoading ? (
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={i}>
+                      <TableCell><Skeleton className="h-4 w-4 rounded-full" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[150px]" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[200px]" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[80px]" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-[60px] rounded-full" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[60px]" /></TableCell>
+                      <TableCell><Skeleton className="h-8 w-8" /></TableCell>
+                    </TableRow>
+                  ))
+                ) : filtered.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
+                      No projects found.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filtered.map((project) => (
+                    <TableRow key={project.id} className={!project.active ? "opacity-60" : ""}>
+                      <TableCell>
+                        <div
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: project.color ?? DEFAULT_COLOR }}
+                        />
+                      </TableCell>
+                      <TableCell className="font-medium text-muted-foreground">
+                        {project.clientName || "—"}
+                      </TableCell>
+                      <TableCell className="font-semibold">{project.name}</TableCell>
+                      <TableCell className="text-muted-foreground font-mono text-xs">
+                        {project.code || "—"}
+                      </TableCell>
+                      <TableCell>
+                        {project.active ? (
+                          <Badge variant="default" className="bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 font-normal border-0">
+                            Active
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="font-normal">
+                            Inactive
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {project.roleCount != null ? (
+                          <span>{project.roleCount} {project.roleCount === 1 ? "role" : "roles"}</span>
+                        ) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <ProjectActionsMenu
+                          project={project}
+                          onManageRoles={() => setRolesProject({ id: project.id, name: project.name })}
+                          onEdit={() => openEditProject(project)}
+                          onDelete={() => handleDelete(project.id)}
+                          updatePending={updateProject.isPending}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {/* Roles sheet */}
         <ProjectRolesSheet
           project={rolesProject}
           open={rolesProject != null}
           onClose={() => setRolesProject(null)}
         />
 
+        {/* Edit Project dialog */}
         <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
           <DialogContent>
             <DialogHeader>
@@ -396,13 +707,15 @@ export default function Projects() {
               <form onSubmit={handleEdit} className="space-y-4 pt-4">
                 <div className="space-y-2">
                   <Label htmlFor="edit-clientId">Client</Label>
-                  <Select name="clientId" defaultValue={selectedProject.clientId.toString()}>
+                  <Select name="clientId" defaultValue={selectedProject.clientId?.toString()}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select a client" />
                     </SelectTrigger>
                     <SelectContent>
                       {clients?.map((c) => (
-                        <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
+                        <SelectItem key={c.id} value={c.id.toString()}>
+                          {c.name}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -417,7 +730,13 @@ export default function Projects() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-budgetHours">Budget Hours</Label>
-                  <Input id="edit-budgetHours" name="budgetHours" type="number" step="0.5" defaultValue={selectedProject.budgetHours || ""} />
+                  <Input
+                    id="edit-budgetHours"
+                    name="budgetHours"
+                    type="number"
+                    step="0.5"
+                    defaultValue={selectedProject.budgetHours ?? ""}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Project Color</Label>
@@ -425,22 +744,61 @@ export default function Projects() {
                 </div>
                 <div className="flex items-center space-x-6">
                   <div className="flex items-center space-x-2">
-                    <Switch id="edit-isBillable" name="isBillable" defaultChecked={selectedProject.isBillable} />
+                    <Switch
+                      id="edit-isBillable"
+                      name="isBillable"
+                      defaultChecked={selectedProject.isBillable}
+                    />
                     <Label htmlFor="edit-isBillable">Billable</Label>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <Switch id="edit-active" name="active" defaultChecked={selectedProject.active} />
+                    <Switch
+                      id="edit-active"
+                      name="active"
+                      defaultChecked={selectedProject.active}
+                    />
                     <Label htmlFor="edit-active">Active</Label>
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsEditOpen(false)}>Cancel</Button>
+                  <Button type="button" variant="outline" onClick={() => setIsEditOpen(false)}>
+                    Cancel
+                  </Button>
                   <Button type="submit" disabled={updateProject.isPending}>
                     {updateProject.isPending ? "Saving..." : "Save Changes"}
                   </Button>
                 </DialogFooter>
               </form>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Client inline dialog */}
+        <Dialog open={editClientOpen} onOpenChange={setEditClientOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Client</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleEditClientSave} className="space-y-4 pt-2">
+              <div className="space-y-2">
+                <Label htmlFor="edit-client-name">Client Name</Label>
+                <Input
+                  id="edit-client-name"
+                  value={editClientName}
+                  onChange={(e) => setEditClientName(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setEditClientOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={updateClient.isPending}>
+                  {updateClient.isPending ? "Saving..." : "Save"}
+                </Button>
+              </DialogFooter>
+            </form>
           </DialogContent>
         </Dialog>
       </div>
