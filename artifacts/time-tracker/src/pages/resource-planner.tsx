@@ -1561,9 +1561,8 @@ export default function ResourcePlannerPage() {
                     const line2 = b.projectRoleName
                       ? `${b.projectRoleName} | ${b.hoursPerWeek % 1 === 0 ? b.hoursPerWeek : b.hoursPerWeek.toFixed(1)}h/w`
                       : null;
-                    const showText = bounds.width > 28;
                     const showLine2 = bounds.width >= 90 && line2 !== null;
-                    const charBudget = Math.max(0, Math.floor(bounds.width / 7) - 1);
+                    const charBudget = Math.max(1, Math.floor(bounds.width / 7) - 1);
 
                     return (
                       <Tooltip key={b.id}>
@@ -1580,7 +1579,7 @@ export default function ResourcePlannerPage() {
                             }}
                             onClick={(e) => { e.stopPropagation(); openEditModal(b); }}
                           >
-                            {showText && (
+                            {bounds.width > 12 && (
                               <div className="text-white text-xs font-semibold leading-tight truncate">
                                 {line1.length <= charBudget ? line1 : line1.slice(0, charBudget) + "…"}
                               </div>
