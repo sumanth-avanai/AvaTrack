@@ -1,0 +1,113 @@
+FEATURE: Live budget validation for Resource Planner bookings.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== CONTEXT ===
+Each ProjectRole has:
+- budgetedDays (e.g., 50 days total for "Engineer" role)
+- Multiple employees can be booked on the same role
+- Need to track: Budget vs. Already Planned vs. This Booking
+
+=== PROBLEM ===
+Currently when creating a booking, there's no check whether:
+- The role still has budget available
+- This booking would exceed the budgeted days
+- Other employees already consumed part of the budget
+
+=== SOLUTION: Live calculation in booking modal ===
+
+When user selects Project + Role, calculate and display:
+
+┌─────────────────────────────────────────────┐
+│ Role Budget Status                          │
+├─────────────────────────────────────────────┤
+│ Budgeted:              50 days              │
+│ Already planned:       35 days              │
+│   └── Keshav:          20 days              │
+│   └── Regina:          15 days              │
+│ Available:             15 days              │
+├─────────────────────────────────────────────┤
+│ This booking:          20 days              │
+│ ⚠️ Exceeds budget by:   5 days              │
+└─────────────────────────────────────────────┘
+
+=== CALCULATION LOGIC ===
+
+1. On Project + Role selection:
+   - Fetch budgetedDays from ProjectRole
+   - Fetch all existing ResourceBookings for this ProjectRole
+   - Sum planned days from all bookings (convert hours/week to days)
+   - Calculate: Available = Budgeted - Already Planned
+
+2. On date/allocation change:
+   - Calculate "This booking" days based on:
+     - Date range
+     - Hours/week
+     - Employee's working days, holidays, vacations
+   - Compare: This booking vs. Available
+   - If exceeds: show warning (yellow/red)
+
+3. Sum formula:
+   - Already Planned = SUM of all ResourceBookings for this ProjectRole (excluding current booking if editing)
+   - This Booking = calculated days for current form input
+   - Remaining After = Available - This Booking
+
+=== UI DISPLAY ===
+
+Show budget status box in booking modal, below the form fields:
+
+If OK (within budget):
+┌─────────────────────────────────────────────┐
+│ ✓ Role Budget: 15 of 50 days available      │
+│   This booking: 10 days                     │
+│   Remaining after: 5 days                   │
+└─────────────────────────────────────────────┘
+(Green border or checkmark)
+
+If WARNING (exceeds budget):
+┌─────────────────────────────────────────────┐
+│ ⚠️ Role Budget: 15 of 50 days available     │
+│   This booking: 20 days                     │
+│   Over budget by: 5 days                    │
+└─────────────────────────────────────────────┘
+(Yellow/orange border, warning icon)
+
+If NO BUDGET SET:
+┌─────────────────────────────────────────────┐
+│ ℹ️ No budget defined for this role          │
+└─────────────────────────────────────────────┘
+(Grey, informational)
+
+=== BEHAVIOR ===
+
+- Warning is SOFT – user can still save (overbooking allowed but flagged)
+- Update calculation LIVE as user changes:
+  - Project
+  - Role
+  - Start/End date
+  - Allocation (hours/week)
+- When editing existing booking: exclude current booking from "Already Planned" sum
+
+=== ALSO SHOW IN RESOURCE PLANNER VIEW ===
+
+In the main Resource Planner view, for each booking bar tooltip, add:
+- "Role budget: 35/50 days used"
+
+Optional: In the timeline, show a small indicator if role is overbooked.
+
+=== API ===
+
+May need new endpoint or extend existing:
+GET /api/project-roles/:id/budget-status
+Returns:
+{
+  budgetedDays: 50,
+  plannedDays: 35,
+  availableDays: 15,
+  bookings: [
+    { employeeName: "Keshav", days: 20 },
+    { employeeName: "Regina", days: 15 }
+  ]
+}
+
+Preserve all existing bookings and data.
