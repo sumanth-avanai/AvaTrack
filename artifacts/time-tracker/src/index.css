@@ -210,8 +210,35 @@
   * {
     @apply border-border;
   }
+  html {
+    font-size: 14px;
+    line-height: 1.4;
+  }
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+  h1 { font-size: 1.5rem; }   /* 21px — matches ~24px intent */
+  h2 { font-size: 1.2rem; }   /* ~17px */
+  h3 { font-size: 1rem; }
+}
+
+/* ── Component density overrides ── */
+@layer utilities {
+  /* Dialog: max 480px, tighter internal padding */
+  [data-slot="dialog-content"],
+  [role="dialog"] > div {
+    max-width: 480px !important;
+  }
+
+  /* Dropdown items: 32px rows */
+  [role="menuitem"],
+  [role="option"] {
+    min-height: 32px;
+  }
+
+  /* Select content: cap scrollable height */
+  [data-radix-select-viewport] {
+    max-height: 260px;
   }
 }
 

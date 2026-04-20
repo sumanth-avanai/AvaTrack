@@ -80,7 +80,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <SidebarProvider open={open} onOpenChange={setOpen}>
+    <SidebarProvider
+      open={open}
+      onOpenChange={setOpen}
+      style={{ "--sidebar-width": "200px", "--sidebar-width-icon": "48px" } as React.CSSProperties}
+    >
       <div className="min-h-screen flex w-full bg-muted/20">
         <Sidebar collapsible="icon" className="border-r border-border">
           <SidebarHeader className="h-16 flex items-center justify-between px-3 border-b border-border">
@@ -137,7 +141,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
         </Sidebar>
 
         <main className="flex-1 flex flex-col h-screen overflow-hidden">
-          <div className="flex-1 overflow-y-auto p-6 md:p-8">
+          <div className="flex-1 overflow-y-auto p-5">
             {children}
           </div>
         </main>

@@ -167,28 +167,26 @@ export default function Home() {
 
   return (
     <AdminLayout>
-      <div className="space-y-8 max-w-5xl mx-auto">
+      <div className="space-y-6 max-w-5xl mx-auto">
         {/* Header with date */}
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Home</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              {format(today, "EEEE, MMMM d, yyyy")}
-            </p>
-          </div>
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-foreground">Home</h1>
+          <p className="text-muted-foreground text-xs mt-0.5">
+            {format(today, "EEEE, MMMM d, yyyy")}
+          </p>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {stats.map((s) => (
-            <div key={s.label} className="bg-card border border-border rounded-lg p-4 space-y-2">
-              <div className={`inline-flex items-center justify-center h-8 w-8 rounded-md ${s.bg}`}>
-                <s.icon className={`h-4 w-4 ${s.color}`} />
+            <div key={s.label} className="bg-card border border-border rounded-md p-3 space-y-1.5">
+              <div className={`inline-flex items-center justify-center h-7 w-7 rounded-md ${s.bg}`}>
+                <s.icon className={`h-3.5 w-3.5 ${s.color}`} />
               </div>
               {isLoading ? (
-                <Skeleton className="h-7 w-16" />
+                <Skeleton className="h-6 w-14" />
               ) : (
-                <div className="text-2xl font-bold tabular-nums">{s.value}</div>
+                <div className="text-xl font-bold tabular-nums">{s.value}</div>
               )}
               <div className="text-xs text-muted-foreground leading-tight">{s.label}</div>
             </div>
@@ -197,22 +195,21 @@ export default function Home() {
 
         {/* Quick Actions */}
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">Quick Actions</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Quick Actions</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {actions.map((action) => (
               <button
                 key={action.label}
                 onClick={action.onClick}
-                className="flex items-center gap-4 bg-card border border-border rounded-lg p-4 text-left hover:border-primary/50 hover:shadow-sm transition-all group"
+                className="flex items-center gap-3 bg-card border border-border rounded-md p-3 text-left hover:border-primary/50 hover:shadow-sm transition-all group"
               >
-                <div className="flex-shrink-0 h-10 w-10 rounded-md bg-muted flex items-center justify-center group-hover:bg-primary/10 transition-colors">
-                  <action.icon className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                <div className="flex-shrink-0 h-8 w-8 rounded-md bg-muted flex items-center justify-center group-hover:bg-primary/10 transition-colors">
+                  <action.icon className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm text-foreground">{action.label}</div>
                   <div className="text-xs text-muted-foreground truncate">{action.description}</div>
                 </div>
-                <Plus className="h-4 w-4 text-muted-foreground flex-shrink-0 group-hover:text-primary transition-colors opacity-0 group-hover:opacity-100" />
               </button>
             ))}
           </div>

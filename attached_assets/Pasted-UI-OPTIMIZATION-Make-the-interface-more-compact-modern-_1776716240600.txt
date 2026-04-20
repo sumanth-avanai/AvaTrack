@@ -1,0 +1,138 @@
+UI OPTIMIZATION: Make the interface more compact, modern and sleek.
+
+⚠️ IMPORTANT: Preserve ALL existing data and functionality. No destructive changes.
+
+=== CURRENT PROBLEM ===
+- Everything feels too wide and large
+- Too much whitespace/padding
+- Elements are oversized
+- Doesn't feel modern/sleek
+
+=== GLOBAL CHANGES ===
+
+1. TYPOGRAPHY – smaller, tighter:
+   - Base font size: 14px (not 16px)
+   - Page titles (h1): 24px (not 32px)
+   - Section titles (h2): 18px (not 24px)
+   - Labels: 12px
+   - Line height: 1.4 (tighter)
+
+2. SPACING – reduce padding/margins:
+   - Page padding: 24px (not 40px+)
+   - Card padding: 16px (not 24px)
+   - Between elements: 12px (not 20px)
+   - Section gaps: 24px (not 40px)
+
+3. SIDEBAR:
+   - Width: 200px expanded, 56px collapsed (not 260px+)
+   - Item padding: 8px 12px (not 12px 20px)
+   - Font size: 14px
+   - Icon size: 18px (not 24px)
+
+4. BUTTONS:
+   - Height: 32px default, 28px small (not 40px+)
+   - Padding: 8px 16px
+   - Font size: 13px
+   - Border radius: 6px
+
+5. INPUT FIELDS:
+   - Height: 36px (not 44px+)
+   - Padding: 8px 12px
+   - Font size: 14px
+   - Border radius: 6px
+
+6. TABLES:
+   - Row height: 40px (not 56px+)
+   - Cell padding: 8px 12px
+   - Header: 12px uppercase, grey
+   - Compact but readable
+
+7. CARDS:
+   - Padding: 16px
+   - Border radius: 8px
+   - Subtle shadow or 1px border (not thick shadows)
+   - No excessive margins
+
+8. MODALS:
+   - Max width: 480px for forms (not 600px+)
+   - Padding: 20px
+   - Tighter field spacing: 16px between fields
+
+9. DROPDOWNS:
+   - Item height: 32px (not 44px)
+   - Padding: 8px 12px
+   - Max height: 300px with scroll
+
+=== SPECIFIC PAGES ===
+
+HOME:
+- Quick action cards: 100px x 100px (not 150px+)
+- Grid gap: 16px
+- Alerts/Activity: compact list, 36px row height
+
+RESOURCE PLANNER:
+- Employee rows: 40px height (already improved)
+- Timeline cells: tighter
+- Booking bars: 28px height
+
+TIMESHEET:
+- Cell size: 60px width
+- Row height: 44px
+- Compact week navigation
+
+PROJECTS LIST:
+- Card or row height: 48px
+- Compact project info
+
+EMPLOYEES LIST:
+- Row height: 48px
+- Compact info display
+
+=== COLOR & STYLE ===
+
+- Less heavy borders (use 1px light grey, not 2px)
+- Subtle shadows (0 1px 3px rgba(0,0,0,0.1))
+- More whitespace BETWEEN sections, less INSIDE elements
+- Clean, airy but compact feel
+- Similar to: Linear, Vercel, Notion
+
+=== CSS VARIABLES (suggested) ===
+
+:root {
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-base: 14px;
+  --font-lg: 16px;
+  --font-xl: 18px;
+  --font-2xl: 24px;
+  
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  
+  --sidebar-width: 200px;
+  --sidebar-collapsed: 56px;
+  
+  --input-height: 36px;
+  --button-height: 32px;
+  --row-height: 40px;
+}
+
+=== REFERENCE ===
+
+Aim for the feel of:
+- Linear (linear.app) – compact, clean
+- Vercel Dashboard – minimal, tight
+- Notion – readable but dense
+
+NOT like:
+- Salesforce – bloated
+- Old Bootstrap defaults – oversized
+
+Preserve all existing data and functionality.

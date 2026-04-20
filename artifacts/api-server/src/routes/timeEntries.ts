@@ -183,7 +183,12 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
   for (const item of parsed.data.entries) {
     if (item.hours === 0) continue; // 0-hour = delete existing, always allowed
 
-    const dateStr = String(item.entryDate).slice(0, 10);
+    // zod.coerce.date() turns "YYYY-MM-DD" into a Date object; use toISOString() to get
+    // back the canonical ISO date string rather than the locale-dependent String() output.
+    const dateStr = (item.entryDate instanceof Date
+      ? item.entryDate.toISOString()
+      : String(item.entryDate)
+    ).slice(0, 10);
     const emp = empMap.get(item.employeeId);
     if (!emp) {
       rejections.push({ employeeId: item.employeeId, entryDate: dateStr, reason: "Employee not found" });
@@ -245,6 +250,12 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
     const projectRoleId = rawRoleIds[i] ?? null;
     if (item.hours < 0 || item.hours > 24) continue;
 
+    // Normalize entry date to YYYY-MM-DD string (Zod coerce.date() produces a Date object)
+    const isoDate = (item.entryDate instanceof Date
+      ? item.entryDate.toISOString()
+      : String(item.entryDate)
+    ).slice(0, 10);
+
     // Find existing entry for same employee/project/role/date
     const roleCondition = projectRoleId != null
       ? eq(timeEntriesTable.projectRoleId, projectRoleId)
@@ -258,7 +269,7 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
           eq(timeEntriesTable.employeeId, item.employeeId),
           eq(timeEntriesTable.projectId, item.projectId),
           roleCondition,
-          eq(timeEntriesTable.entryDate, item.entryDate)
+          eq(timeEntriesTable.entryDate, isoDate)
         )
       );
 
@@ -281,7 +292,7 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
           employeeId: item.employeeId,
           projectId: item.projectId,
           projectRoleId,
-          entryDate: item.entryDate,
+          entryDate: isoDate,
           hours: item.hours,
           note: item.note ?? null,
         })

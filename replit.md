@@ -37,6 +37,7 @@ A lightweight internal time-tracking web app for small agencies. Feels like a be
 - **Holidays** — manage holiday calendars (DE-BASE-2026 preloaded)
 - **Vacations** — absence/vacation management per employee (vacation, sick, unpaid leave, other); filterable by employee; correctly deducted from utilization
 - **Reports** — Pivot/flat reporting with 9 date presets, multi-select filters, metric selector, CSV export
+- **Project Roles (T&M)** — Per-project role management (name, day rate €/day, budgeted days, assigned employees); role selection in Timesheet "Add Project" flow; Budget tab with booked vs. budgeted per role; Allocations tab with planned vs. booked per employee per role
 
 ### Employee Personal Links (`/u/:token`)
 - PIN-protected personal URL per employee
@@ -69,7 +70,9 @@ Employee personal link tokens can be found via `/api/employees` or the Employees
 - `employee_vacations` — absence entries (vacation/sick/unpaid_leave/other) per employee with date ranges
 - `holiday_calendars` — calendar registry (DE-BASE-2026 seeded)
 - `holidays` — individual holiday dates per calendar
-- `time_entries` — time entries (employee, project, date, hours, note)
+- `time_entries` — time entries (employee, project, optional `project_role_id`, date, hours, note)
+- `project_roles` — T&M roles per project (name, day_rate, budgeted_days, budgeted_hours)
+- `project_role_assignments` — many-to-many: employee assigned to a project role
 
 ## Architecture
 
@@ -96,6 +99,18 @@ GET    /api/vacations?employeeId=X  — list absence entries (all or filtered by
 POST   /api/vacations               — create entry { employeeId, startDate, endDate, vacationType, note }
 PATCH  /api/vacations/:id           — update entry (partial)
 DELETE /api/vacations/:id           — delete entry
+```
+
+## API Endpoints (project roles — not in OpenAPI spec, called directly)
+
+```
+GET    /api/projects/:id/roles               — list roles for project (enriched with assignedEmployees[])
+POST   /api/projects/:id/roles               — create role { name, dayRate, budgetedDays?, budgetedHours?, assignedEmployeeIds? }
+PUT    /api/project-roles/:id                — update role (partial, replaces assignedEmployeeIds if provided)
+DELETE /api/project-roles/:id               — delete role (cascades assignments + time entry FK to null)
+GET    /api/project-roles/:id/budget-status  — planned days vs. budgeted days from resource bookings
+GET    /api/projects/:id/budget              — booked/planned days per role with totals
+GET    /api/projects/:id/allocations         — per-employee per-role allocation vs. booked summary
 ```
 
 ## Important Notes
