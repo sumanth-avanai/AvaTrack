@@ -145,6 +145,54 @@ function useDeleteBooking() {
   });
 }
 
+function useCreateVacation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: object) => {
+      const res = await fetch("/api/vacations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to create vacation");
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["vacations-all"] }),
+  });
+}
+
+function useUpdateVacation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: object }) => {
+      const res = await fetch(`/api/vacations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error("Failed to update vacation");
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["vacations-all"] }),
+  });
+}
+
+function useDeleteVacation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/vacations/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to delete vacation");
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["vacations-all"] }),
+  });
+}
+
 // ── Date utils ─────────────────────────────────────────────────────────────────
 function getMondayOfWeek(date: Date): Date {
   return startOfWeek(date, { weekStartsOn: 1 });
@@ -796,6 +844,187 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   );
 }
 
+// ── Vacation Dialog ────────────────────────────────────────────────────────────
+type VacationType = "vacation" | "sick" | "unpaid_leave" | "other";
+
+const VACATION_TYPE_LABELS: Record<VacationType, string> = {
+  vacation: "Vacation",
+  sick: "Sick leave",
+  unpaid_leave: "Unpaid leave",
+  other: "Other absence",
+};
+
+interface VacationDialogCreateState {
+  mode: "create";
+  employeeId: number;
+  employeeName: string;
+  defaultStartDate?: string;
+  defaultEndDate?: string;
+}
+
+interface VacationDialogEditState {
+  mode: "edit";
+  vacation: VacationEntry;
+  employeeName: string;
+}
+
+type VacationDialogState = VacationDialogCreateState | VacationDialogEditState;
+
+interface VacationDialogProps {
+  state: VacationDialogState;
+  onClose: () => void;
+}
+
+function VacationDialog({ state, onClose }: VacationDialogProps) {
+  const { toast } = useToast();
+  const createMut = useCreateVacation();
+  const updateMut = useUpdateVacation();
+  const deleteMut = useDeleteVacation();
+
+  const isEdit = state.mode === "edit";
+  const vacation = isEdit ? state.vacation : null;
+
+  const [startDate, setStartDate] = useState(
+    isEdit ? vacation!.startDate : (state as VacationDialogCreateState).defaultStartDate ?? format(new Date(), "yyyy-MM-dd")
+  );
+  const [endDate, setEndDate] = useState(
+    isEdit ? vacation!.endDate : (state as VacationDialogCreateState).defaultEndDate ?? format(new Date(), "yyyy-MM-dd")
+  );
+  const [vacationType, setVacationType] = useState<VacationType>(
+    isEdit ? (vacation!.vacationType as VacationType) : "vacation"
+  );
+  const [note, setNote] = useState(isEdit ? (vacation!.note ?? "") : "");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const employeeId = isEdit ? vacation!.employeeId : (state as VacationDialogCreateState).employeeId;
+  const employeeName = state.employeeName;
+
+  const canSubmit = startDate && endDate && endDate >= startDate;
+
+  async function handleSubmit() {
+    const payload = {
+      employeeId,
+      startDate,
+      endDate,
+      vacationType,
+      note: note.trim() || null,
+    };
+    try {
+      if (isEdit) {
+        await updateMut.mutateAsync({ id: vacation!.id, data: payload });
+        toast({ title: "Absence updated" });
+      } else {
+        await createMut.mutateAsync(payload);
+        toast({ title: "Absence created" });
+      }
+      onClose();
+    } catch {
+      toast({ title: "Error saving absence", variant: "destructive" });
+    }
+  }
+
+  async function handleDelete() {
+    try {
+      await deleteMut.mutateAsync(vacation!.id);
+      toast({ title: "Absence deleted" });
+      onClose();
+    } catch {
+      toast({ title: "Error deleting absence", variant: "destructive" });
+    }
+  }
+
+  const isSaving = createMut.isPending || updateMut.isPending;
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>
+            {isEdit ? "Edit absence" : "Add absence"} — {employeeName}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={vacationType} onValueChange={(v) => setVacationType(v as VacationType)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.entries(VACATION_TYPE_LABELS) as [VacationType, string][]).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="vac-start">Start date</Label>
+              <Input
+                id="vac-start"
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  if (e.target.value > endDate) setEndDate(e.target.value);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="vac-end">End date</Label>
+              <Input
+                id="vac-end"
+                type="date"
+                value={endDate}
+                min={startDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="vac-note">Note <span className="text-muted-foreground text-xs">(optional)</span></Label>
+            <Textarea
+              id="vac-note"
+              rows={2}
+              placeholder="Optional note…"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="flex items-center justify-between pt-2">
+          {isEdit && !confirmDelete && (
+            <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
+              Delete
+            </Button>
+          )}
+          {isEdit && confirmDelete && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Are you sure?</span>
+              <Button variant="destructive" size="sm" onClick={handleDelete} disabled={deleteMut.isPending}>
+                {deleteMut.isPending ? "Deleting…" : "Yes, delete"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+            </div>
+          )}
+          {!confirmDelete && (
+            <div className="flex gap-2 ml-auto">
+              <Button variant="outline" onClick={onClose}>Cancel</Button>
+              <Button onClick={handleSubmit} disabled={!canSubmit || isSaving}>
+                {isSaving ? "Saving…" : isEdit ? "Save changes" : "Add absence"}
+              </Button>
+            </div>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function ResourcePlannerPage() {
   const today = useMemo(() => {
@@ -807,6 +1036,7 @@ export default function ResourcePlannerPage() {
   const [windowStart, setWindowStart] = useState(() => getMondayOfWeek(today));
   const [zoom, setZoom] = useState<ZoomLevel>("month");
   const [modal, setModal] = useState<AnyModalState | null>(null);
+  const [vacationModal, setVacationModal] = useState<VacationDialogState | null>(null);
 
   const cellWidth = CELL_WIDTH[zoom];
   const numWeeks = NUM_WEEKS[zoom];
@@ -880,6 +1110,24 @@ export default function ResourcePlannerPage() {
       capacity: b.weeklyCapacityHours,
       workingDaysMask: Array.isArray(emp?.workingDaysMask) ? emp.workingDaysMask : [1,1,1,1,1,0,0],
       holidayCalendarCode: emp?.holidayCalendarCode ?? null,
+    });
+  }
+
+  function openCreateVacationModal(emp: any, defaultStartDate?: string, defaultEndDate?: string) {
+    setVacationModal({
+      mode: "create",
+      employeeId: emp.id,
+      employeeName: emp.name,
+      defaultStartDate,
+      defaultEndDate,
+    });
+  }
+
+  function openEditVacationModal(v: VacationEntry, empName: string) {
+    setVacationModal({
+      mode: "edit",
+      vacation: v,
+      employeeName: empName,
     });
   }
 
@@ -1160,17 +1408,38 @@ export default function ResourcePlannerPage() {
                     <div className="text-sm font-medium truncate">{emp.name}</div>
                     <div className="text-xs text-muted-foreground">{cap}h/week</div>
                   </div>
-                  <button
-                    onClick={() => openCreateModal(emp)}
-                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors w-fit mt-1"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Booking
-                  </button>
+                  <div className="flex flex-col gap-0.5 mt-1">
+                    <button
+                      onClick={() => openCreateModal(emp)}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors w-fit"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Booking
+                    </button>
+                    <button
+                      onClick={() => openCreateVacationModal(emp)}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-orange-500 transition-colors w-fit"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Absence
+                    </button>
+                  </div>
                 </div>
 
                 {/* Timeline area */}
-                <div className="relative flex-1" style={{ width: contentWidth, minHeight: 64 }}>
+                <div
+                  className="relative flex-1"
+                  style={{ width: contentWidth, minHeight: 64 }}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const offsetX = e.clientX - rect.left;
+                    const dayWidth = cellWidth / 7;
+                    const dayOffset = Math.floor(offsetX / dayWidth);
+                    const clampedOffset = Math.max(0, Math.min(dayOffset, numWeeks * 7 - 1));
+                    const clickedDate = format(addDays(windowStart, clampedOffset), "yyyy-MM-dd");
+                    openCreateVacationModal(emp, clickedDate, clickedDate);
+                  }}
+                >
                   {/* Capacity cells */}
                   <div className="flex h-full absolute inset-0">
                     {weeks.map((w, i) => {
@@ -1202,7 +1471,10 @@ export default function ResourcePlannerPage() {
                       <Tooltip key={`vac-${v.id}`}>
                         <TooltipTrigger asChild>
                           <div
-                            className="absolute pointer-events-auto"
+                            role="button"
+                            tabIndex={0}
+                            aria-label={`Edit ${v.vacationType.replace(/_/g, " ")} for ${emp.name}`}
+                            className="absolute pointer-events-auto cursor-pointer hover:brightness-90 transition-all focus:outline-none focus:ring-2 focus:ring-orange-400"
                             style={{
                               top: 0,
                               bottom: 0,
@@ -1212,6 +1484,8 @@ export default function ResourcePlannerPage() {
                                 "repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(251,146,60,0.22) 4px, rgba(251,146,60,0.22) 8px)",
                               zIndex: 2,
                             }}
+                            onClick={(e) => { e.stopPropagation(); openEditVacationModal(v, emp.name); }}
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openEditVacationModal(v, emp.name); }}
                           />
                         </TooltipTrigger>
                         <TooltipContent side="top" className="text-xs space-y-0.5">
@@ -1225,6 +1499,7 @@ export default function ResourcePlannerPage() {
                           {v.note && (
                             <div className="text-muted-foreground italic">{v.note}</div>
                           )}
+                          <div className="text-muted-foreground text-[10px] pt-0.5">Click to edit</div>
                         </TooltipContent>
                       </Tooltip>
                     );
@@ -1250,6 +1525,7 @@ export default function ResourcePlannerPage() {
                               backgroundColor: "rgba(147,197,253,0.35)",
                               zIndex: 2,
                             }}
+                            onClick={(e) => e.stopPropagation()}
                           />
                         </TooltipTrigger>
                         <TooltipContent side="top" className="text-xs space-y-0.5">
@@ -1290,7 +1566,7 @@ export default function ResourcePlannerPage() {
                               backgroundColor: color,
                               zIndex: 4,
                             }}
-                            onClick={() => openEditModal(b)}
+                            onClick={(e) => { e.stopPropagation(); openEditModal(b); }}
                           >
                             {bounds.width > 40
                               ? barLabel.length <= charBudget
@@ -1349,6 +1625,14 @@ export default function ResourcePlannerPage() {
           allBookings={bookings}
           employees={activeEmployees}
           onClose={() => setModal(null)}
+        />
+      )}
+
+      {/* Vacation dialog */}
+      {vacationModal && (
+        <VacationDialog
+          state={vacationModal}
+          onClose={() => setVacationModal(null)}
         />
       )}
     </div>
