@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   useListHolidayCalendars,
   getListHolidayCalendarsQueryKey,
@@ -19,6 +18,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Plus, Trash2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+
+type SettingsTab = "general" | "holidays";
+
+function GeneralTab() {
+  return (
+    <div className="bg-card border border-border rounded-lg p-6 text-sm text-muted-foreground">
+      General settings will appear here.
+    </div>
+  );
+}
 
 function HolidaysTab() {
   const queryClient = useQueryClient();
@@ -103,17 +113,15 @@ function HolidaysTab() {
             </Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create Holiday Calendar</DialogTitle>
-            </DialogHeader>
+            <DialogHeader><DialogTitle>Create Holiday Calendar</DialogTitle></DialogHeader>
             <form onSubmit={handleCreateCalendar} className="space-y-4 pt-4">
               <div className="space-y-2">
-                <Label htmlFor="name">Calendar Name</Label>
-                <Input id="name" name="name" required placeholder="US Holidays" />
+                <Label htmlFor="cal-name">Calendar Name</Label>
+                <Input id="cal-name" name="name" required placeholder="US Holidays" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="code">Code (Unique)</Label>
-                <Input id="code" name="code" required placeholder="US_2024" />
+                <Label htmlFor="cal-code">Code (Unique)</Label>
+                <Input id="cal-code" name="code" required placeholder="US_2024" />
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setIsCreateCalOpen(false)}>Cancel</Button>
@@ -167,14 +175,10 @@ function HolidaysTab() {
                 </div>
                 <Dialog open={isCreateHolOpen} onOpenChange={setIsCreateHolOpen}>
                   <DialogTrigger asChild>
-                    <Button>
-                      <Plus className="h-4 w-4 mr-2" /> Add Holiday
-                    </Button>
+                    <Button><Plus className="h-4 w-4 mr-2" /> Add Holiday</Button>
                   </DialogTrigger>
                   <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Add Holiday</DialogTitle>
-                    </DialogHeader>
+                    <DialogHeader><DialogTitle>Add Holiday</DialogTitle></DialogHeader>
                     <form onSubmit={handleCreateHoliday} className="space-y-4 pt-4">
                       <div className="space-y-2">
                         <Label htmlFor="hol-name">Holiday Name</Label>
@@ -194,7 +198,6 @@ function HolidaysTab() {
                   </DialogContent>
                 </Dialog>
               </div>
-
               <div className="border rounded-md bg-card">
                 <Table>
                   <TableHeader>
@@ -257,28 +260,47 @@ function HolidaysTab() {
   );
 }
 
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "general",  label: "General" },
+  { id: "holidays", label: "Holidays" },
+];
+
 export default function Settings() {
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+
   return (
     <AdminLayout>
       <div className="space-y-6 max-w-6xl mx-auto">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
 
-        <Tabs defaultValue="holidays">
-          <TabsList>
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="holidays">Holidays</TabsTrigger>
-          </TabsList>
+        <div className="flex gap-8">
+          {/* Left nav */}
+          <nav className="w-44 shrink-0">
+            <ul className="space-y-1">
+              {SETTINGS_TABS.map((tab) => (
+                <li key={tab.id}>
+                  <button
+                    onClick={() => setActiveTab(tab.id)}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-md text-sm transition-colors",
+                      activeTab === tab.id
+                        ? "bg-primary text-primary-foreground font-medium"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </nav>
 
-          <TabsContent value="general" className="mt-6">
-            <div className="bg-card border border-border rounded-lg p-6 text-sm text-muted-foreground">
-              General settings will appear here.
-            </div>
-          </TabsContent>
-
-          <TabsContent value="holidays" className="mt-6">
-            <HolidaysTab />
-          </TabsContent>
-        </Tabs>
+          {/* Right content panel */}
+          <div className="flex-1 min-w-0">
+            {activeTab === "general" && <GeneralTab />}
+            {activeTab === "holidays" && <HolidaysTab />}
+          </div>
+        </div>
       </div>
     </AdminLayout>
   );

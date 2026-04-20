@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import {
   Sidebar,
@@ -20,25 +21,45 @@ import {
   Settings,
   LogOut,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useSetUnauthenticated } from "@/hooks/use-app-auth";
 import { useDirtyGuard } from "@/contexts/dirty-guard";
 
+const LS_KEY = "sidebar_open";
+
 const navItems = [
-  { title: "Home",            href: "/home",            icon: Home },
-  { title: "Timesheet",       href: "/timesheet",       icon: Clock },
-  { title: "Resource Planner",href: "/resource-planner",icon: CalendarRange },
-  { title: "Projects",        href: "/projects",        icon: FolderKanban },
-  { title: "Employees",       href: "/employees",       icon: Users },
-  { title: "Reports",         href: "/reports",         icon: BarChart3 },
+  { title: "Home",             href: "/home",             icon: Home },
+  { title: "Timesheet",        href: "/timesheet",        icon: Clock },
+  { title: "Resource Planner", href: "/resource-planner", icon: CalendarRange },
+  { title: "Projects",         href: "/projects",         icon: FolderKanban },
+  { title: "Employees",        href: "/employees",        icon: Users },
+  { title: "Reports",          href: "/reports",          icon: BarChart3 },
 ];
+
+function readStorage(): boolean {
+  try {
+    const v = localStorage.getItem(LS_KEY);
+    return v === null ? true : v === "true";
+  } catch {
+    return true;
+  }
+}
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const [location, navigate] = useLocation();
   const { guardNavigate } = useDirtyGuard();
   const { toast } = useToast();
   const setUnauthenticated = useSetUnauthenticated();
+
+  const [open, setOpenState] = useState<boolean>(readStorage);
+
+  const setOpen = useCallback((value: boolean | ((v: boolean) => boolean)) => {
+    setOpenState((prev) => {
+      const next = typeof value === "function" ? value(prev) : value;
+      try { localStorage.setItem(LS_KEY, String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   async function handleLogout() {
     try {
@@ -52,14 +73,14 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   }
 
   function isActive(href: string) {
-    if (href === "/home") return location === "/home" || location === "/" || location === "/dashboard";
+    if (href === "/home")      return location === "/home" || location === "/" || location === "/dashboard";
     if (href === "/employees") return location.startsWith("/employees");
     if (href === "/projects")  return location.startsWith("/projects") || location.startsWith("/clients");
     return location.startsWith(href);
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider open={open} onOpenChange={setOpen}>
       <div className="min-h-screen flex w-full bg-muted/20">
         <Sidebar collapsible="icon" className="border-r border-border">
           <SidebarHeader className="h-16 flex items-center justify-between px-3 border-b border-border">
@@ -89,7 +110,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             </SidebarMenu>
           </SidebarContent>
 
-          <SidebarFooter className="p-2 border-t border-border space-y-1">
+          <SidebarFooter className="p-2 border-t border-border">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton

@@ -5,7 +5,6 @@ import {
   useListEmployees,
   useListHolidayCalendars,
   getListHolidayCalendarsQueryKey,
-  useUpdateEmployee,
   getListEmployeesQueryKey,
 } from "@workspace/api-client-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -18,7 +17,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
 import { Plus, Pencil, Trash2, ArrowLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -186,8 +184,8 @@ export default function EmployeeDetail() {
   }
 
   const calendarName = useMemo(() => {
-    if (!employee || !(employee as any).holidayCalendarCode) return "—";
-    return calendars?.find((c) => c.code === (employee as any).holidayCalendarCode)?.name ?? (employee as any).holidayCalendarCode;
+    if (!employee || !employee.holidayCalendarCode) return "—";
+    return calendars?.find((c) => c.code === employee.holidayCalendarCode)?.name ?? employee.holidayCalendarCode;
   }, [employee, calendars]);
 
   if (!empLoading && !employee) {
@@ -247,8 +245,8 @@ export default function EmployeeDetail() {
                 {[
                   { label: "Weekly Capacity", value: `${employee.weeklyCapacityHours}h / week` },
                   { label: "Holiday Calendar", value: calendarName },
-                  { label: "Contract Start", value: (employee as any).contractStartDate || "—" },
-                  { label: "Contract End", value: (employee as any).contractEndDate || "—" },
+                  { label: "Contract Start", value: employee.contractStartDate || "—" },
+                  { label: "Contract End", value: employee.contractEndDate || "—" },
                   { label: "Status", value: employee.active ? "Active" : "Inactive" },
                 ].map((item) => (
                   <div key={item.label} className="bg-card border border-border rounded-lg p-4">

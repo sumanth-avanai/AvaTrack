@@ -15,7 +15,6 @@ import Settings from "@/pages/settings";
 import Reports from "@/pages/reports";
 import Timesheet from "@/pages/timesheet";
 import EmployeePortal from "@/pages/employee-portal";
-import Vacations from "@/pages/vacations";
 import Login from "@/pages/login";
 import ResourcePlanner from "@/pages/resource-planner";
 import { useAppAuth } from "@/hooks/use-app-auth";
@@ -66,7 +65,7 @@ function Router() {
       <Route path="/employees"><AuthGuard><Employees /></AuthGuard></Route>
       <Route path="/reports"><AuthGuard><Reports /></AuthGuard></Route>
       <Route path="/settings"><AuthGuard><Settings /></AuthGuard></Route>
-      <Route path="/vacations"><AuthGuard><Vacations /></AuthGuard></Route>
+      <Route path="/vacations"><Redirect to="/employees" /></Route>
 
       <Route path="/u/:token"><AuthGuard><EmployeePortal /></AuthGuard></Route>
       <Route component={NotFound} />
