@@ -1,0 +1,83 @@
+BUG FIX + FEATURE: Resource Planner booking modal improvements.
+
+⚠️ IMPORTANT: Preserve ALL existing data in the database. No destructive migrations. No data loss. Only additive changes.
+
+=== BUG FIX: Modal overflow ===
+
+Current behavior:
+- Role dropdown and other fields extend beyond the modal boundaries
+- Modal doesn't contain its content properly
+
+Required fix:
+- Modal should have proper width and contain all fields
+- Long text (e.g., role names) should truncate with "..." and show full text on hover (tooltip)
+- All input fields should respect modal padding
+- Dropdowns should fit within modal width
+
+CSS fixes needed:
+- Modal: max-width, padding, overflow: hidden
+- Dropdowns/inputs: width: 100%, text-overflow: ellipsis
+- Long text: white-space: nowrap, overflow: hidden
+
+=== FEATURE 1: Show booking summary ===
+
+Below the form fields, show a live-calculated summary box:
+
+Example:
+┌─────────────────────────────────────┐
+│ Booking summary                     │
+│ Working days in period:  45 days    │
+│ Holidays:                - 3 days   │
+│ Vacations:               - 5 days   │
+│ ─────────────────────────────────── │
+│ Bookable days:           37 days    │
+│                                     │
+│ Role budget total:       50 days    │
+│ Already planned:         20 days    │
+│ Remaining:               30 days    │
+└─────────────────────────────────────┘
+
+Calculation must consider:
+- Employee's working days (e.g., Mo-Fr)
+- Employee's holidays (from holiday calendar)
+- Employee's vacations/absences
+- Start and end date of booking
+
+Update this summary live as user changes dates or allocation.
+
+=== FEATURE 2: Input mode "Total Days" ===
+
+Add alternative input option for allocation:
+
+Current: User enters "8 hours/week" + start date + end date
+
+New option: User can enter "Total days" (e.g., 50 days) + start date
+→ System auto-calculates end date based on:
+  - Employee's working days
+  - Minus holidays
+  - Minus vacations
+  - Allocation rate (hours/week)
+
+UI:
+- Add toggle or dropdown: "Calculate by: [End date | Total days]"
+- If "Total days" selected:
+  - Hide end date field
+  - Show "Total days" input field
+  - Show calculated end date as read-only text: "End date: ~15.07.2026"
+
+Example:
+- Start: 20.04.2026
+- Total days: 50
+- Allocation: 8h/week (= 1 day/week)
+- Employee works Mo-Fr, has 3 holidays, 5 vacation days in period
+→ Calculated end date: ~15.07.2026 (50 working weeks from start)
+
+=== DATA SAFETY ===
+
+- Do NOT delete or modify existing ResourceBooking records
+- Do NOT alter existing database columns
+- Only ADD new UI logic and calculations
+- Existing bookings must continue to display and work correctly
+- Test that all existing bookings still load after changes
+
+Preserve all existing bookings and data.
