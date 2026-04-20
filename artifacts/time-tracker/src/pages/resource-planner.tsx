@@ -387,10 +387,26 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   // ── Total Days mode: compute end date ───────────────────────────────────────
   const computedEndDate = useMemo(() => {
     if (calcMode !== "totalDays" || !startDate || !totalDaysValue) return null;
-    const target = Math.round(parseFloat(totalDaysValue));
+    const target = parseFloat(totalDaysValue);
     if (isNaN(target) || target <= 0) return null;
-    return addBookableDays(parseISO(startDate), target, workingDaysMask, holidayDates, vacations);
-  }, [calcMode, startDate, totalDaysValue, workingDaysMask, holidayDates, vacations]);
+
+    // Derive hours-per-week from current allocation inputs (hoursPerWeek is declared later)
+    const allocVal = parseFloat(allocValue);
+    if (isNaN(allocVal) || allocVal <= 0) return null;
+    const hpw = computeHoursPerWeek(allocVal, allocUnit, capacity);
+    if (hpw <= 0) return null;
+
+    // Convert project days → calendar working days
+    // daysPerWeek = hpw / 8  (1 day = 8 h)
+    // normalWorkingDays = number of working days in the employee's week mask
+    // calendarWorkingDays = target * normalWorkingDays / daysPerWeek
+    //   e.g. 50 project days at 1 day/week (5-day mask) → 50 * 5 / 1 = 250 working days ≈ 50 weeks
+    const daysPerWeek = hpw / 8;
+    const normalWorkingDays = workingDaysMask.reduce((a: number, b: number) => a + b, 0) || 5;
+    const calendarWorkingDays = Math.round(target * normalWorkingDays / daysPerWeek);
+
+    return addBookableDays(parseISO(startDate), calendarWorkingDays, workingDaysMask, holidayDates, vacations);
+  }, [calcMode, startDate, totalDaysValue, allocValue, allocUnit, capacity, workingDaysMask, holidayDates, vacations]);
 
   const effectiveEndDate = calcMode === "totalDays"
     ? (computedEndDate ? format(computedEndDate, "yyyy-MM-dd") : "")
@@ -595,7 +611,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                 <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label>Total bookable days</Label>
+                <Label>Total days</Label>
                 <Input
                   type="number"
                   min={1}
@@ -605,13 +621,19 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                   onChange={(e) => setTotalDaysValue(e.target.value)}
                 />
               </div>
-              {computedEndDate && (
-                <p className="text-sm text-muted-foreground">
-                  Estimated end date:{" "}
-                  <span className="font-medium text-foreground">
-                    {format(computedEndDate, "d. MMM yyyy")}
-                  </span>
-                </p>
+              {totalDaysValue && parseFloat(totalDaysValue) > 0 && (
+                computedEndDate ? (
+                  <p className="text-sm text-muted-foreground">
+                    Estimated end date:{" "}
+                    <span className="font-medium text-foreground">
+                      {format(computedEndDate, "d. MMM yyyy")}
+                    </span>
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Set the allocation below to compute the end date.
+                  </p>
+                )
               )}
             </div>
           )}
