@@ -1,0 +1,54 @@
+STRICT UI CHANGES: Resource Planner – implement ALL of the following exactly.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== 1. EMPLOYEE ROWS – MAKE COMPACT ===
+CURRENT PROBLEM: Each row has 4 lines (Name, 40h/week, + Booking, + Absence) = too tall
+
+EXACT CHANGE:
+- Row height: MAX 40px
+- Show ONLY employee name
+- REMOVE "40h/week" text completely
+- REMOVE "+ Booking" text – replace with small [+] icon button on hover only
+- REMOVE "+ Absence" text – add to [+] dropdown if needed
+- Employee capacity (40h/week) should only show in tooltip on hover
+
+=== 2. REMOVE UTILIZATION BACKGROUND COLORS ===
+CURRENT PROBLEM: Green/Yellow colored backgrounds behind rows still visible
+
+EXACT CHANGE:
+- DELETE the green (#e6f4ea) background coloring on rows
+- DELETE the yellow (#fff3cd) background coloring on rows
+- DELETE the entire legend row "<80% | 80-100% | >100% overbooked | Vacation/absence | Public holiday | Today"
+- All rows should have WHITE or transparent background
+- ONLY the booking bars should have color
+
+=== 3. BOOKING BAR CONTENT ===
+CURRENT PROBLEM: Shows "Project – Role" but no Client name, no allocation info
+
+EXACT CHANGE:
+Bar should show (if space allows):
+Line 1 (bold): "CLIENT – Project"  (e.g., "Bayer – n8n extention")
+Line 2 (smaller, grey): "Role | 8h/w"  (e.g., "Engineering Manager | 8h/w")
+
+If bar is narrow, show only: "CLIENT – Project"
+
+The word after the dash is currently the project name "n8n extention" – ADD the client name BEFORE it.
+
+Example:
+WRONG: "n8n extention – n8n Engineering Manager"
+CORRECT: "Bayer – n8n extention" (line 1) + "Engineering Manager | 8h/w" (line 2)
+
+=== 4. VERIFY THESE WERE DONE ===
+After changes, confirm:
+- [ ] Employee rows are ~40px tall, single line
+- [ ] No "40h/week" text visible
+- [ ] No "+ Booking" / "+ Absence" text visible (only icon on hover)
+- [ ] No green/yellow background colors anywhere
+- [ ] No utilization legend visible
+- [ ] Booking bars show "Client – Project" on first line
+- [ ] Booking bars show "Role | hours/week" on second line (smaller)
+
+Do NOT skip any of these changes. Implement ALL of them.
+
+Preserve all existing bookings and data.
