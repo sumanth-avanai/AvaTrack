@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   useQuery,
@@ -40,6 +40,12 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { CalendarRange, ChevronLeft, ChevronRight, Plus, AlertTriangle, X, ArrowUpDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   useListEmployees,
   getListEmployeesQueryKey,
@@ -86,7 +92,7 @@ const CELL_WIDTH: Record<ZoomLevel, number> = { month: 80, quarter: 50, year: 18
 const NUM_WEEKS: Record<ZoomLevel, number> = { month: 13, quarter: 26, year: 52 };
 const NAV_WEEKS: Record<ZoomLevel, number> = { month: 4, quarter: 13, year: 26 };
 const EMPLOYEE_COL = 200;
-const ROW_HEIGHT = 44;
+const ROW_HEIGHT = 40;
 
 // ── API hooks ──────────────────────────────────────────────────────────────────
 function useResourceBookings() {
@@ -1084,18 +1090,6 @@ export default function ResourcePlannerPage() {
     return map;
   }, [bookings]);
 
-  const getWeekUsage = useCallback(
-    (employeeId: number, weekStart: Date): number => {
-      const weekEnd = addDays(weekStart, 7);
-      return (bookingsByEmployee[employeeId] ?? []).reduce((sum, b) => {
-        const bs = parseISO(b.startDate);
-        const be = addDays(parseISO(b.endDate), 1);
-        return bs < weekEnd && be > weekStart ? sum + b.hoursPerWeek : sum;
-      }, 0);
-    },
-    [bookingsByEmployee]
-  );
-
   function openCreateModal(emp: typeof employees[number]) {
     const e = emp as any;
     setModal({
@@ -1342,41 +1336,6 @@ export default function ResourcePlannerPage() {
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 px-6 py-2 border-b border-border text-xs text-muted-foreground shrink-0 flex-wrap">
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-green-200 dark:bg-green-900/50 border border-green-300" />
-          <span>&lt;80%</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-yellow-200 dark:bg-yellow-900/50 border border-yellow-300" />
-          <span>80–100%</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm bg-red-200 dark:bg-red-900/50 border border-red-300" />
-          <span>&gt;100% overbooked</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div
-            className="w-3 h-3 rounded-sm border border-orange-300"
-            style={{
-              background:
-                "repeating-linear-gradient(-45deg, transparent, transparent 3px, rgba(251,146,60,0.5) 3px, rgba(251,146,60,0.5) 6px)",
-            }}
-          />
-          <span>Vacation / absence</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-3 h-3 rounded-sm border border-blue-300 bg-blue-200/60" />
-          <span>Public holiday</span>
-        </div>
-        {todayInRange && (
-          <div className="flex items-center gap-1.5">
-            <div className="w-px h-3 bg-red-500" />
-            <span>Today</span>
-          </div>
-        )}
-      </div>
 
       {/* Planner grid */}
       <div className="flex-1 overflow-auto relative">
@@ -1457,39 +1416,39 @@ export default function ResourcePlannerPage() {
               <div
                 key={emp.id}
                 className="flex border-b border-border group"
-                style={{ minHeight: 64 }}
+                style={{ minHeight: ROW_HEIGHT }}
               >
                 {/* Employee info — sticky left */}
                 <div
-                  className="sticky left-0 z-10 bg-card border-r border-border shrink-0 flex flex-col justify-between px-4 py-2"
-                  style={{ width: EMPLOYEE_COL }}
+                  className="sticky left-0 z-10 bg-card border-r border-border shrink-0 flex items-center gap-1 px-3"
+                  style={{ width: EMPLOYEE_COL, height: ROW_HEIGHT }}
                 >
-                  <div>
-                    <div className="text-sm font-medium truncate">{emp.name}</div>
-                    <div className="text-xs text-muted-foreground">{cap}h/week</div>
-                  </div>
-                  <div className="flex flex-col gap-0.5 mt-1">
-                    <button
-                      onClick={() => openCreateModal(emp)}
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors w-fit"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Booking
-                    </button>
-                    <button
-                      onClick={() => openCreateVacationModal(emp)}
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-orange-500 transition-colors w-fit"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Absence
-                    </button>
-                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="text-sm font-medium truncate flex-1 min-w-0 cursor-default">{emp.name}</div>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="text-xs">{cap}h/week capacity</TooltipContent>
+                  </Tooltip>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 rounded p-0.5 hover:bg-muted"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" side="bottom" className="min-w-[120px]">
+                      <DropdownMenuItem onSelect={() => openCreateModal(emp)}>Booking</DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => openCreateVacationModal(emp)}>Absence</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
 
                 {/* Timeline area */}
                 <div
                   className="relative flex-1"
-                  style={{ width: contentWidth, minHeight: 64 }}
+                  style={{ width: contentWidth, minHeight: ROW_HEIGHT }}
                   onClick={(e) => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const offsetX = e.clientX - rect.left;
@@ -1502,25 +1461,13 @@ export default function ResourcePlannerPage() {
                 >
                   {/* Capacity cells */}
                   <div className="flex h-full absolute inset-0">
-                    {weeks.map((w, i) => {
-                      const used = getWeekUsage(emp.id, w);
-                      const pct = cap > 0 ? used / cap : 0;
-                      const bg =
-                        pct > 1
-                          ? "bg-red-100 dark:bg-red-950/40"
-                          : pct >= 0.8
-                          ? "bg-yellow-100 dark:bg-yellow-950/30"
-                          : pct > 0
-                          ? "bg-green-100 dark:bg-green-950/20"
-                          : "";
-                      return (
-                        <div
-                          key={i}
-                          className={`shrink-0 border-r border-border/30 last:border-r-0 ${bg}`}
-                          style={{ width: cellWidth, height: "100%" }}
-                        />
-                      );
-                    })}
+                    {weeks.map((_w, i) => (
+                      <div
+                        key={i}
+                        className="shrink-0 border-r border-border/30 last:border-r-0"
+                        style={{ width: cellWidth, height: "100%" }}
+                      />
+                    ))}
                   </div>
 
                   {/* Vacation bands */}
@@ -1608,19 +1555,24 @@ export default function ResourcePlannerPage() {
                     if (!bounds) return null;
                     const color = resolveProjectColor(b.projectId, b.projectColor);
 
-                    const barLabel = b.projectRoleName
-                      ? `${b.projectName} – ${b.projectRoleName}`
+                    const line1 = b.clientName
+                      ? `${b.clientName} – ${b.projectName}`
                       : b.projectName;
-                    const charBudget = Math.floor(bounds.width / 7);
+                    const line2 = b.projectRoleName
+                      ? `${b.projectRoleName} | ${b.hoursPerWeek % 1 === 0 ? b.hoursPerWeek : b.hoursPerWeek.toFixed(1)}h/w`
+                      : null;
+                    const showText = bounds.width > 28;
+                    const showLine2 = bounds.width >= 90 && line2 !== null;
+                    const charBudget = Math.max(0, Math.floor(bounds.width / 7) - 1);
 
                     return (
                       <Tooltip key={b.id}>
                         <TooltipTrigger asChild>
                           <div
-                            className="absolute cursor-pointer rounded-md flex items-center px-2 text-white text-xs font-medium overflow-hidden shadow-sm hover:brightness-90 transition-all"
+                            className="absolute cursor-pointer rounded-md flex flex-col justify-center px-2 overflow-hidden shadow-sm hover:brightness-90 transition-all"
                             style={{
-                              top: 8,
-                              height: 40,
+                              top: 4,
+                              height: 32,
                               left: bounds.left,
                               width: bounds.width,
                               backgroundColor: color,
@@ -1628,11 +1580,16 @@ export default function ResourcePlannerPage() {
                             }}
                             onClick={(e) => { e.stopPropagation(); openEditModal(b); }}
                           >
-                            {bounds.width > 40
-                              ? barLabel.length <= charBudget
-                                ? barLabel
-                                : barLabel.slice(0, charBudget - 1) + "…"
-                              : ""}
+                            {showText && (
+                              <div className="text-white text-xs font-semibold leading-tight truncate">
+                                {line1.length <= charBudget ? line1 : line1.slice(0, charBudget) + "…"}
+                              </div>
+                            )}
+                            {showLine2 && (
+                              <div className="text-white/75 text-[10px] leading-tight truncate">
+                                {line2}
+                              </div>
+                            )}
                           </div>
                         </TooltipTrigger>
                         <TooltipContent side="top" className="text-xs space-y-0.5 max-w-[240px]">
