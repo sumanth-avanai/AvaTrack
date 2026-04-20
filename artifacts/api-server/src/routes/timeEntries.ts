@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, inArray, isNull } from "drizzle-orm";
 import {
   db,
   timeEntriesTable,
@@ -9,6 +9,7 @@ import {
   holidayCalendarsTable,
   holidaysTable,
   employeeVacationsTable,
+  projectRolesTable,
 } from "@workspace/db";
 import {
   ListTimeEntriesQueryParams,
@@ -38,13 +39,27 @@ async function enrichEntries(entries: (typeof timeEntriesTable.$inferSelect)[]) 
 
   const projectMap = new Map(projects.map((p) => [p.id, p]));
 
+  // Enrich role names if any entries have projectRoleId
+  const roleIds = [...new Set(entries.map((e) => e.projectRoleId).filter((id): id is number => id != null))];
+  const roleMap = new Map<number, { name: string; dayRate: number }>();
+  if (roleIds.length > 0) {
+    const roles = await db
+      .select({ id: projectRolesTable.id, name: projectRolesTable.name, dayRate: projectRolesTable.dayRate })
+      .from(projectRolesTable)
+      .where(inArray(projectRolesTable.id, roleIds));
+    for (const r of roles) roleMap.set(r.id, { name: r.name, dayRate: r.dayRate });
+  }
+
   return entries.map((e) => {
     const project = projectMap.get(e.projectId);
+    const role = e.projectRoleId != null ? roleMap.get(e.projectRoleId) : undefined;
     return {
       ...e,
       projectName: project?.name ?? null,
       clientName: project?.clientName ?? null,
       isBillable: project?.isBillable ?? null,
+      roleName: role?.name ?? null,
+      roleDayRate: role?.dayRate ?? null,
     };
   });
 }
@@ -88,11 +103,17 @@ router.post("/time-entries", async (req, res): Promise<void> => {
     return;
   }
 
+  const projectRoleId =
+    typeof (req.body as Record<string, unknown>).projectRoleId === "number"
+      ? ((req.body as Record<string, unknown>).projectRoleId as number)
+      : null;
+
   const [entry] = await db
     .insert(timeEntriesTable)
     .values({
       employeeId: parsed.data.employeeId,
       projectId: parsed.data.projectId,
+      projectRoleId,
       entryDate: parsed.data.entryDate,
       hours: parsed.data.hours,
       note: parsed.data.note ?? null,
@@ -208,12 +229,27 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
   }
   // ── End validation ─────────────────────────────────────────────────────────
 
+  // Extract raw projectRoleId values from the un-validated body entries (nullable integers)
+  const rawEntries: unknown[] = Array.isArray((req.body as Record<string, unknown>).entries)
+    ? ((req.body as Record<string, unknown>).entries as unknown[])
+    : [];
+  const rawRoleIds: (number | null)[] = rawEntries.map((e) => {
+    const rid = (e as Record<string, unknown>).projectRoleId;
+    return typeof rid === "number" ? rid : null;
+  });
+
   const results: (typeof timeEntriesTable.$inferSelect)[] = [];
 
-  for (const item of parsed.data.entries) {
+  for (let i = 0; i < parsed.data.entries.length; i++) {
+    const item = parsed.data.entries[i];
+    const projectRoleId = rawRoleIds[i] ?? null;
     if (item.hours < 0 || item.hours > 24) continue;
 
-    // Find existing entry for same employee/project/date
+    // Find existing entry for same employee/project/role/date
+    const roleCondition = projectRoleId != null
+      ? eq(timeEntriesTable.projectRoleId, projectRoleId)
+      : isNull(timeEntriesTable.projectRoleId);
+
     const [existing] = await db
       .select()
       .from(timeEntriesTable)
@@ -221,6 +257,7 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
         and(
           eq(timeEntriesTable.employeeId, item.employeeId),
           eq(timeEntriesTable.projectId, item.projectId),
+          roleCondition,
           eq(timeEntriesTable.entryDate, item.entryDate)
         )
       );
@@ -243,6 +280,7 @@ router.post("/time-entries/bulk", async (req, res): Promise<void> => {
         .values({
           employeeId: item.employeeId,
           projectId: item.projectId,
+          projectRoleId,
           entryDate: item.entryDate,
           hours: item.hours,
           note: item.note ?? null,

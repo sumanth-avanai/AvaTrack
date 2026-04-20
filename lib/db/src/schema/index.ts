@@ -6,3 +6,5 @@ export * from "./timeEntries";
 export * from "./vacations";
 export * from "./savedReports";
 export * from "./resourceBookings";
+export * from "./projectRoles";
+export * from "./projectRoleAssignments";

@@ -3,11 +3,13 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { employeesTable } from "./employees";
 import { projectsTable } from "./projects";
+import { projectRolesTable } from "./projectRoles";
 
 export const timeEntriesTable = pgTable("time_entries", {
   id: serial("id").primaryKey(),
   employeeId: integer("employee_id").notNull().references(() => employeesTable.id),
   projectId: integer("project_id").notNull().references(() => projectsTable.id),
+  projectRoleId: integer("project_role_id").references(() => projectRolesTable.id, { onDelete: "set null" }),
   entryDate: date("entry_date").notNull(),
   hours: real("hours").notNull(),
   note: text("note"),

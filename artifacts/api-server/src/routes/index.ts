@@ -13,6 +13,7 @@ import authRouter from "./auth";
 import appAuthRouter from "./app-auth";
 import savedReportsRouter from "./savedReports";
 import resourceBookingsRouter from "./resourceBookings";
+import projectRolesRouter from "./projectRoles";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(authRouter);
 router.use(appAuthRouter);
 router.use(savedReportsRouter);
 router.use(resourceBookingsRouter);
+router.use(projectRolesRouter);
 
 export default router;

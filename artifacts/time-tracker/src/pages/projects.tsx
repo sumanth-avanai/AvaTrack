@@ -38,7 +38,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Plus, MoreHorizontal, Pencil, Trash2, Layers } from "lucide-react";
+import { ProjectRolesSheet } from "@/components/projects/project-roles-sheet";
 import { 
   DropdownMenu,
   DropdownMenuContent,
@@ -109,6 +110,7 @@ export default function Projects() {
   const [selectedProject, setSelectedProject] = useState<any>(null);
   const [createColor, setCreateColor] = useState(DEFAULT_COLOR);
   const [editColor, setEditColor] = useState(DEFAULT_COLOR);
+  const [rolesProject, setRolesProject] = useState<{ id: number; name: string } | null>(null);
 
   const { data: projects, isLoading: projectsLoading } = useListProjects(
     { includeInactive: true },
@@ -346,6 +348,12 @@ export default function Projects() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => setRolesProject({ id: project.id, name: project.name })}
+                          >
+                            <Layers className="mr-2 h-4 w-4" />
+                            Manage Roles
+                          </DropdownMenuItem>
                           <DropdownMenuItem 
                             onClick={() => {
                               setSelectedProject(project);
@@ -372,6 +380,12 @@ export default function Projects() {
             </TableBody>
           </Table>
         </div>
+
+        <ProjectRolesSheet
+          project={rolesProject}
+          open={rolesProject != null}
+          onClose={() => setRolesProject(null)}
+        />
 
         <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
           <DialogContent>
