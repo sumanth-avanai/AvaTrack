@@ -194,10 +194,12 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
 
   for (const b of roleBookings) {
     if (excludeBookingId != null && b.id === excludeBookingId) continue;
-    // Calculate planned days: (duration in days incl.) / 7 weeks * hoursPerWeek / 8h per day
-    const durationDays =
+    // Use same whole-week ceiling formula as the frontend totalWeeks() function:
+    //   weeks = Math.ceil((inclusiveDays) / 7), then days = weeks * hoursPerWeek / 8
+    const inclusiveDays =
       (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
-    const days = (durationDays / 7) * (b.hoursPerWeek / 8);
+    const weeks = Math.ceil(inclusiveDays / 7);
+    const days = weeks * (b.hoursPerWeek / 8);
 
     totalPlannedDays += days;
 
