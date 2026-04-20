@@ -255,12 +255,14 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
     )
     .groupBy(timeEntriesTable.projectRoleId);
 
-  // Sum planned hours per role from resource_bookings
-  // Planned hours = hoursPerWeek * number_of_weeks overlapping booking
-  const plannedRows = await db
+  // Fetch individual bookings to compute planned days using duration-weighted formula:
+  // plannedDays = sum over bookings of (ceil(inclusiveDays/7) * hoursPerWeek / 8)
+  const plannedBookings = await db
     .select({
       projectRoleId: resourceBookingsTable.projectRoleId,
-      totalHours: sql<number>`COALESCE(SUM(${resourceBookingsTable.hoursPerWeek}), 0)`,
+      startDate: resourceBookingsTable.startDate,
+      endDate: resourceBookingsTable.endDate,
+      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
     })
     .from(resourceBookingsTable)
     .where(
@@ -268,11 +270,20 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
         eq(resourceBookingsTable.projectId, projectId),
         sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
       )
-    )
-    .groupBy(resourceBookingsTable.projectRoleId);
+    );
 
   const bookedMap = new Map<number, number>(bookedRows.map((r) => [r.projectRoleId!, r.totalHours]));
-  const plannedMap = new Map<number, number>(plannedRows.map((r) => [r.projectRoleId!, r.totalHours]));
+
+  // Compute planned hours per role using the same whole-week ceiling formula as budget-status
+  const plannedMap = new Map<number, number>();
+  for (const b of plannedBookings) {
+    if (b.projectRoleId == null) continue;
+    const inclusiveDays =
+      (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
+    const weeks = Math.ceil(inclusiveDays / 7);
+    const hours = weeks * b.hoursPerWeek;
+    plannedMap.set(b.projectRoleId, (plannedMap.get(b.projectRoleId) ?? 0) + hours);
+  }
 
   let totalBudgetedDays = 0;
   let totalBudgetedHours = 0;
@@ -283,8 +294,9 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
   const rolesWithBudget = roles.map((role) => {
     const bookedHours = bookedMap.get(role.id) ?? 0;
     const bookedDays = bookedHours / 8;
-    const plannedHours = plannedMap.get(role.id) ?? 0;
-    const plannedDays = plannedHours / 8;
+    const plannedHoursRaw = plannedMap.get(role.id) ?? 0;
+    const plannedDays = Math.round((plannedHoursRaw / 8) * 10) / 10;
+    const plannedHours = Math.round(plannedHoursRaw * 10) / 10;
     const budgetedDays = role.budgetedDays ?? null;
     const budgetedHours = role.budgetedHours ?? (budgetedDays != null ? budgetedDays * 8 : null);
     const budgetValue = budgetedDays != null ? budgetedDays * role.dayRate : null;

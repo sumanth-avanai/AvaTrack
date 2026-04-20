@@ -1873,7 +1873,7 @@ export default function ResourcePlannerPage() {
                             if (!rb || rb.budgetedDays == null) return null;
                             return (
                               <div className="text-muted-foreground">
-                                Role budget: {rb.plannedDays.toFixed(0)} / {rb.budgetedDays}d planned
+                                Role budget: {rb.plannedDays.toFixed(1)} / {rb.budgetedDays}d planned
                               </div>
                             );
                           })()}
