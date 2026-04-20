@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { 
   useListProjects, 
@@ -193,6 +193,8 @@ export default function Projects() {
     readLocalStorage("projects-collapsed", {} as Record<string, boolean>)
   );
 
+  const preSearchCollapsedRef = useRef<Record<string, boolean> | null>(null);
+
   const [editClientOpen, setEditClientOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<{ id: number; name: string } | null>(null);
   const [editClientName, setEditClientName] = useState("");
@@ -241,9 +243,18 @@ export default function Projects() {
 
   useEffect(() => {
     if (search.trim()) {
-      const expanded: Record<string, boolean> = {};
-      for (const g of groups) expanded[g.key] = false;
-      setCollapsed(expanded);
+      setCollapsed((current) => {
+        if (preSearchCollapsedRef.current === null) {
+          preSearchCollapsedRef.current = current;
+        }
+        return {};
+      });
+    } else {
+      if (preSearchCollapsedRef.current !== null) {
+        const restore = preSearchCollapsedRef.current;
+        preSearchCollapsedRef.current = null;
+        setCollapsed(restore);
+      }
     }
   }, [search]);
 
