@@ -39,11 +39,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarRange, ChevronLeft, ChevronRight, Plus, AlertTriangle, X, ArrowUpDown } from "lucide-react";
+import { CalendarRange, ChevronLeft, ChevronRight, Plus, AlertTriangle, X, ArrowUpDown, Check, ChevronDown, Filter } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -1296,7 +1298,7 @@ export default function ResourcePlannerPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setWindowStart((prev) => addWeeks(prev, -4))}
+            onClick={() => setWindowStart((prev) => addWeeks(prev, -NAV_WEEKS[zoom]))}
           >
             <ChevronLeft className="h-4 w-4" />
             Prev
@@ -1305,7 +1307,7 @@ export default function ResourcePlannerPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setWindowStart((prev) => addWeeks(prev, 4))}
+            onClick={() => setWindowStart((prev) => addWeeks(prev, NAV_WEEKS[zoom]))}
           >
             Next
             <ChevronRight className="h-4 w-4" />
@@ -1319,8 +1321,146 @@ export default function ResourcePlannerPage() {
           </Button>
         </div>
 
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Client filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Filter className="h-3.5 w-3.5" />
+                Client
+                {filterClients.length > 0 && (
+                  <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 leading-none">
+                    {filterClients.length}
+                  </span>
+                )}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[180px] max-h-72 overflow-y-auto">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Filter by client</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {availableClients.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">No clients with bookings</div>
+              ) : (
+                availableClients.map((client) => {
+                  const selected = filterClients.includes(client);
+                  return (
+                    <DropdownMenuItem
+                      key={client}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setFilterClients((prev) =>
+                          selected ? prev.filter((c) => c !== client) : [...prev, client]
+                        );
+                      }}
+                      className="gap-2 cursor-pointer"
+                    >
+                      <span className={`flex h-4 w-4 items-center justify-center rounded border ${selected ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}>
+                        {selected && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="truncate">{client}</span>
+                    </DropdownMenuItem>
+                  );
+                })
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Project filter */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Filter className="h-3.5 w-3.5" />
+                Project
+                {filterProjects.length > 0 && (
+                  <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 leading-none">
+                    {filterProjects.length}
+                  </span>
+                )}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[200px] max-h-72 overflow-y-auto">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Filter by project</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {availableProjects.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">No projects with bookings</div>
+              ) : (
+                availableProjects.map((proj) => {
+                  const selected = filterProjects.includes(proj.id);
+                  return (
+                    <DropdownMenuItem
+                      key={proj.id}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setFilterProjects((prev) =>
+                          selected ? prev.filter((p) => p !== proj.id) : [...prev, proj.id]
+                        );
+                      }}
+                      className="gap-2 cursor-pointer"
+                    >
+                      <span className={`flex h-4 w-4 items-center justify-center rounded border ${selected ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}>
+                        {selected && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="truncate">{proj.name}</span>
+                    </DropdownMenuItem>
+                  );
+                })
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Active filters badge + clear */}
+          {activeFilters > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-muted-foreground hover:text-foreground"
+              onClick={() => { setFilterClients([]); setFilterProjects([]); }}
+            >
+              Filters ({activeFilters})
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+
+          {/* Sort */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                {sortMode === "alpha-asc" ? "A–Z" : sortMode === "alpha-desc" ? "Z–A" : sortMode === "alloc-desc" ? "Most allocated" : "Least allocated"}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[160px]">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Sort employees</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {(
+                [
+                  { value: "alpha-asc", label: "A–Z" },
+                  { value: "alpha-desc", label: "Z–A" },
+                  { value: "alloc-desc", label: "Most allocated" },
+                  { value: "alloc-asc", label: "Least allocated" },
+                ] as { value: SortMode; label: string }[]
+              ).map(({ value, label }) => (
+                <DropdownMenuItem
+                  key={value}
+                  onSelect={() => setSortMode(value)}
+                  className="gap-2 cursor-pointer"
+                >
+                  <span className={`flex h-4 w-4 items-center justify-center`}>
+                    {sortMode === value && <Check className="h-3 w-3" />}
+                  </span>
+                  {label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {/* Zoom toggle */}
         <div className="flex items-center gap-1 border border-border rounded-md p-0.5">
-          {(["month", "quarter"] as ZoomLevel[]).map((z) => (
+          {(["month", "quarter", "year"] as ZoomLevel[]).map((z) => (
             <button
               key={z}
               onClick={() => setZoom(z)}
@@ -1330,7 +1470,7 @@ export default function ResourcePlannerPage() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {z === "month" ? "Month" : "Quarter"}
+              {z === "month" ? "Month" : z === "quarter" ? "Quarter" : "Year"}
             </button>
           ))}
         </div>
