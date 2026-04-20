@@ -4,11 +4,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
+import Home from "@/pages/home";
 import Dashboard from "@/pages/dashboard";
 import Clients from "@/pages/clients";
 import Projects from "@/pages/projects";
 import Employees from "@/pages/employees";
+import EmployeeDetail from "@/pages/employee-detail";
 import Holidays from "@/pages/holidays";
+import Settings from "@/pages/settings";
 import Reports from "@/pages/reports";
 import Timesheet from "@/pages/timesheet";
 import EmployeePortal from "@/pages/employee-portal";
@@ -47,16 +50,24 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      <Route path="/"><Redirect to="/dashboard" /></Route>
-      <Route path="/dashboard"><AuthGuard><Dashboard /></AuthGuard></Route>
-      <Route path="/clients"><AuthGuard><Clients /></AuthGuard></Route>
-      <Route path="/projects"><AuthGuard><Projects /></AuthGuard></Route>
-      <Route path="/employees"><AuthGuard><Employees /></AuthGuard></Route>
-      <Route path="/holidays"><AuthGuard><Holidays /></AuthGuard></Route>
-      <Route path="/vacations"><AuthGuard><Vacations /></AuthGuard></Route>
-      <Route path="/reports"><AuthGuard><Reports /></AuthGuard></Route>
-      <Route path="/resource-planner"><AuthGuard><ResourcePlanner /></AuthGuard></Route>
+
+      {/* Redirects for old/removed routes */}
+      <Route path="/"><Redirect to="/home" /></Route>
+      <Route path="/dashboard"><Redirect to="/home" /></Route>
+      <Route path="/clients"><Redirect to="/projects" /></Route>
+      <Route path="/holidays"><Redirect to="/settings" /></Route>
+
+      {/* Main routes */}
+      <Route path="/home"><AuthGuard><Home /></AuthGuard></Route>
       <Route path="/timesheet"><AuthGuard><Timesheet /></AuthGuard></Route>
+      <Route path="/resource-planner"><AuthGuard><ResourcePlanner /></AuthGuard></Route>
+      <Route path="/projects"><AuthGuard><Projects /></AuthGuard></Route>
+      <Route path="/employees/:id"><AuthGuard><EmployeeDetail /></AuthGuard></Route>
+      <Route path="/employees"><AuthGuard><Employees /></AuthGuard></Route>
+      <Route path="/reports"><AuthGuard><Reports /></AuthGuard></Route>
+      <Route path="/settings"><AuthGuard><Settings /></AuthGuard></Route>
+      <Route path="/vacations"><AuthGuard><Vacations /></AuthGuard></Route>
+
       <Route path="/u/:token"><AuthGuard><EmployeePortal /></AuthGuard></Route>
       <Route component={NotFound} />
     </Switch>

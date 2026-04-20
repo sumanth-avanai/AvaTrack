@@ -260,7 +260,7 @@ export default function Employees() {
                           <DropdownMenuItem onClick={() => handleResetPin(emp.id)}>
                             <RefreshCw className="mr-2 h-4 w-4" /> Reset PIN
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/vacations?employee=${emp.id}`)}>
+                          <DropdownMenuItem onClick={() => navigate(`/employees/${emp.id}`)}>
                             <CalendarOff className="mr-2 h-4 w-4" /> Manage Absences
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
