@@ -1,0 +1,204 @@
+FEATURE: Sidebar & Home redesign – clean, minimal, future-ready.
+
+⚠️ IMPORTANT: Preserve ALL existing data and functionality. No destructive changes.
+
+=== CURRENT STATE ===
+- 9 sidebar items (Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Vacations, Reports, Resource Planner)
+- Dashboard shows metrics that aren't useful yet
+- Holidays/Vacations as separate top-level items
+- Clients separate from Projects
+
+=== NEW SIDEBAR STRUCTURE ===
+
+Only 6 main items + Settings:
+
+┌─────────────────────┐
+│ Zeit            [<] │  ← Collapse toggle
+├─────────────────────┤
+│ 🏠 Home             │
+│ ⏱ Timesheet         │
+│ 📅 Resource Planner │
+│ 📁 Projects         │
+│ 👥 Employees        │
+│ 📈 Reports          │
+├─────────────────────┤
+│ ⚙ Settings          │  ← pinned to bottom
+└─────────────────────┘
+
+Collapsed view (icons only, ~60px wide):
+┌──────┐
+│ [>]  │
+├──────┤
+│  🏠  │ → tooltip "Home"
+│  ⏱  │ → tooltip "Timesheet"
+│  📅  │ → tooltip "Resource Planner"
+│  📁  │ → tooltip "Projects"
+│  👥  │ → tooltip "Employees"
+│  📈  │ → tooltip "Reports"
+├──────┤
+│  ⚙  │ → tooltip "Settings"
+└──────┘
+
+- Remember collapsed state in localStorage
+- Smooth 200ms animation on toggle
+
+=== REMOVED FROM SIDEBAR ===
+
+- Dashboard → renamed to "Home" (different purpose)
+- Clients → merged into Projects (grouped by client)
+- Holidays → moved to Settings
+- Vacations → moved into Employees (per employee)
+
+=== NEW HOME PAGE (replaces Dashboard) ===
+
+Purpose: Action Hub – "What do you want to do?"
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Welcome back! 👋                               Apr 20, 2026     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ QUICK ACTIONS                                                   │
+│                                                                 │
+│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐│
+│ │     ⏱      │ │     📅      │ │     📁      │ │     📈      ││
+│ │            │ │             │ │             │ │             ││
+│ │ Book Time  │ │ Plan        │ │ New Project │ │ Create      ││
+│ │            │ │ Resources   │ │             │ │ Report      ││
+│ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘│
+│                                                                 │
+│ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
+│ │     👤      │ │     🏢      │ │     ➕      │                │
+│ │            │ │             │ │             │                │
+│ │ New        │ │ New Client  │ │ More...     │                │
+│ │ Employee   │ │             │ │             │                │
+│ └─────────────┘ └─────────────┘ └─────────────┘                │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ ALERTS & NOTIFICATIONS                                          │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │ ⚠️ Project "n8n extention" – Engineer role 95% budget used  ││
+│ │ 📅 Regina Strobl – Vacation starts Apr 25                   ││
+│ │ ⚠️ 3 employees have no bookings this week                   ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│ RECENT ACTIVITY                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐│
+│ │ • Keshav booked 8h on n8n extention – 2 hours ago          ││
+│ │ • New project "AI Chatbot" created – yesterday             ││
+│ │ • Regina added vacation Apr 25-30 – 2 days ago             ││
+│ └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+Quick Action behaviors:
+- "Book Time" → navigates to /timesheet
+- "Plan Resources" → navigates to /resource-planner
+- "New Project" → opens create project modal
+- "Create Report" → navigates to /reports with "new" mode
+- "New Employee" → opens create employee modal
+- "New Client" → opens create client modal
+- "More..." → dropdown with additional actions
+
+Alerts (auto-generated):
+- Projects near/over budget
+- Upcoming vacations (next 7 days)
+- Employees with low utilization this week
+- Overbookings in resource planner
+
+Recent Activity:
+- Last 5-10 actions across the system
+- Time entries, new projects, new bookings, etc.
+
+=== SETTINGS PAGE ===
+
+Route: /settings
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Settings                                                        │
+├───────────────┬─────────────────────────────────────────────────┤
+│               │                                                 │
+│ General       │  (Content of selected section)                  │
+│ Holidays      │                                                 │
+│               │                                                 │
+└───────────────┴─────────────────────────────────────────────────┘
+
+Settings > General:
+- Placeholder for future settings (company name, logo, timezone)
+- NO password change functionality (keep password hardcoded/env for now)
+- Can show app version or basic info
+
+Settings > Holidays:
+- Holiday calendar management (move existing functionality here)
+- Create/edit/delete holiday calendars
+- Assign calendars to employees (or do this in Employee detail)
+
+=== EMPLOYEES PAGE UPDATE ===
+
+Route: /employees
+
+List view stays the same.
+
+Employee Detail view (/employees/:id) gets tabs:
+
+┌─────────────────────────────────────────────────────────────────┐
+│ ← Back    Keshav Reddy                              [Edit]      │
+├─────────────────────────────────────────────────────────────────┤
+│ [Overview] [Vacations] [Allocations]                            │
+├─────────────────────────────────────────────────────────────────┤
+
+Tab: Overview
+- Name, Email, Capacity (40h/week), Working days (Mo-Fr)
+- Contract start/end
+- Assigned holiday calendar
+
+Tab: Vacations
+- List of all vacations/absences for this employee
+- Add new vacation
+- Edit/delete existing
+- (This replaces the global Vacations page)
+
+Tab: Allocations (nice-to-have)
+- Show all resource bookings for this employee
+- Quick overview of planned work
+
+=== PROJECTS PAGE UPDATE ===
+
+- Already grouped by client (previous feature)
+- Client management inline (edit client name via icon)
+- No separate Clients page needed
+
+=== ROUTES SUMMARY ===
+
+Keep:
+- /home (was /dashboard)
+- /timesheet
+- /resource-planner
+- /projects
+- /projects/:id (with Roles, Allocations tabs)
+- /employees
+- /employees/:id (with Overview, Vacations tabs)
+- /reports
+- /settings
+- /settings/general
+- /settings/holidays
+
+Remove/Redirect:
+- /dashboard → redirect to /home
+- /clients → redirect to /projects (or remove)
+- /vacations → remove (now in /employees/:id)
+- /holidays → redirect to /settings/holidays
+
+=== IMPLEMENTATION ORDER ===
+
+1. Create new Home page with Quick Actions
+2. Update sidebar (6 items + Settings)
+3. Create Settings page with General & Holidays tabs
+4. Move Holidays functionality to Settings
+5. Add Vacations tab to Employee detail page
+6. Remove old pages (Clients, Vacations, Holidays from sidebar)
+7. Add redirects for old routes
+8. Add collapsible sidebar toggle
+9. Add Alerts & Recent Activity to Home (can be phase 2)
+
+Preserve all existing data and functionality.
