@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { format, parseISO } from "date-fns";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Sheet,
@@ -67,6 +68,39 @@ interface BudgetResponse {
     bookedHours: number;
     bookedValue: number;
     remainingDays: number;
+  };
+}
+
+interface AllocationEntry {
+  employeeId: number;
+  employeeName: string;
+  allocatedDays: number;
+  period: { start: string; end: string } | null;
+  bookedDays: number;
+  percentage: number;
+}
+interface AllocationRole {
+  roleId: number;
+  roleName: string;
+  dayRate: number;
+  budgetedDays: number | null;
+  plannedDays: number;
+  bookedDays: number;
+  remainingDays: number | null;
+  budgetValue: number | null;
+  bookedValue: number;
+  allocations: AllocationEntry[];
+}
+interface AllocationsResponse {
+  projectId: number;
+  roles: AllocationRole[];
+  totals: {
+    budgetedDays: number;
+    plannedDays: number;
+    bookedDays: number;
+    remainingDays: number;
+    budgetValue: number;
+    bookedValue: number;
   };
 }
 
@@ -235,6 +269,7 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
 
   const rolesKey = ["project-roles", project?.id];
   const budgetKey = ["project-budget", project?.id];
+  const allocKey = ["project-allocations", project?.id];
 
   const { data: roles = [], isLoading: rolesLoading } = useQuery<ProjectRole[]>({
     queryKey: rolesKey,
@@ -256,6 +291,16 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
     enabled: open && project != null,
   });
 
+  const { data: allocations, isLoading: allocLoading } = useQuery<AllocationsResponse>({
+    queryKey: allocKey,
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${project!.id}/allocations`);
+      if (!res.ok) throw new Error("Failed to fetch allocations");
+      return res.json();
+    },
+    enabled: open && project != null,
+  });
+
   const { data: employees = [] } = useListEmployees({ includeInactive: false });
   const activeEmployees = (employees as { id: number; name: string }[]).map((e) => ({
     id: e.id,
@@ -265,6 +310,7 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
   function invalidate() {
     qc.invalidateQueries({ queryKey: rolesKey });
     qc.invalidateQueries({ queryKey: budgetKey });
+    qc.invalidateQueries({ queryKey: allocKey });
   }
 
   const createRole = useMutation({
@@ -329,6 +375,7 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
             <TabsList className="w-full justify-start mb-4">
               <TabsTrigger value="roles">Roles</TabsTrigger>
               <TabsTrigger value="budget">Budget</TabsTrigger>
+              <TabsTrigger value="allocations">Allocations</TabsTrigger>
             </TabsList>
 
             {/* ── ROLES TAB ─────────────────────────────────────────────────── */}
@@ -514,6 +561,134 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                         <div className="text-xs text-muted-foreground">Remaining Value</div>
                         <div className="font-medium">
                           {fmt(Math.max(0, budget.totals.budgetValue - budget.totals.bookedValue))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </TabsContent>
+
+            {/* ── ALLOCATIONS TAB ───────────────────────────────────────────── */}
+            <TabsContent value="allocations" className="flex-1 space-y-4">
+              {allocLoading ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-20 w-full" />
+                  ))}
+                </div>
+              ) : !allocations || allocations.roles.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-10">
+                  No roles defined. Add roles to track allocations.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-5">
+                    {allocations.roles.map((role) => {
+                      const remPct = role.budgetedDays != null && role.budgetedDays > 0
+                        ? (role.remainingDays ?? 0) / role.budgetedDays
+                        : null;
+                      const remColor = remPct == null
+                        ? ""
+                        : remPct <= 0
+                          ? "text-destructive font-semibold"
+                          : remPct < 0.2
+                            ? "text-yellow-600 font-semibold"
+                            : "text-foreground";
+
+                      return (
+                        <div key={role.roleId} className="border rounded-md overflow-hidden">
+                          {/* Role header summary */}
+                          <div className="bg-muted/40 px-4 py-2.5 border-b">
+                            <div className="font-semibold text-sm text-foreground">{role.roleName}</div>
+                            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-0.5">
+                              <span>Budget: <span className="text-foreground">{role.budgetedDays != null ? fmtDays(role.budgetedDays) : "—"}</span></span>
+                              <span>Planned: <span className="text-foreground">{fmtDays(role.plannedDays)}</span></span>
+                              <span>Booked: <span className="text-foreground">{fmtDays(role.bookedDays)}</span></span>
+                              {role.remainingDays != null && (
+                                <span>Remaining: <span className={remColor}>{fmtDays(Math.abs(role.remainingDays))}{role.remainingDays < 0 ? " over" : ""}</span></span>
+                              )}
+                            </div>
+                          </div>
+
+                          {role.allocations.length === 0 ? (
+                            <p className="text-xs text-muted-foreground px-4 py-3">(No allocations yet)</p>
+                          ) : (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Employee</TableHead>
+                                  <TableHead className="text-right">Allocated</TableHead>
+                                  <TableHead>Period</TableHead>
+                                  <TableHead className="text-right">Booked</TableHead>
+                                  <TableHead className="min-w-[120px]">Status</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {role.allocations.map((a) => {
+                                  const pct = a.allocatedDays > 0 ? a.bookedDays / a.allocatedDays : 0;
+                                  const pctClamped = Math.min(pct * 100, 100);
+                                  const isOver = pct > 1;
+                                  const isWarn = pct >= 0.8;
+                                  return (
+                                    <TableRow key={a.employeeId}>
+                                      <TableCell className="font-medium text-sm">{a.employeeName}</TableCell>
+                                      <TableCell className="text-right text-sm">{fmtDays(a.allocatedDays)}</TableCell>
+                                      <TableCell className="text-sm text-muted-foreground">
+                                        {a.period
+                                          ? `${format(parseISO(a.period.start), "MMM d")} – ${format(parseISO(a.period.end), "MMM d, yyyy")}`
+                                          : "—"}
+                                      </TableCell>
+                                      <TableCell className="text-right text-sm">{fmtDays(a.bookedDays)}</TableCell>
+                                      <TableCell>
+                                        <div className="flex items-center gap-2 min-w-[100px]">
+                                          <Progress
+                                            value={pctClamped}
+                                            className={`h-2 flex-1 ${isOver ? "[&>div]:bg-destructive" : isWarn ? "[&>div]:bg-yellow-500" : "[&>div]:bg-green-500"}`}
+                                          />
+                                          <span className={`text-xs font-medium ${isOver ? "text-destructive" : isWarn ? "text-yellow-600" : "text-green-600"}`}>
+                                            {a.percentage}%
+                                          </span>
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Totals footer */}
+                  <div className="rounded-lg border bg-muted/30 p-4 text-sm space-y-2">
+                    <div className="font-semibold text-foreground">Project Total</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Budgeted</div>
+                        <div className="font-medium">{fmtDays(allocations.totals.budgetedDays)}</div>
+                        <div className="text-xs text-muted-foreground">{fmt(allocations.totals.budgetValue)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Planned</div>
+                        <div className="font-medium">{fmtDays(allocations.totals.plannedDays)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Booked</div>
+                        <div className="font-medium">{fmtDays(allocations.totals.bookedDays)}</div>
+                        <div className="text-xs text-muted-foreground">{fmt(allocations.totals.bookedValue)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Remaining</div>
+                        <div className={`font-medium ${allocations.totals.remainingDays < 0 ? "text-destructive" : ""}`}>
+                          {allocations.totals.remainingDays < 0 && <AlertTriangle className="inline h-3 w-3 mr-0.5" />}
+                          {fmtDays(Math.abs(allocations.totals.remainingDays))}
+                          {allocations.totals.remainingDays < 0 ? " over" : ""}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {fmt(Math.max(0, allocations.totals.budgetValue - allocations.totals.bookedValue))} remaining value
                         </div>
                       </div>
                     </div>

@@ -338,4 +338,184 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
   });
 });
 
+// ── GET /projects/:projectId/allocations ───────────────────────────────────
+router.get("/projects/:projectId/allocations", async (req, res): Promise<void> => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
+
+  const roles = await getRolesForProject(projectId);
+  if (roles.length === 0) {
+    res.json({ projectId, roles: [], totals: { budgetedDays: 0, plannedDays: 0, bookedDays: 0, remainingDays: 0, budgetValue: 0, bookedValue: 0 } });
+    return;
+  }
+
+  const roleIds = roles.map((r) => r.id);
+
+  // Fetch individual resource bookings for planned-day calculation (per employee per role)
+  const bookingRows = await db
+    .select({
+      projectRoleId: resourceBookingsTable.projectRoleId,
+      employeeId: resourceBookingsTable.employeeId,
+      employeeName: employeesTable.name,
+      startDate: resourceBookingsTable.startDate,
+      endDate: resourceBookingsTable.endDate,
+      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+    })
+    .from(resourceBookingsTable)
+    .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
+    .where(
+      sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
+    );
+
+  // Fetch time entries booked hours per employee per role
+  const timeRows = await db
+    .select({
+      projectRoleId: timeEntriesTable.projectRoleId,
+      employeeId: timeEntriesTable.employeeId,
+      employeeName: employeesTable.name,
+      totalHours: sql<number>`COALESCE(SUM(${timeEntriesTable.hours}), 0)`,
+    })
+    .from(timeEntriesTable)
+    .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
+    .where(
+      and(
+        eq(timeEntriesTable.projectId, projectId),
+        sql`${timeEntriesTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
+      )
+    )
+    .groupBy(timeEntriesTable.projectRoleId, timeEntriesTable.employeeId, employeesTable.name);
+
+  // Build per-role, per-employee allocation map
+  // key: `${roleId}:${employeeId}` → { allocatedDays, startDate, endDate, employeeName }
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+
+  interface AllocationAccum {
+    employeeId: number;
+    employeeName: string;
+    allocatedDays: number;
+    startDate: string;
+    endDate: string;
+  }
+  const allocMap = new Map<string, AllocationAccum>();
+
+  for (const b of bookingRows) {
+    if (b.projectRoleId == null) continue;
+    const key = `${b.projectRoleId}:${b.employeeId}`;
+    const inclusiveDays =
+      (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
+    const weeks = Math.ceil(inclusiveDays / 7);
+    const days = weeks * (b.hoursPerWeek / 8);
+
+    const existing = allocMap.get(key);
+    if (existing) {
+      existing.allocatedDays += days;
+      if (b.startDate < existing.startDate) existing.startDate = b.startDate;
+      if (b.endDate > existing.endDate) existing.endDate = b.endDate;
+    } else {
+      allocMap.set(key, {
+        employeeId: b.employeeId,
+        employeeName: b.employeeName ?? "Unknown",
+        allocatedDays: days,
+        startDate: b.startDate,
+        endDate: b.endDate,
+      });
+    }
+  }
+
+  // Build per-role, per-employee booked-days map from time entries
+  const bookedMap = new Map<string, { employeeId: number; employeeName: string; bookedDays: number }>();
+  for (const t of timeRows) {
+    if (t.projectRoleId == null) continue;
+    const key = `${t.projectRoleId}:${t.employeeId}`;
+    bookedMap.set(key, {
+      employeeId: t.employeeId,
+      employeeName: t.employeeName ?? "Unknown",
+      bookedDays: Number(t.totalHours) / 8,
+    });
+  }
+
+  let totalBudgetedDays = 0;
+  let totalPlannedDays = 0;
+  let totalBookedDays = 0;
+  let totalBudgetValue = 0;
+  let totalBookedValue = 0;
+
+  const rolesOut = roles.map((role) => {
+    // Collect all employees who appear in either allocations or time entries for this role
+    const empIds = new Set<number>();
+    for (const [key] of allocMap) {
+      const [rId] = key.split(":");
+      if (parseInt(rId, 10) === role.id) empIds.add(parseInt(key.split(":")[1], 10));
+    }
+    for (const [key] of bookedMap) {
+      const [rId] = key.split(":");
+      if (parseInt(rId, 10) === role.id) empIds.add(parseInt(key.split(":")[1], 10));
+    }
+
+    let rolePlannedDays = 0;
+    let roleBookedDays = 0;
+
+    const allocations = Array.from(empIds).map((empId) => {
+      const aKey = `${role.id}:${empId}`;
+      const alloc = allocMap.get(aKey);
+      const booked = bookedMap.get(aKey);
+      const allocatedDays = round1(alloc?.allocatedDays ?? 0);
+      const bookedDays = round1(booked?.bookedDays ?? 0);
+      rolePlannedDays += allocatedDays;
+      roleBookedDays += bookedDays;
+      const percentage = allocatedDays > 0 ? Math.round((bookedDays / allocatedDays) * 100) : 0;
+      const employeeName = alloc?.employeeName ?? booked?.employeeName ?? `#${empId}`;
+      return {
+        employeeId: empId,
+        employeeName,
+        allocatedDays,
+        period: alloc
+          ? { start: alloc.startDate, end: alloc.endDate }
+          : null,
+        bookedDays,
+        percentage,
+      };
+    }).sort((a, b) => b.allocatedDays - a.allocatedDays);
+
+    rolePlannedDays = round1(rolePlannedDays);
+    roleBookedDays = round1(roleBookedDays);
+    const budgetedDays = role.budgetedDays ?? null;
+    const remainingDays = budgetedDays != null ? round1(budgetedDays - rolePlannedDays) : null;
+    const budgetValue = budgetedDays != null ? budgetedDays * role.dayRate : null;
+    const bookedValue = round1(roleBookedDays * role.dayRate);
+
+    if (budgetedDays != null) totalBudgetedDays += budgetedDays;
+    totalPlannedDays += rolePlannedDays;
+    totalBookedDays += roleBookedDays;
+    if (budgetValue != null) totalBudgetValue += budgetValue;
+    totalBookedValue += bookedValue;
+
+    return {
+      roleId: role.id,
+      roleName: role.name,
+      dayRate: role.dayRate,
+      budgetedDays,
+      plannedDays: rolePlannedDays,
+      bookedDays: roleBookedDays,
+      remainingDays,
+      budgetValue,
+      bookedValue,
+      allocations,
+    };
+  });
+
+  res.json({
+    projectId,
+    roles: rolesOut,
+    totals: {
+      budgetedDays: round1(totalBudgetedDays),
+      plannedDays: round1(totalPlannedDays),
+      bookedDays: round1(totalBookedDays),
+      remainingDays: round1(totalBudgetedDays - totalPlannedDays),
+      budgetValue: round1(totalBudgetValue),
+      bookedValue: round1(totalBookedValue),
+    },
+  });
+});
+
 export default router;

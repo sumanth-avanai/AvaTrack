@@ -22,7 +22,10 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -66,6 +69,7 @@ interface ProjectRole {
   name: string;
   dayRate: number;
   budgetedDays: number | null;
+  assignedEmployees: { employeeId: number; employeeName: string | null }[];
 }
 
 interface ResourceBookingFull {
@@ -420,6 +424,23 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   }
 
   const employeeId = isEdit ? state.booking.employeeId : (state as ModalState).employeeId;
+
+  // Partition roles into assigned (for this employee) vs. the rest
+  const assignedRoles = useMemo(
+    () => (projectRoles ?? []).filter((r) => r.assignedEmployees.some((a) => a.employeeId === employeeId)),
+    [projectRoles, employeeId]
+  );
+  const unassignedRoles = useMemo(
+    () => (projectRoles ?? []).filter((r) => !r.assignedEmployees.some((a) => a.employeeId === employeeId)),
+    [projectRoles, employeeId]
+  );
+
+  // Auto-select when the employee has exactly one assigned role and none is chosen yet
+  useEffect(() => {
+    if (assignedRoles.length === 1 && !roleId) {
+      setRoleId(String(assignedRoles[0].id));
+    }
+  }, [assignedRoles, roleId]);
   const capacity = state.capacity;
   const workingDaysMask = state.workingDaysMask;
   const holidayCalendarCode = state.holidayCalendarCode;
@@ -664,14 +685,46 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                     <SelectValue placeholder="Select role…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {projectRoles!.map((r) => {
-                      const label = r.name + (r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : "");
-                      return (
-                        <SelectItem key={r.id} value={String(r.id)}>
-                          <span className="truncate block max-w-[380px]" title={label}>{label}</span>
-                        </SelectItem>
-                      );
-                    })}
+                    {assignedRoles.length > 0 ? (
+                      <>
+                        <SelectGroup>
+                          <SelectLabel className="text-xs text-muted-foreground px-2 py-1">Assigned</SelectLabel>
+                          {assignedRoles.map((r) => {
+                            const label = r.name + (r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : "");
+                            return (
+                              <SelectItem key={r.id} value={String(r.id)}>
+                                <span className="truncate block max-w-[380px]" title={label}>{label}</span>
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectGroup>
+                        {unassignedRoles.length > 0 && (
+                          <>
+                            <SelectSeparator />
+                            <SelectGroup>
+                              <SelectLabel className="text-xs text-muted-foreground px-2 py-1">Other roles</SelectLabel>
+                              {unassignedRoles.map((r) => {
+                                const label = r.name + (r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : "");
+                                return (
+                                  <SelectItem key={r.id} value={String(r.id)}>
+                                    <span className="truncate block max-w-[380px]" title={label}>{label}</span>
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectGroup>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      projectRoles!.map((r) => {
+                        const label = r.name + (r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : "");
+                        return (
+                          <SelectItem key={r.id} value={String(r.id)}>
+                            <span className="truncate block max-w-[380px]" title={label}>{label}</span>
+                          </SelectItem>
+                        );
+                      })
+                    )}
                   </SelectContent>
                 </Select>
               )}
