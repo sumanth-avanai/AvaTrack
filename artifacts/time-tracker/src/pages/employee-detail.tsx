@@ -230,7 +230,7 @@ export default function EmployeeDetail() {
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="vacations">Absences</TabsTrigger>
+            <TabsTrigger value="vacations">Vacations</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="mt-6">
