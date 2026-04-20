@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   useQuery,
@@ -10,6 +10,7 @@ import {
   addWeeks,
   differenceInDays,
   format,
+  getISODay,
   parseISO,
   startOfWeek,
 } from "date-fns";
@@ -43,6 +44,10 @@ import {
   getListEmployeesQueryKey,
   useListProjects,
   getListProjectsQueryKey,
+  useListHolidayCalendars,
+  getListHolidayCalendarsQueryKey,
+  useListHolidays,
+  getListHolidaysQueryKey,
 } from "@workspace/api-client-react";
 import { resolveProjectColor } from "@workspace/api-zod";
 
@@ -192,17 +197,62 @@ function totalWeeks(start: string, end: string): number {
   return Math.ceil((differenceInDays(e, s) + 1) / 7);
 }
 
+// ── Working-day utilities ──────────────────────────────────────────────────────
+type VacationRange = { startDate: string; endDate: string };
+
+function countBookableDays(
+  start: Date,
+  end: Date,
+  mask: number[],
+  holidayDates: Set<string>,
+  vacations: VacationRange[]
+): { workingDays: number; holidayCount: number; vacationCount: number; bookableDays: number } {
+  let workingDays = 0, holidayCount = 0, vacationCount = 0;
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
+    const ds = format(d, "yyyy-MM-dd");
+    if (!mask[getISODay(d) - 1]) continue;
+    workingDays++;
+    if (holidayDates.has(ds)) { holidayCount++; continue; }
+    if (vacations.some(v => v.startDate <= ds && ds <= v.endDate)) vacationCount++;
+  }
+  return { workingDays, holidayCount, vacationCount, bookableDays: workingDays - holidayCount - vacationCount };
+}
+
+function addBookableDays(
+  start: Date,
+  targetDays: number,
+  mask: number[],
+  holidayDates: Set<string>,
+  vacations: VacationRange[]
+): Date {
+  let counted = 0;
+  let d = new Date(start);
+  while (counted < targetDays) {
+    d = addDays(d, 1);
+    const ds = format(d, "yyyy-MM-dd");
+    if (!mask[getISODay(d) - 1]) continue;
+    if (holidayDates.has(ds)) continue;
+    if (vacations.some(v => v.startDate <= ds && ds <= v.endDate)) continue;
+    counted++;
+  }
+  return d;
+}
+
 // ── Booking Modal ──────────────────────────────────────────────────────────────
 interface ModalState {
   mode: "create";
   employeeId: number;
   employeeName: string;
   capacity: number;
+  workingDaysMask: number[];
+  holidayCalendarCode: string | null;
 }
 interface EditModalState {
   mode: "edit";
   booking: ResourceBookingFull;
   capacity: number;
+  workingDaysMask: number[];
+  holidayCalendarCode: string | null;
 }
 
 type AnyModalState = ModalState | EditModalState;
@@ -244,6 +294,13 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     isEdit ? parseAllocFromHours(state.booking.hoursPerWeek, "hours", state.capacity) : ""
   );
   const [notes, setNotes] = useState(isEdit ? (state.booking.notes ?? "") : "");
+  const [calcMode, setCalcMode] = useState<"endDate" | "totalDays">("endDate");
+  const [totalDaysValue, setTotalDaysValue] = useState("");
+
+  // Reset totalDaysValue when switching modes
+  useEffect(() => {
+    setTotalDaysValue("");
+  }, [calcMode]);
 
   // Fetch roles for the selected project
   const { data: projectRoles, isLoading: rolesLoading } = useQuery<ProjectRole[]>({
@@ -265,24 +322,111 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
 
   const employeeId = isEdit ? state.booking.employeeId : (state as ModalState).employeeId;
   const capacity = state.capacity;
+  const workingDaysMask = state.workingDaysMask;
+  const holidayCalendarCode = state.holidayCalendarCode;
 
+  // ── Holiday calendar resolution ─────────────────────────────────────────────
+  const { data: holidayCalendars } = useListHolidayCalendars({
+    query: {
+      queryKey: getListHolidayCalendarsQueryKey(),
+      enabled: !!holidayCalendarCode,
+    },
+  });
+  const calendarId = useMemo(() => {
+    if (!holidayCalendarCode || !holidayCalendars) return null;
+    return (holidayCalendars as any[]).find((c) => c.code === holidayCalendarCode)?.id ?? null;
+  }, [holidayCalendarCode, holidayCalendars]);
+
+  // ── Holidays (covers both years when booking spans year boundary) ────────────
+  const startYear = startDate ? parseInt(startDate.slice(0, 4)) : new Date().getFullYear();
+  // In totalDays mode endDate may be empty; always also fetch startYear+1 to cover year boundaries
+  const endYear = endDate ? parseInt(endDate.slice(0, 4)) : startYear + 1;
+
+  const { data: holidaysStartYear } = useListHolidays(
+    calendarId ?? 0,
+    { year: startYear },
+    { query: { queryKey: getListHolidaysQueryKey(calendarId ?? 0, { year: startYear }), enabled: !!calendarId } }
+  );
+  const { data: holidaysEndYear } = useListHolidays(
+    calendarId ?? 0,
+    { year: endYear },
+    { query: { queryKey: getListHolidaysQueryKey(calendarId ?? 0, { year: endYear }), enabled: !!calendarId && endYear !== startYear } }
+  );
+  const holidays = useMemo(() => [
+    ...((holidaysStartYear as any[]) ?? []),
+    ...(endYear !== startYear ? ((holidaysEndYear as any[]) ?? []) : []),
+  ], [holidaysStartYear, holidaysEndYear, endYear, startYear]);
+
+  const holidayDates = useMemo(() =>
+    new Set(holidays.map((h: any) => String(h.date).slice(0, 10))),
+    [holidays]
+  );
+
+  // ── Vacations ───────────────────────────────────────────────────────────────
+  const { data: vacations = [] } = useQuery<VacationRange[]>({
+    queryKey: ["vacations", employeeId],
+    queryFn: async () => {
+      const r = await fetch(`/api/vacations?employeeId=${employeeId}`, { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to fetch vacations");
+      return r.json();
+    },
+    enabled: !!employeeId,
+  });
+
+  // ── Project budget (for role budget info) ───────────────────────────────────
+  const { data: projectBudget } = useQuery<any>({
+    queryKey: ["project-budget", projectId],
+    queryFn: async () => {
+      const r = await fetch(`/api/projects/${projectId}/budget`, { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to fetch budget");
+      return r.json();
+    },
+    enabled: !!projectId,
+  });
+
+  // ── Total Days mode: compute end date ───────────────────────────────────────
+  const computedEndDate = useMemo(() => {
+    if (calcMode !== "totalDays" || !startDate || !totalDaysValue) return null;
+    const target = Math.round(parseFloat(totalDaysValue));
+    if (isNaN(target) || target <= 0) return null;
+    return addBookableDays(parseISO(startDate), target, workingDaysMask, holidayDates, vacations);
+  }, [calcMode, startDate, totalDaysValue, workingDaysMask, holidayDates, vacations]);
+
+  const effectiveEndDate = calcMode === "totalDays"
+    ? (computedEndDate ? format(computedEndDate, "yyyy-MM-dd") : "")
+    : endDate;
+
+  // ── Booking summary ─────────────────────────────────────────────────────────
+  const bookingSummary = useMemo(() => {
+    if (!startDate || !effectiveEndDate || effectiveEndDate < startDate) return null;
+    const counts = countBookableDays(
+      parseISO(startDate), parseISO(effectiveEndDate),
+      workingDaysMask, holidayDates, vacations
+    );
+    const roleBudget = roleId && projectBudget?.roles
+      ? projectBudget.roles.find((r: any) => r.id === parseInt(roleId))
+      : null;
+    return { ...counts, roleBudget };
+  }, [startDate, effectiveEndDate, workingDaysMask, holidayDates, vacations, roleId, projectBudget]);
+
+  // ── Allocation computation ──────────────────────────────────────────────────
   const hoursPerWeek = useMemo(() => {
     const v = parseFloat(allocValue);
     if (isNaN(v) || v <= 0) return 0;
     return computeHoursPerWeek(v, allocUnit, capacity);
   }, [allocValue, allocUnit, capacity]);
 
-  const weeks = totalWeeks(startDate, endDate);
+  const weeks = totalWeeks(startDate, effectiveEndDate);
   const totalHours = weeks * hoursPerWeek;
 
   const isOverbooked = useMemo(() => {
-    if (!startDate || !endDate || hoursPerWeek <= 0) return false;
+    if (!startDate || !effectiveEndDate || hoursPerWeek <= 0) return false;
     const excludeId = isEdit ? state.booking.id : undefined;
     const empBookings = allBookings.filter(
       (b) => b.employeeId === employeeId && b.id !== excludeId
     );
     const s = parseISO(startDate);
-    const e = parseISO(endDate);
+    const e = parseISO(effectiveEndDate);
     const nw = Math.ceil((differenceInDays(e, s) + 1) / 7);
     for (let i = 0; i < nw; i++) {
       const ws = addWeeks(getMondayOfWeek(s), i);
@@ -295,7 +439,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
       if (used + hoursPerWeek > capacity) return true;
     }
     return false;
-  }, [startDate, endDate, hoursPerWeek, allBookings, employeeId, capacity, isEdit, state]);
+  }, [startDate, effectiveEndDate, hoursPerWeek, allBookings, employeeId, capacity, isEdit, state]);
 
   // A role must be selected if the project has roles
   const rolesAvailable = projectRoles !== undefined;
@@ -306,8 +450,8 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     projectId &&
     (!roleRequired || roleId) &&
     startDate &&
-    endDate &&
-    startDate <= endDate &&
+    effectiveEndDate &&
+    startDate <= effectiveEndDate &&
     hoursPerWeek > 0 &&
     !createMut.isPending &&
     !updateMut.isPending;
@@ -319,7 +463,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
       projectId: parseInt(projectId, 10),
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
-      endDate,
+      endDate: effectiveEndDate,
       hoursPerWeek,
       notes: notes.trim() || null,
     };
@@ -354,7 +498,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-[480px]">
+      <DialogContent className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {isEdit ? "Edit booking" : "New booking"} — {empName}
@@ -366,13 +510,15 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
           <div className="space-y-1.5">
             <Label>Project</Label>
             <Select value={projectId} onValueChange={setProjectId}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select project…" />
               </SelectTrigger>
               <SelectContent>
                 {projects.filter((p) => p.active).map((p) => (
                   <SelectItem key={p.id} value={String(p.id)}>
-                    {p.name}{p.clientName ? ` (${p.clientName})` : ""}
+                    <span className="truncate block max-w-[380px]" title={`${p.name}${p.clientName ? ` (${p.clientName})` : ""}`}>
+                      {p.name}{p.clientName ? ` (${p.clientName})` : ""}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -391,33 +537,84 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                 </div>
               ) : (
                 <Select value={roleId} onValueChange={setRoleId}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select role…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {projectRoles!.map((r) => (
-                      <SelectItem key={r.id} value={String(r.id)}>
-                        {r.name}
-                        {r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : ""}
-                      </SelectItem>
-                    ))}
+                    {projectRoles!.map((r) => {
+                      const label = r.name + (r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : "");
+                      return (
+                        <SelectItem key={r.id} value={String(r.id)}>
+                          <span className="truncate block max-w-[380px]" title={label}>{label}</span>
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               )}
             </div>
           )}
 
-          {/* Date range */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Start date</Label>
-              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-            </div>
-            <div className="space-y-1.5">
-              <Label>End date</Label>
-              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          {/* Calculate-by toggle */}
+          <div className="space-y-1.5">
+            <Label>Calculate by</Label>
+            <div className="flex rounded-md border border-border overflow-hidden">
+              {(["endDate", "totalDays"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setCalcMode(mode)}
+                  className={`flex-1 py-1.5 text-sm font-medium transition-colors ${
+                    calcMode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {mode === "endDate" ? "End date" : "Total days"}
+                </button>
+              ))}
             </div>
           </div>
+
+          {/* Date / Total days section */}
+          {calcMode === "endDate" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Start date</Label>
+                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>End date</Label>
+                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>Start date</Label>
+                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Total bookable days</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder="e.g. 50"
+                  value={totalDaysValue}
+                  onChange={(e) => setTotalDaysValue(e.target.value)}
+                />
+              </div>
+              {computedEndDate && (
+                <p className="text-sm text-muted-foreground">
+                  Estimated end date:{" "}
+                  <span className="font-medium text-foreground">
+                    {format(computedEndDate, "d. MMM yyyy")}
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Allocation */}
           <div className="space-y-1.5">
@@ -456,16 +653,54 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
             />
           </div>
 
-          {/* Summary */}
-          {hoursPerWeek > 0 && startDate && endDate && startDate <= endDate && (
-            <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-sm text-muted-foreground">
-              Scheduled:{" "}
-              <span className="font-medium text-foreground">
-                {hoursPerWeek.toFixed(1)}h/week
-              </span>{" "}
-              over{" "}
-              <span className="font-medium text-foreground">{weeks} week{weeks !== 1 ? "s" : ""}</span> ={" "}
-              <span className="font-medium text-foreground">{totalHours.toFixed(0)}h total</span>
+          {/* Booking summary */}
+          {bookingSummary && (
+            <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-sm space-y-1">
+              <div className="font-medium text-foreground mb-1">Booking summary</div>
+              <div className="flex justify-between text-muted-foreground">
+                <span>Working days in period</span>
+                <span className="font-medium text-foreground">{bookingSummary.workingDays}d</span>
+              </div>
+              {bookingSummary.holidayCount > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Public holidays</span>
+                  <span>−{bookingSummary.holidayCount}d</span>
+                </div>
+              )}
+              {bookingSummary.vacationCount > 0 && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Vacations / absences</span>
+                  <span>−{bookingSummary.vacationCount}d</span>
+                </div>
+              )}
+              <div className="border-t border-border/60 pt-1 flex justify-between font-medium">
+                <span>Bookable days</span>
+                <span className="text-foreground">{bookingSummary.bookableDays}d</span>
+              </div>
+              {bookingSummary.roleBudget?.budgetedDays != null && (
+                <>
+                  <div className="border-t border-border/60 pt-1" />
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Role budget</span>
+                    <span>{bookingSummary.roleBudget.budgetedDays}d</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Already planned</span>
+                    <span>−{bookingSummary.roleBudget.plannedDays ?? 0}d</span>
+                  </div>
+                  <div className={`flex justify-between font-medium ${
+                    (bookingSummary.roleBudget.remainingDays ?? 0) < 0 ? "text-destructive" : ""
+                  }`}>
+                    <span>Remaining</span>
+                    <span>{bookingSummary.roleBudget.remainingDays ?? 0}d</span>
+                  </div>
+                </>
+              )}
+              {hoursPerWeek > 0 && (
+                <div className="border-t border-border/60 pt-1 text-muted-foreground text-xs">
+                  {hoursPerWeek.toFixed(1)}h/week · {weeks} week{weeks !== 1 ? "s" : ""} · {totalHours.toFixed(0)}h total
+                </div>
+              )}
             </div>
           )}
 
@@ -572,16 +807,26 @@ export default function ResourcePlannerPage() {
   );
 
   function openCreateModal(emp: typeof employees[number]) {
+    const e = emp as any;
     setModal({
       mode: "create",
-      employeeId: emp.id,
-      employeeName: emp.name,
-      capacity: (emp as any).weeklyCapacityHours ?? 40,
+      employeeId: e.id,
+      employeeName: e.name,
+      capacity: e.weeklyCapacityHours ?? 40,
+      workingDaysMask: Array.isArray(e.workingDaysMask) ? e.workingDaysMask : [1,1,1,1,1,0,0],
+      holidayCalendarCode: e.holidayCalendarCode ?? null,
     });
   }
 
   function openEditModal(b: ResourceBookingFull) {
-    setModal({ mode: "edit", booking: b, capacity: b.weeklyCapacityHours });
+    const emp = (employees as any[]).find((e) => e.id === b.employeeId);
+    setModal({
+      mode: "edit",
+      booking: b,
+      capacity: b.weeklyCapacityHours,
+      workingDaysMask: Array.isArray(emp?.workingDaysMask) ? emp.workingDaysMask : [1,1,1,1,1,0,0],
+      holidayCalendarCode: emp?.holidayCalendarCode ?? null,
+    });
   }
 
   const contentWidth = numWeeks * cellWidth;
