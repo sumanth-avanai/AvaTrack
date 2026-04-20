@@ -20,7 +20,6 @@ export default function EmployeePortal() {
   const [error, setError] = useState("");
   const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
 
-  // Check session storage on mount
   useEffect(() => {
     const authStatus = sessionStorage.getItem(`zeit_auth_${token}`);
     if (authStatus === "true") {
@@ -57,12 +56,12 @@ export default function EmployeePortal() {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen flex items-center justify-center bg-muted/20">Loading...</div>;
+    return <div className="min-h-screen flex items-center justify-center bg-background">Loading...</div>;
   }
 
   if (isError || !employee) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-muted/20 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Invalid Link</CardTitle>
@@ -75,18 +74,18 @@ export default function EmployeePortal() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-muted/20 p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
         <div className="mb-8 flex items-center gap-2">
-          <div className="bg-primary p-2 rounded-md">
-            <Clock className="h-6 w-6 text-primary-foreground" />
+          <div className="p-2 rounded-md" style={{ background: "var(--gradient-brand)" }}>
+            <Clock className="h-5 w-5 text-white" />
           </div>
-          <span className="text-2xl font-bold tracking-tight text-foreground">Zeit</span>
+          <span className="text-xl font-bold tracking-tight gradient-text">AvaTrack</span>
         </div>
         
-        <Card className="w-full max-w-md shadow-lg border-border/50">
-          <CardHeader className="space-y-2 text-center pb-6">
-            <CardTitle className="text-2xl">Welcome back, {employee.name}</CardTitle>
-            <CardDescription>Enter your 4-digit PIN to access your timesheet.</CardDescription>
+        <Card className="w-full max-w-sm shadow-md">
+          <CardHeader className="space-y-1.5 text-center pb-4">
+            <CardTitle className="text-lg">Welcome back, {employee.name}</CardTitle>
+            <CardDescription className="text-xs">Enter your 4-digit PIN to access your timesheet.</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleVerify} className="space-y-4">
@@ -99,14 +98,14 @@ export default function EmployeePortal() {
                   maxLength={4}
                   required
                   autoFocus
-                  className="text-center text-2xl tracking-widest h-14 w-48 font-mono"
+                  className="text-center text-2xl tracking-widest h-12 w-40 font-mono"
                   value={pin}
                   onChange={(e) => setPin(e.target.value)}
                   placeholder="••••"
                 />
               </div>
-              {error && <p className="text-sm text-destructive text-center font-medium">{error}</p>}
-              <Button type="submit" className="w-full h-11" disabled={verifyPin.isPending || pin.length !== 4}>
+              {error && <p className="text-xs text-destructive text-center font-medium">{error}</p>}
+              <Button type="submit" className="w-full h-9 text-sm" disabled={verifyPin.isPending || pin.length !== 4}>
                 {verifyPin.isPending ? "Verifying..." : "Unlock Timesheet"}
               </Button>
             </form>
@@ -117,17 +116,17 @@ export default function EmployeePortal() {
   }
 
   return (
-    <div className="min-h-screen bg-muted/20 flex flex-col">
-      <header className="bg-card border-b border-border py-4 px-6 md:px-8 shadow-sm">
+    <div className="min-h-screen bg-background flex flex-col">
+      <header className="bg-card border-b border-border py-3 px-6 shadow-xs">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="bg-primary p-1.5 rounded-md">
-              <Clock className="h-5 w-5 text-primary-foreground" />
+            <div className="p-1.5 rounded-md" style={{ background: "var(--gradient-brand)" }}>
+              <Clock className="h-4 w-4 text-white" />
             </div>
-            <span className="text-xl font-bold tracking-tight text-foreground">Zeit</span>
+            <span className="text-base font-bold tracking-tight gradient-text">AvaTrack</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="text-sm font-medium">{employee.name}</span>
+            <span className="text-xs font-medium text-muted-foreground">{employee.name}</span>
             <Button variant="ghost" size="sm" onClick={() => {
               sessionStorage.removeItem(`zeit_auth_${token}`);
               setIsAuthenticated(false);
@@ -138,11 +137,11 @@ export default function EmployeePortal() {
         </div>
       </header>
 
-      <main className="flex-1 p-6 md:p-8 overflow-y-auto">
-        <div className="max-w-7xl mx-auto space-y-6">
+      <main className="flex-1 p-5 overflow-y-auto">
+        <div className="max-w-7xl mx-auto space-y-5">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Your Timesheet</h1>
-            <p className="text-sm text-muted-foreground">Log your hours for the week.</p>
+            <h1 className="font-semibold text-foreground">Your Timesheet</h1>
+            <p className="text-xs text-muted-foreground mt-0.5">Log your hours for the week.</p>
           </div>
 
           <TimesheetGrid 

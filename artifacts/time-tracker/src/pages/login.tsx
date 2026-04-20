@@ -44,15 +44,15 @@ export default function Login() {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="w-full max-w-sm space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Zeit</h1>
-          <p className="text-sm text-muted-foreground">Internal access only</p>
+      <div className="w-full max-w-sm space-y-6">
+        <div className="text-center space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight gradient-text">AvaTrack</h1>
+          <p className="text-xs text-muted-foreground">Internal access only</p>
         </div>
-        <div className="bg-card border border-border rounded-xl shadow-sm p-8">
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="space-y-2">
-              <label htmlFor="password" className="text-sm font-medium text-foreground">
+        <div className="bg-card border border-border rounded-lg shadow-xs p-6">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="text-xs font-medium text-foreground">
                 Password
               </label>
               <input
@@ -63,15 +63,16 @@ export default function Login() {
                 required
                 autoFocus
                 autoComplete="current-password"
-                className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
+                className="w-full h-8 px-2.5 rounded-md border border-input bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:border-[#8B5CF6] focus:ring-[3px] focus:ring-[rgba(139,92,246,0.12)] disabled:opacity-50 transition-shadow"
                 placeholder="Enter access password"
               />
             </div>
-            {error && <p className="text-sm text-destructive font-medium">{error}</p>}
+            {error && <p className="text-xs text-destructive font-medium">{error}</p>}
             <button
               type="submit"
               disabled={loading || !password}
-              className="w-full h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="w-full h-8 px-3 rounded-md text-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#8B5CF6] focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:brightness-110 active:brightness-95"
+              style={{ background: "var(--gradient-brand)" }}
             >
               {loading ? "Signing in…" : "Sign in"}
             </button>

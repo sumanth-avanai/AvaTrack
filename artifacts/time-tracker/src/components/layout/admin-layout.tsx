@@ -83,19 +83,19 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     <SidebarProvider
       open={open}
       onOpenChange={setOpen}
-      style={{ "--sidebar-width": "200px", "--sidebar-width-icon": "48px" } as React.CSSProperties}
+      style={{ "--sidebar-width": "192px", "--sidebar-width-icon": "52px" } as React.CSSProperties}
     >
-      <div className="min-h-screen flex w-full bg-muted/20">
-        <Sidebar collapsible="icon" className="border-r border-border">
-          <SidebarHeader className="h-16 flex items-center justify-between px-3 border-b border-border">
-            <span className="font-bold text-lg tracking-tight text-sidebar-primary group-data-[state=collapsed]:hidden">
-              Zeit
+      <div className="min-h-screen flex w-full bg-background">
+        <Sidebar collapsible="icon" className="border-r border-border/50">
+          <SidebarHeader className="h-14 flex items-center justify-between px-3 border-b border-white/5">
+            <span className="font-bold text-base tracking-tight gradient-text group-data-[state=collapsed]:hidden select-none">
+              AvaTrack
             </span>
-            <SidebarTrigger className="ml-auto group-data-[state=collapsed]:mx-auto" />
+            <SidebarTrigger className="ml-auto group-data-[state=collapsed]:mx-auto text-white/40 hover:text-white/70" />
           </SidebarHeader>
 
           <SidebarContent>
-            <SidebarMenu className="p-2 gap-1">
+            <SidebarMenu className="p-2 gap-0.5">
               {navItems.map((item) => (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton
@@ -106,7 +106,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                       guardNavigate(() => navigate(item.href));
                     }}
                   >
-                    <item.icon className="h-4 w-4 shrink-0" />
+                    <item.icon strokeWidth={1.5} className="h-4 w-4 shrink-0" />
                     <span>{item.title}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -114,7 +114,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             </SidebarMenu>
           </SidebarContent>
 
-          <SidebarFooter className="p-2 border-t border-border">
+          <SidebarFooter className="p-2 border-t border-white/5">
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
@@ -122,7 +122,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                   isActive={location.startsWith("/settings")}
                   onClick={() => guardNavigate(() => navigate("/settings"))}
                 >
-                  <Settings className="h-4 w-4 shrink-0" />
+                  <Settings strokeWidth={1.5} className="h-4 w-4 shrink-0" />
                   <span>Settings</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -130,9 +130,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                 <SidebarMenuButton
                   tooltip="Sign out"
                   onClick={handleLogout}
-                  className="text-muted-foreground hover:text-foreground"
                 >
-                  <LogOut className="h-4 w-4 shrink-0" />
+                  <LogOut strokeWidth={1.5} className="h-4 w-4 shrink-0" />
                   <span>Sign out</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>

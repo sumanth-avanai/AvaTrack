@@ -1,8 +1,8 @@
-# Zeit — Internal Time Tracker
+# AvaTrack — Internal Time Tracker
 
 ## Overview
 
-A lightweight internal time-tracking web app for small agencies. Feels like a better spreadsheet, not a heavy ERP. Inspired by Productive/MOCO but much simpler.
+A lightweight internal time-tracking web app for small agencies, branded as **AvaTrack** with Avanai colors (purple #8B5CF6 / cyan #06B6D4 gradient). Feels like a premium SaaS tool (Linear/Vercel aesthetic), not a heavy ERP. Inspired by Productive/MOCO but much simpler.
 
 ## Stack
 
