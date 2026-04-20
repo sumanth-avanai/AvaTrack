@@ -693,7 +693,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                             const label = r.name + (r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : "");
                             return (
                               <SelectItem key={r.id} value={String(r.id)}>
-                                <span className="truncate block max-w-[380px]" title={label}>{label}</span>
+                                <span className="truncate block max-w-[380px]" title={label + " (assigned)"}>{label} <span className="text-muted-foreground text-xs">(assigned)</span></span>
                               </SelectItem>
                             );
                           })}
