@@ -460,15 +460,24 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     enabled: !!employeeId,
   });
 
-  // ── Project budget (for role budget info) ───────────────────────────────────
-  const { data: projectBudget } = useQuery<any>({
-    queryKey: ["project-budget", projectId],
+  // ── Role budget status (for live budget validation) ─────────────────────────
+  interface RoleBudgetBooking { employeeId: number; employeeName: string; days: number; }
+  interface RoleBudgetStatus {
+    budgetedDays: number | null;
+    plannedDays: number;
+    availableDays: number | null;
+    bookings: RoleBudgetBooking[];
+  }
+  const excludeBookingId = isEdit ? state.booking.id : undefined;
+  const { data: roleBudgetStatus } = useQuery<RoleBudgetStatus>({
+    queryKey: ["role-budget-status", roleId, excludeBookingId ?? null],
     queryFn: async () => {
-      const r = await fetch(`/api/projects/${projectId}/budget`, { credentials: "include" });
-      if (!r.ok) throw new Error("Failed to fetch budget");
+      const qs = excludeBookingId != null ? `?excludeBookingId=${excludeBookingId}` : "";
+      const r = await fetch(`/api/project-roles/${roleId}/budget-status${qs}`, { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to fetch role budget");
       return r.json();
     },
-    enabled: !!projectId,
+    enabled: !!roleId,
   });
 
   // ── Total Days mode: compute end date ───────────────────────────────────────
@@ -506,11 +515,8 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
       parseISO(startDate), parseISO(effectiveEndDate),
       workingDaysMask, holidayDates, vacations
     );
-    const roleBudget = roleId && projectBudget?.roles
-      ? projectBudget.roles.find((r: any) => r.id === parseInt(roleId))
-      : null;
-    return { ...counts, roleBudget };
-  }, [startDate, effectiveEndDate, workingDaysMask, holidayDates, vacations, roleId, projectBudget]);
+    return counts;
+  }, [startDate, effectiveEndDate, workingDaysMask, holidayDates, vacations]);
 
   // ── Allocation computation ──────────────────────────────────────────────────
   const hoursPerWeek = useMemo(() => {
@@ -521,6 +527,8 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
 
   const weeks = totalWeeks(startDate, effectiveEndDate);
   const totalHours = weeks * hoursPerWeek;
+  // How many "project days" this booking consumes (at 8h = 1 day)
+  const thisBookingDays = weeks > 0 && hoursPerWeek > 0 ? Math.round((weeks * hoursPerWeek / 8) * 10) / 10 : null;
 
   const isOverbooked = useMemo(() => {
     if (!startDate || !effectiveEndDate || hoursPerWeek <= 0) return false;
@@ -786,25 +794,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                 <span>Bookable days</span>
                 <span className="text-foreground">{bookingSummary.bookableDays}d</span>
               </div>
-              {bookingSummary.roleBudget?.budgetedDays != null && (
-                <>
-                  <div className="border-t border-border/60 pt-1" />
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Role budget</span>
-                    <span>{bookingSummary.roleBudget.budgetedDays}d</span>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Already planned</span>
-                    <span>−{bookingSummary.roleBudget.plannedDays ?? 0}d</span>
-                  </div>
-                  <div className={`flex justify-between font-medium ${
-                    (bookingSummary.roleBudget.remainingDays ?? 0) < 0 ? "text-destructive" : ""
-                  }`}>
-                    <span>Remaining</span>
-                    <span>{bookingSummary.roleBudget.remainingDays ?? 0}d</span>
-                  </div>
-                </>
-              )}
+              {/* Role budget line in booking summary removed; full budget box rendered below */}
               {hoursPerWeek > 0 && (
                 <div className="border-t border-border/60 pt-1 text-muted-foreground text-xs">
                   {hoursPerWeek.toFixed(1)}h/week · {weeks} week{weeks !== 1 ? "s" : ""} · {totalHours.toFixed(0)}h total
@@ -812,6 +802,87 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
               )}
             </div>
           )}
+
+          {/* Role budget status box */}
+          {roleId && roleBudgetStatus && (() => {
+            const { budgetedDays, plannedDays, availableDays, bookings: roleBookings } = roleBudgetStatus;
+            const thisDays = thisBookingDays ?? 0;
+
+            if (budgetedDays == null) {
+              return (
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground flex items-start gap-2">
+                  <span className="mt-0.5">ℹ</span>
+                  <span>No budget defined for this role.</span>
+                </div>
+              );
+            }
+
+            const afterDays = availableDays != null ? Math.round((availableDays - thisDays) * 10) / 10 : null;
+            const isOver = availableDays != null && thisDays > availableDays;
+
+            return (
+              <div className={`rounded-md border px-3 py-2 text-sm space-y-1 ${
+                isOver
+                  ? "border-yellow-400 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-600"
+                  : "border-green-400 bg-green-50 dark:bg-green-950/30 dark:border-green-700"
+              }`}>
+                <div className="flex items-center gap-1.5 font-semibold mb-1">
+                  {isOver
+                    ? <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-400 shrink-0" />
+                    : <span className="text-green-600 dark:text-green-400 text-base leading-none">✓</span>
+                  }
+                  <span className={isOver ? "text-yellow-800 dark:text-yellow-300" : "text-green-800 dark:text-green-300"}>
+                    Role budget
+                  </span>
+                </div>
+
+                {/* Ledger */}
+                <div className="space-y-0.5 text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>Budgeted</span>
+                    <span className="font-medium text-foreground">{budgetedDays}d</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Already planned</span>
+                    <span>−{plannedDays}d</span>
+                  </div>
+                  {roleBookings.length > 0 && (
+                    <div className="pl-3 space-y-0.5 text-xs">
+                      {roleBookings.map((rb) => (
+                        <div key={rb.employeeId} className="flex justify-between">
+                          <span className="text-muted-foreground/70">└ {rb.employeeName}</span>
+                          <span className="text-muted-foreground/70">{rb.days}d</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span>Available</span>
+                    <span className={availableDays != null && availableDays < 0 ? "text-destructive font-medium" : ""}>
+                      {availableDays ?? "—"}d
+                    </span>
+                  </div>
+                </div>
+
+                {thisDays > 0 && (
+                  <div className="border-t border-border/40 pt-1 space-y-0.5">
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>This booking</span>
+                      <span>{thisDays}d</span>
+                    </div>
+                    {afterDays != null && (
+                      <div className={`flex justify-between font-medium ${isOver ? "text-yellow-700 dark:text-yellow-400" : "text-green-700 dark:text-green-400"}`}>
+                        {isOver
+                          ? <><span>Over budget by</span><span>{Math.round(Math.abs(afterDays) * 10) / 10}d</span></>
+                          : <><span>Remaining after</span><span>{afterDays}d</span></>
+                        }
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Overbooking warning */}
           {isOverbooked && (
@@ -1091,6 +1162,40 @@ export default function ResourcePlannerPage() {
     }
     return map;
   }, [bookings]);
+
+  // ── Project budgets for booking bar tooltips ─────────────────────────────────
+  const projectIdsWithRoles = useMemo(() => {
+    const ids = new Set<number>();
+    for (const b of bookings as ResourceBookingFull[]) {
+      if (b.projectRoleId) ids.add(b.projectId);
+    }
+    return Array.from(ids);
+  }, [bookings]);
+
+  const plannerBudgetQueries = useQueries({
+    queries: projectIdsWithRoles.map((pid) => ({
+      queryKey: ["project-budget", String(pid)],
+      queryFn: async () => {
+        const r = await fetch(`/api/projects/${pid}/budget`, { credentials: "include" });
+        if (!r.ok) return null;
+        return r.json() as Promise<{ roles: Array<{ id: number; plannedDays: number; budgetedDays: number | null }> }>;
+      },
+    })),
+  });
+
+  // Map from roleId → {plannedDays, budgetedDays} for tooltip display
+  const roleBudgetMap = useMemo(() => {
+    const map = new Map<number, { plannedDays: number; budgetedDays: number | null }>();
+    projectIdsWithRoles.forEach((pid, i) => {
+      const data = plannerBudgetQueries[i]?.data;
+      if (data?.roles) {
+        for (const role of data.roles) {
+          map.set(role.id, { plannedDays: role.plannedDays, budgetedDays: role.budgetedDays });
+        }
+      }
+    });
+    return map;
+  }, [projectIdsWithRoles, plannerBudgetQueries]);
 
   function openCreateModal(emp: typeof employees[number]) {
     const e = emp as any;
@@ -1751,6 +1856,15 @@ export default function ResourcePlannerPage() {
                             Total:{" "}
                             {(totalWeeks(b.startDate, b.endDate) * b.hoursPerWeek).toFixed(0)}h
                           </div>
+                          {b.projectRoleId && (() => {
+                            const rb = roleBudgetMap.get(b.projectRoleId);
+                            if (!rb || rb.budgetedDays == null) return null;
+                            return (
+                              <div className="text-muted-foreground">
+                                Role budget: {rb.plannedDays.toFixed(0)} / {rb.budgetedDays}d planned
+                              </div>
+                            );
+                          })()}
                           {b.notes && (
                             <div className="text-muted-foreground italic">{b.notes}</div>
                           )}

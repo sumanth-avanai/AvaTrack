@@ -164,6 +164,67 @@ router.delete("/project-roles/:id", async (req, res): Promise<void> => {
   res.sendStatus(204);
 });
 
+// ── GET /project-roles/:id/budget-status ───────────────────────────────────
+router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  const excludeBookingId = req.query.excludeBookingId
+    ? parseInt(req.query.excludeBookingId as string, 10)
+    : null;
+
+  const [role] = await db.select().from(projectRolesTable).where(eq(projectRolesTable.id, id));
+  if (!role) { res.status(404).json({ error: "Role not found" }); return; }
+
+  const roleBookings = await db
+    .select({
+      id: resourceBookingsTable.id,
+      employeeId: resourceBookingsTable.employeeId,
+      employeeName: employeesTable.name,
+      startDate: resourceBookingsTable.startDate,
+      endDate: resourceBookingsTable.endDate,
+      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+    })
+    .from(resourceBookingsTable)
+    .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
+    .where(eq(resourceBookingsTable.projectRoleId, id));
+
+  const employeeMap = new Map<number, { employeeName: string; days: number }>();
+  let totalPlannedDays = 0;
+
+  for (const b of roleBookings) {
+    if (excludeBookingId != null && b.id === excludeBookingId) continue;
+    // Calculate planned days: (duration in days incl.) / 7 weeks * hoursPerWeek / 8h per day
+    const durationDays =
+      (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
+    const days = (durationDays / 7) * (b.hoursPerWeek / 8);
+
+    totalPlannedDays += days;
+
+    const emp = employeeMap.get(b.employeeId);
+    if (emp) {
+      emp.days += days;
+    } else {
+      employeeMap.set(b.employeeId, { employeeName: b.employeeName ?? "Unknown", days });
+    }
+  }
+
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+
+  const budgetedDays = role.budgetedDays ?? null;
+  const plannedDays = round1(totalPlannedDays);
+  const availableDays = budgetedDays != null ? round1(budgetedDays - totalPlannedDays) : null;
+
+  res.json({
+    budgetedDays,
+    plannedDays,
+    availableDays,
+    bookings: Array.from(employeeMap.entries())
+      .map(([employeeId, { employeeName, days }]) => ({ employeeId, employeeName, days: round1(days) }))
+      .sort((a, b) => b.days - a.days),
+  });
+});
+
 // ── GET /projects/:projectId/budget ────────────────────────────────────────
 router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
   const projectId = parseInt(req.params.projectId, 10);
