@@ -145,7 +145,7 @@
   --app-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --app-font-serif: Georgia, serif;
   --app-font-mono: 'JetBrains Mono', monospace;
-  --radius: 0.375rem;
+  --radius: 6px;
 
   --shadow-2xs: 0px 1px 2px 0px rgba(0,0,0,0.05);
   --shadow-xs: 0px 1px 2px 0px rgba(0,0,0,0.05);
@@ -280,6 +280,32 @@
   [data-radix-select-viewport] {
     max-height: 260px;
   }
+}
+
+/* ── Table typography & density ── */
+table thead th {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  color: #71717a;
+  vertical-align: middle;
+}
+
+table tbody td {
+  padding: 8px 12px;
+  vertical-align: middle;
+}
+
+table tbody tr {
+  min-height: 36px;
+  border-bottom: 1px solid #f4f4f5;
+}
+
+table tbody tr:hover {
+  background-color: #fafafa;
 }
 
 /* ── Input: Avanai focus ring ── */
