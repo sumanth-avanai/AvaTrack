@@ -1850,7 +1850,7 @@ export default function ResourcePlannerPage() {
                         </TooltipTrigger>
                         <TooltipContent
                           side="top"
-                          className="text-xs max-w-[240px] bg-white text-gray-900 border border-gray-200 shadow-md p-0"
+                          className="text-xs max-w-[240px] p-0"
                         >
                           {/* Header: project + client */}
                           <div className="px-3 pt-2.5 pb-1.5">
