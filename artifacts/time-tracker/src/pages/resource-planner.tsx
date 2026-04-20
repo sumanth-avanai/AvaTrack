@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   useQuery,
+  useQueries,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -199,6 +200,33 @@ function totalWeeks(start: string, end: string): number {
 
 // ── Working-day utilities ──────────────────────────────────────────────────────
 type VacationRange = { startDate: string; endDate: string };
+
+interface VacationEntry {
+  id: number;
+  employeeId: number;
+  startDate: string;
+  endDate: string;
+  vacationType: string;
+  note: string | null;
+}
+
+interface HolidayEntry {
+  id: number;
+  calendarId: number;
+  date: string;
+  name: string;
+}
+
+function useAllVacations() {
+  return useQuery<VacationEntry[]>({
+    queryKey: ["vacations-all"],
+    queryFn: async () => {
+      const r = await fetch("/api/vacations", { credentials: "include" });
+      if (!r.ok) throw new Error("Failed to fetch vacations");
+      return r.json();
+    },
+  });
+}
 
 function countBookableDays(
   start: Date,
@@ -807,6 +835,10 @@ export default function ResourcePlannerPage() {
     { query: { queryKey: getListProjectsQueryKey({ includeInactive: false }) } }
   );
   const { data: bookings = [], isLoading: bookingsLoading } = useResourceBookings();
+  const { data: allVacations = [] } = useAllVacations();
+  const { data: holidayCalendars = [] } = useListHolidayCalendars({
+    query: { queryKey: getListHolidayCalendarsQueryKey() },
+  });
 
   const bookingsByEmployee = useMemo(() => {
     const map: Record<number, ResourceBookingFull[]> = {};
@@ -854,6 +886,92 @@ export default function ResourcePlannerPage() {
   const contentWidth = numWeeks * cellWidth;
 
   const activeEmployees = (employees as any[]).filter((e) => e.active !== false);
+
+  // ── Vacation markers ──────────────────────────────────────────────────────
+  const vacationsByEmployee = useMemo(() => {
+    const map: Record<number, VacationEntry[]> = {};
+    for (const v of allVacations) {
+      (map[v.employeeId] ??= []).push(v);
+    }
+    return map;
+  }, [allVacations]);
+
+  // ── Holiday markers ───────────────────────────────────────────────────────
+  const calendarIdByCode = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const cal of holidayCalendars as any[]) {
+      map[cal.code] = cal.id;
+    }
+    return map;
+  }, [holidayCalendars]);
+
+  const visibleYears = useMemo(() => {
+    const years = new Set<number>();
+    years.add(windowStart.getFullYear());
+    years.add(windowEnd.getFullYear());
+    return [...years];
+  }, [windowStart, windowEnd]);
+
+  const uniqueCalendarQueries = useMemo(() => {
+    const seen = new Set<string>();
+    const queries: Array<{ calendarId: number; year: number; code: string }> = [];
+    for (const emp of activeEmployees) {
+      const code: string | null = (emp as any).holidayCalendarCode ?? null;
+      if (!code) continue;
+      const calendarId = calendarIdByCode[code];
+      if (!calendarId) continue;
+      for (const year of visibleYears) {
+        const key = `${calendarId}-${year}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          queries.push({ calendarId, year, code });
+        }
+      }
+    }
+    return queries;
+  }, [activeEmployees, calendarIdByCode, visibleYears]);
+
+  const holidayQueryResults = useQueries({
+    queries: uniqueCalendarQueries.map(({ calendarId, year }) => ({
+      queryKey: ["planner-holidays", calendarId, year],
+      queryFn: async (): Promise<HolidayEntry[]> => {
+        const r = await fetch(
+          `/api/holiday-calendars/${calendarId}/holidays?year=${year}`,
+          { credentials: "include" }
+        );
+        if (!r.ok) throw new Error("Failed to fetch holidays");
+        return r.json();
+      },
+      enabled: true,
+    })),
+  });
+
+  const holidaysByCalendarId = useMemo(() => {
+    const map: Record<number, HolidayEntry[]> = {};
+    holidayQueryResults.forEach((result, idx) => {
+      if (!result.data) return;
+      const { calendarId } = uniqueCalendarQueries[idx];
+      (map[calendarId] ??= []).push(...result.data);
+    });
+    return map;
+  }, [holidayQueryResults, uniqueCalendarQueries]);
+
+  const holidaysByEmployee = useMemo(() => {
+    const map: Record<number, HolidayEntry[]> = {};
+    for (const emp of activeEmployees) {
+      const code: string | null = (emp as any).holidayCalendarCode ?? null;
+      if (!code) continue;
+      const calendarId = calendarIdByCode[code];
+      if (!calendarId) continue;
+      const holidays = holidaysByCalendarId[calendarId] ?? [];
+      const windowStartStr = format(windowStart, "yyyy-MM-dd");
+      const windowEndStr = format(windowEnd, "yyyy-MM-dd");
+      map[(emp as any).id] = holidays.filter(
+        (h) => h.date >= windowStartStr && h.date < windowEndStr
+      );
+    }
+    return map;
+  }, [activeEmployees, calendarIdByCode, holidaysByCalendarId, windowStart, windowEnd]);
 
   // Window label
   const windowLabel = useMemo(() => {
@@ -917,7 +1035,7 @@ export default function ResourcePlannerPage() {
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-4 px-6 py-2 border-b border-border text-xs text-muted-foreground shrink-0">
+      <div className="flex items-center gap-4 px-6 py-2 border-b border-border text-xs text-muted-foreground shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-3 rounded-sm bg-green-200 dark:bg-green-900/50 border border-green-300" />
           <span>&lt;80%</span>
@@ -929,6 +1047,20 @@ export default function ResourcePlannerPage() {
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-3 rounded-sm bg-red-200 dark:bg-red-900/50 border border-red-300" />
           <span>&gt;100% overbooked</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div
+            className="w-3 h-3 rounded-sm border border-orange-300"
+            style={{
+              background:
+                "repeating-linear-gradient(-45deg, transparent, transparent 3px, rgba(251,146,60,0.5) 3px, rgba(251,146,60,0.5) 6px)",
+            }}
+          />
+          <span>Vacation / absence</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div className="w-3 h-3 rounded-sm border border-blue-300 bg-blue-200/60" />
+          <span>Public holiday</span>
         </div>
         {todayInRange && (
           <div className="flex items-center gap-1.5">
@@ -1062,6 +1194,72 @@ export default function ResourcePlannerPage() {
                     })}
                   </div>
 
+                  {/* Vacation bands */}
+                  {(vacationsByEmployee[emp.id] ?? []).map((v) => {
+                    const bounds = getBarBounds(v.startDate, v.endDate, windowStart, numWeeks, cellWidth);
+                    if (!bounds) return null;
+                    return (
+                      <Tooltip key={`vac-${v.id}`}>
+                        <TooltipTrigger asChild>
+                          <div
+                            className="absolute pointer-events-auto"
+                            style={{
+                              top: 0,
+                              bottom: 0,
+                              left: bounds.left,
+                              width: bounds.width,
+                              background:
+                                "repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(251,146,60,0.22) 4px, rgba(251,146,60,0.22) 8px)",
+                              zIndex: 2,
+                            }}
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs space-y-0.5">
+                          <div className="font-semibold capitalize">
+                            {v.vacationType.replace(/_/g, " ")}
+                          </div>
+                          <div>
+                            {format(parseISO(v.startDate), "MMM d")} –{" "}
+                            {format(parseISO(v.endDate), "MMM d, yyyy")}
+                          </div>
+                          {v.note && (
+                            <div className="text-muted-foreground italic">{v.note}</div>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+
+                  {/* Holiday markers */}
+                  {(holidaysByEmployee[emp.id] ?? []).map((h) => {
+                    const dayWidth = cellWidth / 7;
+                    const hDate = parseISO(h.date);
+                    const offset = differenceInDays(hDate, windowStart);
+                    if (offset < 0 || offset >= numWeeks * 7) return null;
+                    const left = offset * dayWidth;
+                    return (
+                      <Tooltip key={`hol-${h.id}`}>
+                        <TooltipTrigger asChild>
+                          <div
+                            className="absolute pointer-events-auto"
+                            style={{
+                              top: 0,
+                              bottom: 0,
+                              left,
+                              width: Math.max(dayWidth, 2),
+                              backgroundColor: "rgba(147,197,253,0.35)",
+                              zIndex: 2,
+                            }}
+                          />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs space-y-0.5">
+                          <div className="font-semibold">{h.name}</div>
+                          <div>{format(hDate, "MMM d, yyyy")}</div>
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+
                   {/* Booking bars */}
                   {empBookings.map((b) => {
                     const bounds = getBarBounds(
@@ -1090,6 +1288,7 @@ export default function ResourcePlannerPage() {
                               left: bounds.left,
                               width: bounds.width,
                               backgroundColor: color,
+                              zIndex: 4,
                             }}
                             onClick={() => openEditModal(b)}
                           >
