@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { eq, and, gte, lte } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
@@ -7,6 +7,7 @@ import {
   employeesTable,
   projectsTable,
   clientsTable,
+  projectRolesTable,
 } from "@workspace/db";
 import { resolveProjectColor } from "@workspace/api-zod";
 
@@ -19,6 +20,7 @@ function buildSelect() {
       id: resourceBookingsTable.id,
       employeeId: resourceBookingsTable.employeeId,
       projectId: resourceBookingsTable.projectId,
+      projectRoleId: resourceBookingsTable.projectRoleId,
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
       hoursPerWeek: resourceBookingsTable.hoursPerWeek,
@@ -30,11 +32,14 @@ function buildSelect() {
       projectName: projectsTable.name,
       projectColor: projectsTable.color,
       clientName: clientsTable.name,
+      projectRoleName: projectRolesTable.name,
+      dayRate: projectRolesTable.dayRate,
     })
     .from(resourceBookingsTable)
     .innerJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
     .innerJoin(projectsTable, eq(resourceBookingsTable.projectId, projectsTable.id))
-    .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id));
+    .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))
+    .leftJoin(projectRolesTable, eq(resourceBookingsTable.projectRoleId, projectRolesTable.id));
 }
 
 function enrichRow(row: Awaited<ReturnType<typeof buildSelect>>[number]) {
@@ -67,6 +72,7 @@ router.get("/resource-bookings", async (req, res): Promise<void> => {
 const BookingBodySchema = z.object({
   employeeId: z.number().int().positive(),
   projectId: z.number().int().positive(),
+  projectRoleId: z.number().int().positive().nullable().optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   hoursPerWeek: z.number().positive(),
@@ -81,7 +87,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, startDate, endDate, hoursPerWeek, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerWeek, notes } = parsed.data;
 
   if (startDate > endDate) {
     res.status(400).json({ error: "startDate must be on or before endDate" });
@@ -90,7 +96,15 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
 
   const [inserted] = await db
     .insert(resourceBookingsTable)
-    .values({ employeeId, projectId, startDate, endDate, hoursPerWeek, notes: notes ?? null })
+    .values({
+      employeeId,
+      projectId,
+      projectRoleId: projectRoleId ?? null,
+      startDate,
+      endDate,
+      hoursPerWeek,
+      notes: notes ?? null,
+    })
     .returning({ id: resourceBookingsTable.id });
 
   const rows = await buildSelect().where(eq(resourceBookingsTable.id, inserted.id));
@@ -109,7 +123,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, startDate, endDate, hoursPerWeek, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerWeek, notes } = parsed.data;
 
   if (startDate > endDate) {
     res.status(400).json({ error: "startDate must be on or before endDate" });
@@ -118,7 +132,15 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
 
   const result = await db
     .update(resourceBookingsTable)
-    .set({ employeeId, projectId, startDate, endDate, hoursPerWeek, notes: notes ?? null })
+    .set({
+      employeeId,
+      projectId,
+      projectRoleId: projectRoleId ?? null,
+      startDate,
+      endDate,
+      hoursPerWeek,
+      notes: notes ?? null,
+    })
     .where(eq(resourceBookingsTable.id, id))
     .returning({ id: resourceBookingsTable.id });
 

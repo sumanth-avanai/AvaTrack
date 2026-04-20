@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   useQuery,
@@ -47,10 +47,20 @@ import {
 import { resolveProjectColor } from "@workspace/api-zod";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+interface ProjectRole {
+  id: number;
+  name: string;
+  dayRate: number;
+  budgetedDays: number | null;
+}
+
 interface ResourceBookingFull {
   id: number;
   employeeId: number;
   projectId: number;
+  projectRoleId: number | null;
+  projectRoleName: string | null;
+  dayRate: number | null;
   startDate: string;
   endDate: string;
   hoursPerWeek: number;
@@ -224,6 +234,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   }
 
   const [projectId, setProjectId] = useState(defaultProject);
+  const [roleId, setRoleId] = useState<string>(
+    isEdit && state.booking.projectRoleId ? String(state.booking.projectRoleId) : ""
+  );
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
   const [allocUnit, setAllocUnit] = useState<AllocUnit>("hours");
@@ -231,6 +244,24 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     isEdit ? parseAllocFromHours(state.booking.hoursPerWeek, "hours", state.capacity) : ""
   );
   const [notes, setNotes] = useState(isEdit ? (state.booking.notes ?? "") : "");
+
+  // Fetch roles for the selected project
+  const { data: projectRoles, isLoading: rolesLoading } = useQuery<ProjectRole[]>({
+    queryKey: ["project-roles", projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/roles`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch roles");
+      return res.json();
+    },
+    enabled: !!projectId,
+  });
+
+  // Clear role when project changes (unless editing and same project)
+  const prevProjectId = useRef(projectId);
+  if (prevProjectId.current !== projectId) {
+    prevProjectId.current = projectId;
+    setRoleId("");
+  }
 
   const employeeId = isEdit ? state.booking.employeeId : (state as ModalState).employeeId;
   const capacity = state.capacity;
@@ -266,8 +297,14 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     return false;
   }, [startDate, endDate, hoursPerWeek, allBookings, employeeId, capacity, isEdit, state]);
 
+  // A role must be selected if the project has roles
+  const rolesAvailable = projectRoles !== undefined;
+  const hasRoles = rolesAvailable && projectRoles.length > 0;
+  const roleRequired = !!projectId && hasRoles;
+
   const canSubmit =
     projectId &&
+    (!roleRequired || roleId) &&
     startDate &&
     endDate &&
     startDate <= endDate &&
@@ -280,6 +317,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     const payload = {
       employeeId,
       projectId: parseInt(projectId, 10),
+      projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
       endDate,
       hoursPerWeek,
@@ -340,6 +378,34 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
               </SelectContent>
             </Select>
           </div>
+
+          {/* Role — shown once a project is selected */}
+          {projectId && (
+            <div className="space-y-1.5">
+              <Label>Role</Label>
+              {rolesLoading ? (
+                <div className="h-10 rounded-md border bg-muted/50 animate-pulse" />
+              ) : !hasRoles ? (
+                <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                  No roles defined for this project
+                </div>
+              ) : (
+                <Select value={roleId} onValueChange={setRoleId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select role…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projectRoles!.map((r) => (
+                      <SelectItem key={r.id} value={String(r.id)}>
+                        {r.name}
+                        {r.dayRate > 0 ? ` — €${r.dayRate.toLocaleString("de-DE")}/day` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+          )}
 
           {/* Date range */}
           <div className="grid grid-cols-2 gap-3">
@@ -741,6 +807,11 @@ export default function ResourcePlannerPage() {
                     if (!bounds) return null;
                     const color = resolveProjectColor(b.projectId, b.projectColor);
 
+                    const barLabel = b.projectRoleName
+                      ? `${b.projectName} – ${b.projectRoleName}`
+                      : b.projectName;
+                    const charBudget = Math.floor(bounds.width / 7);
+
                     return (
                       <Tooltip key={b.id}>
                         <TooltipTrigger asChild>
@@ -755,17 +826,23 @@ export default function ResourcePlannerPage() {
                             }}
                             onClick={() => openEditModal(b)}
                           >
-                            {bounds.width > 80
-                              ? b.projectName
-                              : bounds.width > 40
-                              ? b.projectName.slice(0, Math.floor(bounds.width / 8)) + "…"
+                            {bounds.width > 40
+                              ? barLabel.length <= charBudget
+                                ? barLabel
+                                : barLabel.slice(0, charBudget - 1) + "…"
                               : ""}
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent side="top" className="text-xs space-y-0.5 max-w-[220px]">
+                        <TooltipContent side="top" className="text-xs space-y-0.5 max-w-[240px]">
                           <div className="font-semibold">{b.projectName}</div>
                           {b.clientName && (
                             <div className="text-muted-foreground">{b.clientName}</div>
+                          )}
+                          {b.projectRoleName && (
+                            <div className="text-primary font-medium">
+                              {b.projectRoleName}
+                              {b.dayRate ? ` — €${b.dayRate.toLocaleString("de-DE")}/day` : ""}
+                            </div>
                           )}
                           <div>{b.hoursPerWeek.toFixed(1)}h/week</div>
                           <div>
