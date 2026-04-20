@@ -403,7 +403,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     //   e.g. 50 project days at 1 day/week (5-day mask) → 50 * 5 / 1 = 250 working days ≈ 50 weeks
     const daysPerWeek = hpw / 8;
     const normalWorkingDays = workingDaysMask.reduce((a: number, b: number) => a + b, 0) || 5;
-    const calendarWorkingDays = Math.round(target * normalWorkingDays / daysPerWeek);
+    const calendarWorkingDays = Math.ceil(target * normalWorkingDays / daysPerWeek);
 
     return addBookableDays(parseISO(startDate), calendarWorkingDays, workingDaysMask, holidayDates, vacations);
   }, [calcMode, startDate, totalDaysValue, allocValue, allocUnit, capacity, workingDaysMask, holidayDates, vacations]);
