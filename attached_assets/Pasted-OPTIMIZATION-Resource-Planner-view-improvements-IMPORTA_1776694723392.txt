@@ -1,0 +1,94 @@
+OPTIMIZATION: Resource Planner view improvements.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== 1. COMPACT EMPLOYEE ROWS ===
+Current: Employee name, "40h/week", "+ Booking" on separate lines – too much vertical space
+
+Change:
+- Single line: "Aemal Sayer" with small [+] button on the right
+- Remove "40h/week" text (show in tooltip on hover instead)
+- Row height: reduce by ~40%
+- [+] button: small icon button, not text
+
+=== 2. IMPROVED BOOKING BARS ===
+Current: "Project – Role" only, hard to read
+
+Change to:
+- Line 1 (prominent): "Client – Project" (e.g., "Bayer – n8n extention")
+- Line 2 (smaller): "Role | 8h/week | 50 days total"
+- If bar is too narrow: show only "Client – Project", rest in tooltip
+- Tooltip on hover: Full details (Client, Project, Role, Rate, Hours/week, Date range, Total days)
+
+=== 3. REMOVE UTILIZATION COLORS ===
+Current: Green/Yellow/Red background colors for utilization
+
+Change:
+- Remove the colored backgrounds behind booking bars
+- Remove the legend "<80% | 80-100% | >100% overbooked"
+- Keep bar colors (per project)
+- Clean, minimal look
+
+=== 4. ADD FILTERS ===
+Add filter bar above the timeline:
+
+[Filter by Client ▼] [Filter by Project ▼] [Clear filters]
+
+- Dropdowns with multi-select
+- When filtered: only show employees with matching bookings
+- Show active filter count: "Filters (2)"
+
+=== 5. ADD YEAR VIEW ===
+Current: Month | Quarter
+
+Add: Month | Quarter | Year
+
+Year view:
+- Show 12 months as columns
+- Each month ~same width as one week in Month view
+- Bars span across months
+- Good for long-term planning overview
+
+=== 6. TODAY LINE ===
+- Add vertical line marking today's date
+- Color: red or blue, slightly transparent
+- Should be visible across all rows
+
+=== 7. TOOLTIP ON BAR HOVER ===
+On hover, show tooltip:
+┌─────────────────────────┐
+│ Bayer                   │
+│ n8n extention           │
+│ Engineering Manager     │
+│ ──────────────────────  │
+│ 8h/week (1 day)         │
+│ Apr 20 – Jul 15, 2026   │
+│ Total: 50 days          │
+│ €1.256,64/day           │
+└─────────────────────────┘
+
+=== 8. SORTABLE EMPLOYEES ===
+Add sort dropdown:
+[Sort: A-Z ▼]
+Options:
+- A-Z (alphabetical)
+- Z-A
+- Most allocated first
+- Least allocated first
+
+=== 9. STICKY HEADER ===
+- Timeline header (months/weeks row) should stick to top when scrolling down
+- Employee list scrolls, header stays fixed
+
+=== SUMMARY OF CHANGES ===
+- Compact rows (less vertical space)
+- Better bar content (Client + Project prominent, Role + allocation smaller)
+- No utilization background colors
+- Filter by Client/Project
+- Year view
+- Today line
+- Hover tooltips
+- Sort employees
+- Sticky header
+
+Preserve all existing bookings and data.

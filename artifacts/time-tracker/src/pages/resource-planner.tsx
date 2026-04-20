@@ -39,7 +39,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarRange, ChevronLeft, ChevronRight, Plus, AlertTriangle } from "lucide-react";
+import { CalendarRange, ChevronLeft, ChevronRight, Plus, AlertTriangle, X, ArrowUpDown } from "lucide-react";
 import {
   useListEmployees,
   getListEmployeesQueryKey,
@@ -79,11 +79,14 @@ interface ResourceBookingFull {
 }
 
 type AllocUnit = "hours" | "days" | "percent";
-type ZoomLevel = "month" | "quarter";
+type ZoomLevel = "month" | "quarter" | "year";
+type SortMode = "alpha-asc" | "alpha-desc" | "alloc-desc" | "alloc-asc";
 
-const CELL_WIDTH: Record<ZoomLevel, number> = { month: 80, quarter: 50 };
-const NUM_WEEKS: Record<ZoomLevel, number> = { month: 13, quarter: 26 };
-const EMPLOYEE_COL = 240;
+const CELL_WIDTH: Record<ZoomLevel, number> = { month: 80, quarter: 50, year: 18 };
+const NUM_WEEKS: Record<ZoomLevel, number> = { month: 13, quarter: 26, year: 52 };
+const NAV_WEEKS: Record<ZoomLevel, number> = { month: 4, quarter: 13, year: 26 };
+const EMPLOYEE_COL = 200;
+const ROW_HEIGHT = 44;
 
 // ── API hooks ──────────────────────────────────────────────────────────────────
 function useResourceBookings() {
@@ -1037,6 +1040,9 @@ export default function ResourcePlannerPage() {
   const [zoom, setZoom] = useState<ZoomLevel>("month");
   const [modal, setModal] = useState<AnyModalState | null>(null);
   const [vacationModal, setVacationModal] = useState<VacationDialogState | null>(null);
+  const [filterClients, setFilterClients] = useState<string[]>([]);
+  const [filterProjects, setFilterProjects] = useState<number[]>([]);
+  const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
 
   const cellWidth = CELL_WIDTH[zoom];
   const numWeeks = NUM_WEEKS[zoom];
@@ -1133,7 +1139,61 @@ export default function ResourcePlannerPage() {
 
   const contentWidth = numWeeks * cellWidth;
 
-  const activeEmployees = (employees as any[]).filter((e) => e.active !== false);
+  const allActiveEmployees = useMemo(
+    () => (employees as any[]).filter((e) => e.active !== false),
+    [employees]
+  );
+
+  // ── Derived filter options ──────────────────────────────────────────────────
+  const availableClients = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const b of bookings as ResourceBookingFull[]) {
+      if (b.clientName && !seen.has(b.clientName)) {
+        seen.add(b.clientName);
+        list.push(b.clientName);
+      }
+    }
+    return list.sort();
+  }, [bookings]);
+
+  const availableProjects = useMemo(() => {
+    const seen = new Set<number>();
+    const list: { id: number; name: string }[] = [];
+    for (const b of bookings as ResourceBookingFull[]) {
+      if (!seen.has(b.projectId)) {
+        seen.add(b.projectId);
+        list.push({ id: b.projectId, name: b.projectName });
+      }
+    }
+    return list.sort((a, b) => a.name.localeCompare(b.name));
+  }, [bookings]);
+
+  const activeFilters = filterClients.length + filterProjects.length;
+
+  // ── Filtered + sorted employees ─────────────────────────────────────────────
+  const activeEmployees = useMemo(() => {
+    let list = allActiveEmployees;
+    if (activeFilters > 0) {
+      list = list.filter((emp: any) => {
+        const empBookings = (bookings as ResourceBookingFull[]).filter(
+          (b) => b.employeeId === emp.id
+        );
+        return empBookings.some((b) => {
+          const clientOk = filterClients.length === 0 || (b.clientName && filterClients.includes(b.clientName));
+          const projectOk = filterProjects.length === 0 || filterProjects.includes(b.projectId);
+          return clientOk && projectOk;
+        });
+      });
+    }
+    return [...list].sort((a: any, b: any) => {
+      if (sortMode === "alpha-asc") return a.name.localeCompare(b.name);
+      if (sortMode === "alpha-desc") return b.name.localeCompare(a.name);
+      const aTotal = (bookings as ResourceBookingFull[]).filter((bk) => bk.employeeId === a.id).reduce((s, bk) => s + bk.hoursPerWeek, 0);
+      const bTotal = (bookings as ResourceBookingFull[]).filter((bk) => bk.employeeId === b.id).reduce((s, bk) => s + bk.hoursPerWeek, 0);
+      return sortMode === "alloc-desc" ? bTotal - aTotal : aTotal - bTotal;
+    });
+  }, [allActiveEmployees, bookings, filterClients, filterProjects, activeFilters, sortMode]);
 
   // ── Vacation markers ──────────────────────────────────────────────────────
   const vacationsByEmployee = useMemo(() => {
