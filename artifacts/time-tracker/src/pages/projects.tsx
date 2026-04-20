@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, MoreHorizontal, Pencil, Trash2, Layers, ChevronDown, ChevronRight, List, LayoutList, Search } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 import { ProjectRolesSheet } from "@/components/projects/project-roles-sheet";
 import { 
   DropdownMenu,
@@ -124,6 +125,8 @@ type Project = {
   budgetHours: number | null;
   color: string | null;
   roleCount?: number | null;
+  budgetDays?: number | null;
+  bookedDays?: number | null;
   [key: string]: unknown;
 };
 
@@ -133,6 +136,26 @@ type ClientGroup = {
   clientName: string | null;
   projects: Project[];
 };
+
+function BudgetProgress({ bookedDays, budgetDays }: { bookedDays?: number | null; budgetDays?: number | null }) {
+  if (budgetDays == null || budgetDays === 0) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const booked = bookedDays ?? 0;
+  const pct = Math.min(100, Math.round((booked / budgetDays) * 100));
+  const isOver = booked > budgetDays;
+  return (
+    <div className="flex flex-col gap-1 min-w-[90px]">
+      <span className="text-xs text-muted-foreground whitespace-nowrap">
+        {Math.round(booked * 10) / 10}d&nbsp;/&nbsp;{Math.round(budgetDays * 10) / 10}d
+      </span>
+      <Progress
+        value={pct}
+        className={`h-1.5 ${isOver ? "[&>div]:bg-destructive" : ""}`}
+      />
+    </div>
+  );
+}
 
 function ProjectActionsMenu({
   project,
@@ -407,6 +430,9 @@ export default function Projects() {
         )}
       </TableCell>
       <TableCell>
+        <BudgetProgress bookedDays={project.bookedDays} budgetDays={project.budgetDays} />
+      </TableCell>
+      <TableCell>
         <ProjectActionsMenu
           project={project}
           onManageRoles={() => setRolesProject({ id: project.id, name: project.name })}
@@ -427,6 +453,7 @@ export default function Projects() {
         <TableHead>Code</TableHead>
         <TableHead>Status</TableHead>
         <TableHead>Roles</TableHead>
+        <TableHead>Budget</TableHead>
         <TableHead className="w-[50px]"></TableHead>
       </TableRow>
     </TableHeader>
@@ -440,6 +467,7 @@ export default function Projects() {
         <TableHead>Code</TableHead>
         <TableHead>Status</TableHead>
         <TableHead>Roles</TableHead>
+        <TableHead>Budget</TableHead>
         <TableHead className="w-[50px]"></TableHead>
       </TableRow>
     </TableHeader>
@@ -643,12 +671,13 @@ export default function Projects() {
                       <TableCell><Skeleton className="h-4 w-[80px]" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-[60px] rounded-full" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-[60px]" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[90px]" /></TableCell>
                       <TableCell><Skeleton className="h-8 w-8" /></TableCell>
                     </TableRow>
                   ))
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                       No projects found.
                     </TableCell>
                   </TableRow>
@@ -683,6 +712,9 @@ export default function Projects() {
                         {project.roleCount != null ? (
                           <span>{project.roleCount} {project.roleCount === 1 ? "role" : "roles"}</span>
                         ) : "—"}
+                      </TableCell>
+                      <TableCell>
+                        <BudgetProgress bookedDays={project.bookedDays} budgetDays={project.budgetDays} />
                       </TableCell>
                       <TableCell>
                         <ProjectActionsMenu
