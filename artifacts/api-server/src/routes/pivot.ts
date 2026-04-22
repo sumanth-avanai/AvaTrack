@@ -1,21 +1,28 @@
 /**
- * Pivot / flexible report endpoint.
+ * Pivot / flexible report endpoint – v2
  *
  * GET /api/reports/pivot
- *   startDate        YYYY-MM-DD  (required)
- *   endDate          YYYY-MM-DD  (required)
- *   rowDimension     employees | projects | clients
- *   colDimension     none | month
- *   metric           billable_hours | total_hours |
- *                    billable_utilization_percent | overall_utilization_percent |
- *                    booked_hours | budget_hours | remaining_hours | budget_used_pct
- *   employeeIds      comma-separated IDs  (optional)
- *   projectIds       comma-separated IDs  (optional)
- *   clientIds        comma-separated IDs  (optional)
+ *   startDate       YYYY-MM-DD  (required)
+ *   endDate         YYYY-MM-DD  (required)
+ *   rowDimension    employees | projects | clients | roles
+ *   colDimension    none | week | month | quarter
+ *   metrics         comma-separated or repeated query param:
+ *                     booked | billable_booked | planned | available | budgeted |
+ *                     remaining_unbooked | remaining_unplanned |
+ *                     utilization_pct | plan_completion_pct
+ *                   Legacy single param: metric=billable_hours|total_hours|... (mapped automatically)
+ *   employeeIds     comma-separated IDs  (optional)
+ *   projectIds      comma-separated IDs  (optional)
+ *   clientIds       comma-separated IDs  (optional)
+ *
+ * Response: DrillResponse
+ *   { type:"drill", rowDimension, colDimension, metrics, columns, columnLabels, rows, totals }
+ *   rows[].data     = { [colKey]: { [metricKey]: number } }
+ *   rows[].children = same shape, full eager tree
  */
 
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte, inArray, or } from "drizzle-orm";
+import { eq, and, gte, lte, inArray } from "drizzle-orm";
 import {
   db,
   timeEntriesTable,
@@ -23,13 +30,37 @@ import {
   clientsTable,
   employeesTable,
   resourceBookingsTable,
+  projectRolesTable,
+  projectRoleAssignmentsTable,
 } from "@workspace/db";
 import { calculateAvailableHours } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
 
 const router: IRouter = Router();
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface DrillRow {
+  id: string;
+  name: string;
+  type: "employee" | "project" | "client" | "role";
+  expandable: boolean;
+  data: Record<string, Record<string, number>>;
+  children: DrillRow[];
+}
+
+interface DrillResponse {
+  type: "drill";
+  rowDimension: string;
+  colDimension: string;
+  metrics: string[];
+  columns: string[];
+  columnLabels: string[];
+  rows: DrillRow[];
+  totals: Record<string, Record<string, number>>;
+}
+
+// ─── Param helpers ────────────────────────────────────────────────────────────
 
 function parseDateParam(v: unknown): string | null {
   if (typeof v !== "string") return null;
@@ -42,77 +73,191 @@ function parseIds(raw: unknown): number[] | undefined {
   return ids.length > 0 ? ids : undefined;
 }
 
-function getMonthsInRange(startDate: string, endDate: string): string[] {
-  const months: string[] = [];
-  const end = new Date(endDate + "T00:00:00Z");
-  const cur = new Date(
-    Date.UTC(parseInt(startDate.slice(0, 4)), parseInt(startDate.slice(5, 7)) - 1, 1)
-  );
-  while (cur <= end) {
-    months.push(cur.toISOString().slice(0, 7));
-    cur.setUTCMonth(cur.getUTCMonth() + 1);
-  }
-  return months;
-}
-
-function monthBounds(yyyymm: string, startDate: string, endDate: string): { start: string; end: string } {
-  const year    = parseInt(yyyymm.slice(0, 4));
-  const mon     = parseInt(yyyymm.slice(5, 7));
-  const monthFirst = `${yyyymm}-01`;
-  const lastDay    = new Date(Date.UTC(year, mon, 0)).getUTCDate();
-  const monthLast  = `${yyyymm}-${String(lastDay).padStart(2, "0")}`;
-  return {
-    start: monthFirst < startDate ? startDate : monthFirst,
-    end:   monthLast  > endDate   ? endDate   : monthLast,
-  };
-}
-
-function round2(n: number) {
+function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function computeMetric(
-  metric: string,
-  billableHours: number,
-  totalHours: number,
-  availableHours: number,
-  bookedHours: number,
-  budgetHours: number | null
-): number {
-  switch (metric) {
-    case "billable_hours":              return billableHours;
-    case "total_hours":                 return totalHours;
-    case "billable_utilization_percent":
-      return availableHours > 0 ? round2(billableHours / availableHours) : 0;
-    case "overall_utilization_percent":
-      return availableHours > 0 ? round2(totalHours    / availableHours) : 0;
-    case "booked_hours":               return bookedHours;
-    case "budget_hours":               return budgetHours ?? 0;
-    case "remaining_hours":            return budgetHours != null ? round2(budgetHours - totalHours) : 0;
-    case "budget_used_pct":            return budgetHours != null && budgetHours > 0 ? round2(totalHours / budgetHours) : 0;
-    default: return billableHours;
-  }
+// Legacy metric alias normalisation
+const LEGACY_METRIC_MAP: Record<string, string> = {
+  billable_hours:               "billable_booked",
+  total_hours:                  "booked",
+  billable_utilization_percent: "utilization_pct",
+  overall_utilization_percent:  "utilization_pct",
+  booked_hours:                 "planned",
+  budget_hours:                 "budgeted",
+  remaining_hours:              "remaining_unbooked",
+  budget_used_pct:              "remaining_unbooked",
+};
+
+function normalizeMetric(m: string): string {
+  return LEGACY_METRIC_MAP[m] ?? m;
 }
 
-/**
- * Compute the overlapping booked hours between a booking and a date range.
- * Uses the simple formula: overlap_days / 7 * hoursPerWeek
- */
-function computeBookedHoursInRange(
-  bookingStart: string,
-  bookingEnd: string,
+// ─── Column dimension helpers ─────────────────────────────────────────────────
+
+function getISOWeekInfo(dateStr: string): { year: number; week: number } {
+  const d = new Date(dateStr + "T12:00:00Z");
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const y0 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return {
+    year: d.getUTCFullYear(),
+    week: Math.ceil(((d.getTime() - y0.getTime()) / 86400000 + 1) / 7),
+  };
+}
+
+function getISOWeekMonday(year: number, week: number): Date {
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const dow = jan4.getUTCDay() || 7;
+  const w1mon = new Date(Date.UTC(year, 0, 4 - dow + 1));
+  return new Date(Date.UTC(
+    w1mon.getUTCFullYear(), w1mon.getUTCMonth(),
+    w1mon.getUTCDate() + (week - 1) * 7
+  ));
+}
+
+function dateToBucket(dateStr: string, colDim: string): string {
+  if (colDim === "none")    return "Total";
+  if (colDim === "month")   return dateStr.slice(0, 7);
+  if (colDim === "quarter") {
+    const mon = parseInt(dateStr.slice(5, 7));
+    return `${dateStr.slice(0, 4)}-Q${Math.ceil(mon / 3)}`;
+  }
+  if (colDim === "week") {
+    const { year, week } = getISOWeekInfo(dateStr);
+    return `${year}-W${String(week).padStart(2, "0")}`;
+  }
+  return "Total";
+}
+
+function getColumnsInRange(startDate: string, endDate: string, colDim: string): string[] {
+  if (colDim === "none") return [];
+  const seen = new Set<string>();
+  const order: string[] = [];
+  const d = new Date(startDate + "T12:00:00Z");
+  const end = new Date(endDate + "T12:00:00Z");
+  while (d <= end) {
+    const b = dateToBucket(d.toISOString().slice(0, 10), colDim);
+    if (!seen.has(b)) { seen.add(b); order.push(b); }
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return order;
+}
+
+function getBucketBounds(
+  key: string, colDim: string, rangeStart: string, rangeEnd: string
+): { start: string; end: string } {
+  if (key === "Total" || colDim === "none") return { start: rangeStart, end: rangeEnd };
+  if (colDim === "month") {
+    const [y, m] = key.split("-").map(Number);
+    const first = `${key}-01`;
+    const last = `${key}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+    return {
+      start: first > rangeStart ? first : rangeStart,
+      end:   last  < rangeEnd   ? last  : rangeEnd,
+    };
+  }
+  if (colDim === "quarter") {
+    const y  = parseInt(key.slice(0, 4));
+    const q  = parseInt(key.slice(6));
+    const sm = (q - 1) * 3 + 1;
+    const em = q * 3;
+    const qStart = `${y}-${String(sm).padStart(2, "0")}-01`;
+    const qEnd   = `${y}-${String(em).padStart(2, "0")}-${String(new Date(Date.UTC(y, em, 0)).getUTCDate()).padStart(2, "0")}`;
+    return {
+      start: qStart > rangeStart ? qStart : rangeStart,
+      end:   qEnd   < rangeEnd   ? qEnd   : rangeEnd,
+    };
+  }
+  if (colDim === "week") {
+    const y   = parseInt(key.slice(0, 4));
+    const w   = parseInt(key.slice(6));
+    const mon = getISOWeekMonday(y, w);
+    const sun = new Date(Date.UTC(mon.getUTCFullYear(), mon.getUTCMonth(), mon.getUTCDate() + 6));
+    const wStart = mon.toISOString().slice(0, 10);
+    const wEnd   = sun.toISOString().slice(0, 10);
+    return {
+      start: wStart > rangeStart ? wStart : rangeStart,
+      end:   wEnd   < rangeEnd   ? wEnd   : rangeEnd,
+    };
+  }
+  return { start: rangeStart, end: rangeEnd };
+}
+
+function getBucketLabel(key: string, colDim: string): string {
+  if (key === "Total") return "Total";
+  if (colDim === "month") {
+    const [y, m] = key.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, 1))
+      .toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+  }
+  if (colDim === "quarter") {
+    const [y, q] = key.split("-");
+    return `${q} ${y}`;
+  }
+  if (colDim === "week") {
+    const [y, w] = key.split("-");
+    return `${w.replace(/^W0*/, "W")} ${y}`;
+  }
+  return key;
+}
+
+// ─── Resource booking → bucket hours (day-by-day) ─────────────────────────────
+
+function assignBookingToBuckets(
+  booking: { startDate: string; endDate: string; hoursPerWeek: number },
   rangeStart: string,
   rangeEnd: string,
-  hoursPerWeek: number
-): number {
-  const overlapStart = bookingStart > rangeStart ? bookingStart : rangeStart;
-  const overlapEnd   = bookingEnd   < rangeEnd   ? bookingEnd   : rangeEnd;
-  if (overlapStart > overlapEnd) return 0;
-  const days = (new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000 + 1;
-  return (days / 7) * hoursPerWeek;
+  colDim: string,
+): Record<string, number> {
+  const oStart = booking.startDate > rangeStart ? booking.startDate : rangeStart;
+  const oEnd   = booking.endDate   < rangeEnd   ? booking.endDate   : rangeEnd;
+  if (oStart > oEnd) return {};
+
+  if (colDim === "none") {
+    const days = (new Date(oEnd + "T12:00:00Z").getTime() - new Date(oStart + "T12:00:00Z").getTime()) / 86400000 + 1;
+    return { Total: (days / 7) * booking.hoursPerWeek };
+  }
+
+  const res: Record<string, number> = {};
+  const hpd = booking.hoursPerWeek / 7;
+  const d   = new Date(oStart + "T12:00:00Z");
+  const e   = new Date(oEnd   + "T12:00:00Z");
+  while (d <= e) {
+    const b = dateToBucket(d.toISOString().slice(0, 10), colDim);
+    res[b] = (res[b] ?? 0) + hpd;
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return res;
 }
 
-// ─── main route ─────────────────────────────────────────────────────────────
+// ─── Metric computation ───────────────────────────────────────────────────────
+
+function computeMetrics(
+  metricKeys: string[],
+  agg: { booked: number; billable: number; planned: number; available: number; budgeted: number | null },
+): Record<string, number> {
+  const r: Record<string, number> = {};
+  for (const k of metricKeys) {
+    let v: number;
+    switch (k) {
+      case "booked":              v = round2(agg.booked);   break;
+      case "billable_booked":     v = round2(agg.billable); break;
+      case "planned":             v = round2(agg.planned);  break;
+      case "available":           v = round2(agg.available); break;
+      case "budgeted":            v = round2(agg.budgeted ?? 0); break;
+      case "remaining_unbooked":  v = agg.budgeted != null ? round2(agg.budgeted - agg.booked)  : 0; break;
+      case "remaining_unplanned": v = agg.budgeted != null ? round2(agg.budgeted - agg.planned) : 0; break;
+      case "utilization_pct":     v = agg.available > 0    ? round2(agg.booked / agg.available) : 0; break;
+      case "plan_completion_pct": v = agg.planned   > 0    ? round2(agg.booked / agg.planned)   : 0; break;
+      default:                    v = round2(agg.booked);   break;
+    }
+    r[k] = v;
+  }
+  return r;
+}
+
+// ─── Main route ───────────────────────────────────────────────────────────────
 
 router.get("/reports/pivot", async (req, res): Promise<void> => {
   const startDate = parseDateParam(req.query.startDate);
@@ -124,13 +269,24 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
 
   const rowDimension = String(req.query.rowDimension ?? "employees");
   const colDimension = String(req.query.colDimension ?? "none");
-  const metric       = String(req.query.metric       ?? "billable_hours");
+
+  // Parse metrics — new array param or legacy single metric
+  let rawMetrics: string[] = [];
+  const qm = req.query.metrics;
+  if (qm) {
+    rawMetrics = (Array.isArray(qm) ? qm.map(String) : String(qm).split(","))
+      .map((s) => s.trim()).filter(Boolean);
+  } else if (req.query.metric) {
+    rawMetrics = [String(req.query.metric)];
+  }
+  if (rawMetrics.length === 0) rawMetrics = ["booked"];
+  const metrics = [...new Set(rawMetrics.map(normalizeMetric))];
 
   const filterEmpIds  = parseIds(req.query.employeeIds);
   const filterProjIds = parseIds(req.query.projectIds);
   const filterCliIds  = parseIds(req.query.clientIds);
 
-  // ── 1. In-scope projects ─────────────────────────────────────────────────
+  // ── 1. Projects ────────────────────────────────────────────────────────────
   const projConds: any[] = [];
   if (filterProjIds) projConds.push(inArray(projectsTable.id, filterProjIds));
   if (filterCliIds)  projConds.push(inArray(projectsTable.clientId, filterCliIds));
@@ -151,280 +307,614 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
   const projectById    = new Map(allProjects.map((p) => [p.id, p]));
   const inScopeProjIds = allProjects.map((p) => p.id);
 
-  // ── 2. In-scope employees ────────────────────────────────────────────────
+  // ── 2. Employees ──────────────────────────────────────────────────────────
   const empConds: any[] = [eq(employeesTable.active, true)];
   if (filterEmpIds) empConds.push(inArray(employeesTable.id, filterEmpIds));
+  const allEmployees  = await db.select().from(employeesTable).where(and(...empConds));
+  const employeeById  = new Map(allEmployees.map((e) => [e.id, e]));
+  const inScopeEmpIds = allEmployees.map((e) => e.id);
 
-  const allEmployees = await db
-    .select()
-    .from(employeesTable)
-    .where(and(...empConds));
+  // ── 3. Project roles ──────────────────────────────────────────────────────
+  let allRoles: (typeof projectRolesTable.$inferSelect)[] = [];
+  if (inScopeProjIds.length > 0) {
+    allRoles = await db
+      .select()
+      .from(projectRolesTable)
+      .where(inArray(projectRolesTable.projectId, inScopeProjIds));
+  }
+  const roleById       = new Map(allRoles.map((r) => [r.id, r]));
+  const rolesByProject = new Map<number, (typeof allRoles)>();
+  for (const r of allRoles) {
+    if (!rolesByProject.has(r.projectId)) rolesByProject.set(r.projectId, []);
+    rolesByProject.get(r.projectId)!.push(r);
+  }
 
-  // ── 3. Time entries in range ─────────────────────────────────────────────
+  // ── 4. Role assignments ───────────────────────────────────────────────────
+  if (allRoles.length > 0) {
+    await db
+      .select({
+        projectRoleId: projectRoleAssignmentsTable.projectRoleId,
+        employeeId:    projectRoleAssignmentsTable.employeeId,
+      })
+      .from(projectRoleAssignmentsTable)
+      .where(inArray(projectRoleAssignmentsTable.projectRoleId, allRoles.map((r) => r.id)));
+    // (assignments used only for reference; activity is driven by actual entries/bookings)
+  }
+
+  // ── 5. Time entries ───────────────────────────────────────────────────────
   const entryConds: any[] = [
     gte(timeEntriesTable.entryDate, startDate),
     lte(timeEntriesTable.entryDate, endDate),
   ];
-  if (filterEmpIds)              entryConds.push(inArray(timeEntriesTable.employeeId, filterEmpIds));
-  if (inScopeProjIds.length > 0) entryConds.push(inArray(timeEntriesTable.projectId, inScopeProjIds));
+  if (filterEmpIds  && filterEmpIds.length  > 0)
+    entryConds.push(inArray(timeEntriesTable.employeeId, filterEmpIds));
+  if (inScopeProjIds.length > 0)
+    entryConds.push(inArray(timeEntriesTable.projectId, inScopeProjIds));
+  const rawEntries = await db.select().from(timeEntriesTable).where(and(...entryConds));
 
-  const rawEntries = await db
-    .select()
-    .from(timeEntriesTable)
-    .where(and(...entryConds));
+  // ── 6. Resource bookings ──────────────────────────────────────────────────
+  const bookingConds: any[] = [
+    lte(resourceBookingsTable.startDate, endDate),
+    gte(resourceBookingsTable.endDate,   startDate),
+  ];
+  if (filterEmpIds  && filterEmpIds.length  > 0)
+    bookingConds.push(inArray(resourceBookingsTable.employeeId, filterEmpIds));
+  if (inScopeProjIds.length > 0)
+    bookingConds.push(inArray(resourceBookingsTable.projectId, inScopeProjIds));
+  const rawBookings = await db.select().from(resourceBookingsTable).where(and(...bookingConds));
 
-  const entries = rawEntries.map((e) => ({
-    ...e,
-    isBillable: projectById.get(e.projectId)?.isBillable ?? false,
-    clientId:   projectById.get(e.projectId)?.clientId   ?? null,
-  }));
-
-  // ── 4. Resource bookings overlapping the date range (for projects/clients) ─
-  let bookedHoursByProject = new Map<number, number>();
-  if (rowDimension === "projects" || rowDimension === "clients") {
-    const bookingConds: any[] = [
-      lte(resourceBookingsTable.startDate, endDate),
-      gte(resourceBookingsTable.endDate, startDate),
-    ];
-    if (inScopeProjIds.length > 0) {
-      bookingConds.push(inArray(resourceBookingsTable.projectId, inScopeProjIds));
-    }
-    const bookings = await db
-      .select({
-        projectId:    resourceBookingsTable.projectId,
-        startDate:    resourceBookingsTable.startDate,
-        endDate:      resourceBookingsTable.endDate,
-        hoursPerWeek: resourceBookingsTable.hoursPerWeek,
-      })
-      .from(resourceBookingsTable)
-      .where(and(...bookingConds));
-
-    for (const b of bookings) {
-      const hrs = computeBookedHoursInRange(b.startDate, b.endDate, startDate, endDate, b.hoursPerWeek);
-      bookedHoursByProject.set(b.projectId, (bookedHoursByProject.get(b.projectId) ?? 0) + hrs);
-    }
-  }
-
-  // ── 5. Employee availability (holidays + vacations + contract dates) ──────
+  // ── 7. Employee availability ──────────────────────────────────────────────
   const availMap = await fetchEmpAvailabilityMap(allEmployees, startDate, endDate);
 
-  // ─── CASE A: colDimension = "none"  → flat table ─────────────────────────
-  if (colDimension === "none") {
-    type FlatRowOut = {
-      id: number; label: string;
-      availableHours: number; billableHours: number; nonBillableHours: number;
-      totalHours: number; billableUtilization: number; overallUtilization: number;
-      budgetHours?: number | null;
-      bookedHours?: number;
-      remainingHours?: number | null;
-      budgetUsedPct?: number | null;
-    };
-    const flatRows: FlatRowOut[] = [];
+  // ── 8. Column keys ────────────────────────────────────────────────────────
+  const timeColKeys  = getColumnsInRange(startDate, endDate, colDimension);
+  const allColKeys   = colDimension === "none" ? ["Total"] : [...timeColKeys, "Total"];
+  const columnLabels = allColKeys.map((k) => getBucketLabel(k, colDimension));
 
-    if (rowDimension === "employees") {
-      for (const emp of allEmployees) {
-        const { holidayDates, vacationDateSet } = availMap.get(emp.id)!;
-        const available = calculateAvailableHours(
-          startDate, endDate,
+  // ── 9. Nested aggregation maps ────────────────────────────────────────────
+  // entryAgg[empId][projId][roleStr][bucket] = {booked, billable}
+  type EA = { booked: number; billable: number };
+  const entryAgg = new Map<number, Map<number, Map<string, Map<string, EA>>>>();
+
+  for (const e of rawEntries) {
+    const isBillable = projectById.get(e.projectId)?.isBillable ?? false;
+    const roleStr    = e.projectRoleId != null ? String(e.projectRoleId) : "null";
+    const timeBucket = dateToBucket(e.entryDate, colDimension);
+    const buckets    = timeBucket === "Total" ? ["Total"] : [timeBucket, "Total"];
+
+    for (const bucket of buckets) {
+      if (!entryAgg.has(e.employeeId)) entryAgg.set(e.employeeId, new Map());
+      const em = entryAgg.get(e.employeeId)!;
+      if (!em.has(e.projectId)) em.set(e.projectId, new Map());
+      const pm = em.get(e.projectId)!;
+      if (!pm.has(roleStr)) pm.set(roleStr, new Map());
+      const rm  = pm.get(roleStr)!;
+      const cur = rm.get(bucket) ?? { booked: 0, billable: 0 };
+      cur.booked += e.hours;
+      if (isBillable) cur.billable += e.hours;
+      rm.set(bucket, cur);
+    }
+  }
+
+  // plannedAgg[empId][projId][roleStr][bucket] = hours
+  const plannedAgg = new Map<number, Map<number, Map<string, Map<string, number>>>>();
+
+  for (const b of rawBookings) {
+    const roleStr   = b.projectRoleId != null ? String(b.projectRoleId) : "null";
+    const bucketHrs = assignBookingToBuckets(b, startDate, endDate, colDimension);
+
+    for (const [timeBucket, hours] of Object.entries(bucketHrs)) {
+      const buckets = timeBucket === "Total" ? ["Total"] : [timeBucket, "Total"];
+      for (const bucket of buckets) {
+        if (!plannedAgg.has(b.employeeId)) plannedAgg.set(b.employeeId, new Map());
+        const em = plannedAgg.get(b.employeeId)!;
+        if (!em.has(b.projectId)) em.set(b.projectId, new Map());
+        const pm = em.get(b.projectId)!;
+        if (!pm.has(roleStr)) pm.set(roleStr, new Map());
+        const rm = pm.get(roleStr)!;
+        rm.set(bucket, (rm.get(bucket) ?? 0) + hours);
+      }
+    }
+  }
+
+  // ── 10. Employee availability per bucket ──────────────────────────────────
+  const empAvailBucket = new Map<string, number>(); // `${empId}::${bucket}`
+  const needsAvail = metrics.some((m) => m === "available" || m === "utilization_pct");
+  if (needsAvail) {
+    for (const emp of allEmployees) {
+      const { holidayDates, vacationDateSet } = availMap.get(emp.id)!;
+      for (const bucket of allColKeys) {
+        const { start, end } = getBucketBounds(bucket, colDimension, startDate, endDate);
+        const avail = calculateAvailableHours(
+          start, end,
           emp.workingDaysMask, emp.weeklyCapacityHours,
           holidayDates, vacationDateSet,
-          emp.contractStartDate, emp.contractEndDate
+          emp.contractStartDate, emp.contractEndDate,
         );
-        const empEntries = entries.filter((e) => e.employeeId === emp.id);
-        const billable   = empEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        const total      = empEntries.reduce((s, e) => s + e.hours, 0);
-        flatRows.push({
-          id: emp.id, label: emp.name,
-          availableHours:     round2(available),
-          billableHours:      round2(billable),
-          nonBillableHours:   round2(total - billable),
-          totalHours:         round2(total),
-          billableUtilization: available > 0 ? round2(billable / available) : 0,
-          overallUtilization:  available > 0 ? round2(total    / available) : 0,
-        });
-      }
-
-    } else if (rowDimension === "projects") {
-      for (const proj of allProjects) {
-        const projEntries = entries.filter((e) => e.projectId === proj.id);
-        const billable    = projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        const total       = projEntries.reduce((s, e) => s + e.hours, 0);
-        const bookedHrs   = round2(bookedHoursByProject.get(proj.id) ?? 0);
-        const budgetHrs   = proj.budgetHours ?? null;
-        const remaining   = budgetHrs != null ? round2(budgetHrs - total) : null;
-        const budgetUsed  = budgetHrs != null && budgetHrs > 0 ? round2(total / budgetHrs) : null;
-        flatRows.push({
-          id: proj.id, label: `${proj.name} (${proj.clientName ?? "—"})`,
-          availableHours: 0, billableHours: round2(billable),
-          nonBillableHours: round2(total - billable), totalHours: round2(total),
-          billableUtilization: 0, overallUtilization: 0,
-          budgetHours: budgetHrs, bookedHours: bookedHrs,
-          remainingHours: remaining, budgetUsedPct: budgetUsed,
-        });
-      }
-
-    } else if (rowDimension === "clients") {
-      const clientMap = new Map<number, {
-        id: number; name: string; billable: number; total: number;
-        budgetHours: number; hasBudget: boolean; bookedHours: number;
-      }>();
-      for (const proj of allProjects) {
-        if (!proj.clientId) continue;
-        if (!clientMap.has(proj.clientId)) {
-          clientMap.set(proj.clientId, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0, budgetHours: 0, hasBudget: false, bookedHours: 0 });
-        }
-        const projEntries = entries.filter((e) => e.projectId === proj.id);
-        const c = clientMap.get(proj.clientId)!;
-        c.billable    += projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        c.total       += projEntries.reduce((s, e) => s + e.hours, 0);
-        if (proj.budgetHours != null) {
-          c.budgetHours += proj.budgetHours;
-          c.hasBudget = true;
-        }
-        c.bookedHours += bookedHoursByProject.get(proj.id) ?? 0;
-      }
-      for (const c of clientMap.values()) {
-        const budgetHrs  = c.hasBudget ? c.budgetHours : null;
-        const remaining  = budgetHrs != null ? round2(budgetHrs - c.total) : null;
-        const budgetUsed = budgetHrs != null && budgetHrs > 0 ? round2(c.total / budgetHrs) : null;
-        flatRows.push({
-          id: c.id, label: c.name,
-          availableHours: 0, billableHours: round2(c.billable),
-          nonBillableHours: round2(c.total - c.billable), totalHours: round2(c.total),
-          billableUtilization: 0, overallUtilization: 0,
-          budgetHours: budgetHrs, bookedHours: round2(c.bookedHours),
-          remainingHours: remaining, budgetUsedPct: budgetUsed,
-        });
-      }
-    }
-
-    res.json({ type: "flat", rowDimension, rows: flatRows });
-    return;
-  }
-
-  // ─── CASE B: colDimension = "month"  → pivot ─────────────────────────────
-  const months = getMonthsInRange(startDate, endDate);
-
-  // Pre-compute available hours per employee per month
-  const empMonthAvail = new Map<string, number>();
-  for (const emp of allEmployees) {
-    const { holidayDates, vacationDateSet } = availMap.get(emp.id)!;
-    for (const month of months) {
-      const { start, end } = monthBounds(month, startDate, endDate);
-      const avail = calculateAvailableHours(
-        start, end,
-        emp.workingDaysMask, emp.weeklyCapacityHours,
-        holidayDates, vacationDateSet,
-        emp.contractStartDate, emp.contractEndDate
-      );
-      empMonthAvail.set(`${emp.id}:${month}`, avail);
-    }
-  }
-
-  // Pre-compute booked hours per project per month (for pivot)
-  let bookedHoursByProjectMonth = new Map<string, number>();
-  if (rowDimension === "projects" || rowDimension === "clients") {
-    const bookingConds: any[] = [
-      lte(resourceBookingsTable.startDate, endDate),
-      gte(resourceBookingsTable.endDate, startDate),
-    ];
-    if (inScopeProjIds.length > 0) {
-      bookingConds.push(inArray(resourceBookingsTable.projectId, inScopeProjIds));
-    }
-    const bookings = await db
-      .select({
-        projectId:    resourceBookingsTable.projectId,
-        startDate:    resourceBookingsTable.startDate,
-        endDate:      resourceBookingsTable.endDate,
-        hoursPerWeek: resourceBookingsTable.hoursPerWeek,
-      })
-      .from(resourceBookingsTable)
-      .where(and(...bookingConds));
-
-    for (const b of bookings) {
-      for (const month of months) {
-        const { start, end } = monthBounds(month, startDate, endDate);
-        const hrs = computeBookedHoursInRange(b.startDate, b.endDate, start, end, b.hoursPerWeek);
-        if (hrs > 0) {
-          const key = `${b.projectId}:${month}`;
-          bookedHoursByProjectMonth.set(key, (bookedHoursByProjectMonth.get(key) ?? 0) + hrs);
-        }
+        empAvailBucket.set(`${emp.id}::${bucket}`, avail);
       }
     }
   }
 
-  const pivotRows: { id: number; label: string; values: Record<string, number> }[] = [];
+  // ── 11. Aggregation helpers ───────────────────────────────────────────────
+
+  // Employee: sum all projects and roles
+  function empEntrySum(empId: number, bucket: string): EA {
+    const r = { booked: 0, billable: 0 };
+    const em = entryAgg.get(empId);
+    if (!em) return r;
+    for (const pm of em.values())
+      for (const rm of pm.values()) {
+        const a = rm.get(bucket);
+        if (a) { r.booked += a.booked; r.billable += a.billable; }
+      }
+    return r;
+  }
+
+  // Employee within a specific project: all roles
+  function empProjEntrySum(empId: number, projId: number, bucket: string): EA {
+    const r = { booked: 0, billable: 0 };
+    const pm = entryAgg.get(empId)?.get(projId);
+    if (!pm) return r;
+    for (const rm of pm.values()) {
+      const a = rm.get(bucket);
+      if (a) { r.booked += a.booked; r.billable += a.billable; }
+    }
+    return r;
+  }
+
+  // Employee within project+role
+  function empProjRoleEntrySum(empId: number, projId: number, roleStr: string, bucket: string): EA {
+    return entryAgg.get(empId)?.get(projId)?.get(roleStr)?.get(bucket) ?? { booked: 0, billable: 0 };
+  }
+
+  // Project: all employees, all roles
+  function projEntrySum(projId: number, bucket: string): EA {
+    const r = { booked: 0, billable: 0 };
+    for (const em of entryAgg.values()) {
+      const pm = em.get(projId);
+      if (!pm) continue;
+      for (const rm of pm.values()) {
+        const a = rm.get(bucket);
+        if (a) { r.booked += a.booked; r.billable += a.billable; }
+      }
+    }
+    return r;
+  }
+
+  // Project+role: all employees
+  function projRoleEntrySum(projId: number, roleStr: string, bucket: string): EA {
+    const r = { booked: 0, billable: 0 };
+    for (const em of entryAgg.values()) {
+      const a = em.get(projId)?.get(roleStr)?.get(bucket);
+      if (a) { r.booked += a.booked; r.billable += a.billable; }
+    }
+    return r;
+  }
+
+  function empPlannedSum(empId: number, bucket: string): number {
+    let t = 0;
+    const em = plannedAgg.get(empId);
+    if (!em) return t;
+    for (const pm of em.values()) for (const rm of pm.values()) t += rm.get(bucket) ?? 0;
+    return t;
+  }
+
+  function empProjPlannedSum(empId: number, projId: number, bucket: string): number {
+    let t = 0;
+    const pm = plannedAgg.get(empId)?.get(projId);
+    if (!pm) return t;
+    for (const rm of pm.values()) t += rm.get(bucket) ?? 0;
+    return t;
+  }
+
+  function empProjRolePlannedSum(empId: number, projId: number, roleStr: string, bucket: string): number {
+    return plannedAgg.get(empId)?.get(projId)?.get(roleStr)?.get(bucket) ?? 0;
+  }
+
+  function projPlannedSum(projId: number, bucket: string): number {
+    let t = 0;
+    for (const em of plannedAgg.values()) {
+      const pm = em.get(projId);
+      if (!pm) continue;
+      for (const rm of pm.values()) t += rm.get(bucket) ?? 0;
+    }
+    return t;
+  }
+
+  function projRolePlannedSum(projId: number, roleStr: string, bucket: string): number {
+    let t = 0;
+    for (const em of plannedAgg.values()) t += em.get(projId)?.get(roleStr)?.get(bucket) ?? 0;
+    return t;
+  }
+
+  function empAvail(empId: number, bucket: string): number {
+    return empAvailBucket.get(`${empId}::${bucket}`) ?? 0;
+  }
+
+  function empSetAvail(empIds: number[], bucket: string): number {
+    return empIds.reduce((s, id) => s + empAvail(id, bucket), 0);
+  }
+
+  function getBudgeted(roleIds: number[]): number | null {
+    if (roleIds.length === 0) return null;
+    let total = 0;
+    let hasAny = false;
+    for (const rid of roleIds) {
+      const bh = roleById.get(rid)?.budgetedHours;
+      if (bh != null) { total += bh; hasAny = true; }
+    }
+    return hasAny ? total : null;
+  }
+
+  function mkMetrics(
+    ea: EA, planned: number, available: number, budgeted: number | null
+  ): Record<string, number> {
+    return computeMetrics(metrics, {
+      booked: ea.booked, billable: ea.billable, planned, available, budgeted,
+    });
+  }
+
+  // ── 12. Per-entity all-bucket data builders ────────────────────────────────
+
+  function empAllBuckets(empId: number, roleIds: number[]): Record<string, Record<string, number>> {
+    const budgeted = getBudgeted(roleIds);
+    const data: Record<string, Record<string, number>> = {};
+    for (const bucket of allColKeys) {
+      const ea    = empEntrySum(empId, bucket);
+      const plan  = empPlannedSum(empId, bucket);
+      const avail = empAvail(empId, bucket);
+      data[bucket] = mkMetrics(ea, plan, avail, budgeted);
+    }
+    return data;
+  }
+
+  function empProjAllBuckets(
+    empId: number, projId: number, roleIds: number[]
+  ): Record<string, Record<string, number>> {
+    const budgeted = getBudgeted(roleIds);
+    const data: Record<string, Record<string, number>> = {};
+    for (const bucket of allColKeys) {
+      const ea    = empProjEntrySum(empId, projId, bucket);
+      const plan  = empProjPlannedSum(empId, projId, bucket);
+      const avail = empAvail(empId, bucket);
+      data[bucket] = mkMetrics(ea, plan, avail, budgeted);
+    }
+    return data;
+  }
+
+  function empProjRoleAllBuckets(
+    empId: number, projId: number, roleStr: string, roleIds: number[]
+  ): Record<string, Record<string, number>> {
+    const budgeted = getBudgeted(roleIds);
+    const data: Record<string, Record<string, number>> = {};
+    for (const bucket of allColKeys) {
+      const ea    = empProjRoleEntrySum(empId, projId, roleStr, bucket);
+      const plan  = empProjRolePlannedSum(empId, projId, roleStr, bucket);
+      const avail = empAvail(empId, bucket);
+      data[bucket] = mkMetrics(ea, plan, avail, budgeted);
+    }
+    return data;
+  }
+
+  function projAllBuckets(
+    projId: number, empIds: number[], roleIds: number[]
+  ): Record<string, Record<string, number>> {
+    const budgeted = getBudgeted(roleIds);
+    const data: Record<string, Record<string, number>> = {};
+    for (const bucket of allColKeys) {
+      const ea    = projEntrySum(projId, bucket);
+      const plan  = projPlannedSum(projId, bucket);
+      const avail = empSetAvail(empIds, bucket);
+      data[bucket] = mkMetrics(ea, plan, avail, budgeted);
+    }
+    return data;
+  }
+
+  function projRoleAllBuckets(
+    projId: number, roleStr: string, empIds: number[], roleIds: number[]
+  ): Record<string, Record<string, number>> {
+    const budgeted = getBudgeted(roleIds);
+    const data: Record<string, Record<string, number>> = {};
+    for (const bucket of allColKeys) {
+      const ea    = projRoleEntrySum(projId, roleStr, bucket);
+      const plan  = projRolePlannedSum(projId, roleStr, bucket);
+      const avail = empSetAvail(empIds, bucket);
+      data[bucket] = mkMetrics(ea, plan, avail, budgeted);
+    }
+    return data;
+  }
+
+  // ── 13. Active-entity finders ─────────────────────────────────────────────
+
+  function activeProjectIdsForEmp(empId: number): number[] {
+    const ids = new Set<number>();
+    for (const pid of (entryAgg.get(empId)?.keys()  ?? [])) ids.add(pid);
+    for (const pid of (plannedAgg.get(empId)?.keys() ?? [])) ids.add(pid);
+    return [...ids].filter((id) => projectById.has(id));
+  }
+
+  function activeRoleStrsForEmpProj(empId: number, projId: number): string[] {
+    const strs = new Set<string>();
+    for (const rk of (entryAgg.get(empId)?.get(projId)?.keys()  ?? [])) strs.add(rk);
+    for (const rk of (plannedAgg.get(empId)?.get(projId)?.keys() ?? [])) strs.add(rk);
+    return [...strs];
+  }
+
+  function activeEmpIdsForProjRole(projId: number, roleStr: string): number[] {
+    const ids = new Set<number>();
+    for (const [eid, em] of entryAgg)  { if (em.get(projId)?.has(roleStr)) ids.add(eid); }
+    for (const [eid, em] of plannedAgg) { if (em.get(projId)?.has(roleStr)) ids.add(eid); }
+    return [...ids].filter((id) => employeeById.has(id));
+  }
+
+  function activeEmpIdsForProj(projId: number): number[] {
+    const ids = new Set<number>();
+    for (const [eid, em] of entryAgg)  { if (em.has(projId)) ids.add(eid); }
+    for (const [eid, em] of plannedAgg) { if (em.has(projId)) ids.add(eid); }
+    return [...ids].filter((id) => employeeById.has(id));
+  }
+
+  function allRoleStrsForProj(projId: number): string[] {
+    return [...(rolesByProject.get(projId) ?? []).map((r) => String(r.id)), "null"];
+  }
+
+  // ── 14. Build tree by rowDimension ────────────────────────────────────────
+
+  const rows: DrillRow[] = [];
 
   if (rowDimension === "employees") {
+    // Employee → Projects → Roles
     for (const emp of allEmployees) {
-      const values: Record<string, number> = {};
-      for (const month of months) {
-        const monthEntries = entries.filter((e) => e.employeeId === emp.id && e.entryDate.slice(0, 7) === month);
-        const billable  = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        const total     = monthEntries.reduce((s, e) => s + e.hours, 0);
-        const available = empMonthAvail.get(`${emp.id}:${month}`) ?? 0;
-        values[month]   = computeMetric(metric, billable, total, available, 0, null);
-      }
-      pivotRows.push({ id: emp.id, label: emp.name, values });
+      const activeProjIds = activeProjectIdsForEmp(emp.id);
+      const empRoleIds = activeProjIds.flatMap(
+        (pid) => (rolesByProject.get(pid) ?? []).map((r) => r.id)
+      );
+
+      const projChildren: DrillRow[] = activeProjIds.map((pid) => {
+        const proj        = projectById.get(pid)!;
+        const activeRoles = activeRoleStrsForEmpProj(emp.id, pid);
+        const projRoleIds = activeRoles
+          .filter((s) => s !== "null").map(Number).filter((id) => roleById.has(id));
+
+        const roleChildren: DrillRow[] = activeRoles.map((rk) => {
+          const rId  = rk === "null" ? null : parseInt(rk, 10);
+          const rIds = rId != null && roleById.has(rId) ? [rId] : [];
+          return {
+            id:         `emp-${emp.id}-proj-${pid}-role-${rk}`,
+            name:       rId != null ? (roleById.get(rId)?.name ?? `Role ${rId}`) : "No role",
+            type:       "role" as const,
+            expandable: false,
+            data:       empProjRoleAllBuckets(emp.id, pid, rk, rIds),
+            children:   [],
+          };
+        });
+
+        return {
+          id:         `emp-${emp.id}-proj-${pid}`,
+          name:       `${proj.name}${proj.clientName ? ` (${proj.clientName})` : ""}`,
+          type:       "project" as const,
+          expandable: roleChildren.length > 0,
+          data:       empProjAllBuckets(emp.id, pid, projRoleIds),
+          children:   roleChildren,
+        };
+      });
+
+      rows.push({
+        id:         `emp-${emp.id}`,
+        name:       emp.name,
+        type:       "employee",
+        expandable: projChildren.length > 0,
+        data:       empAllBuckets(emp.id, empRoleIds),
+        children:   projChildren,
+      });
     }
 
   } else if (rowDimension === "projects") {
+    // Project → Roles → Employees
     for (const proj of allProjects) {
-      const values: Record<string, number> = {};
-      for (const month of months) {
-        const monthEntries = entries.filter((e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month);
-        const billable   = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        const total      = monthEntries.reduce((s, e) => s + e.hours, 0);
-        const bookedHrs  = bookedHoursByProjectMonth.get(`${proj.id}:${month}`) ?? 0;
-        values[month]    = computeMetric(metric, billable, total, 0, bookedHrs, proj.budgetHours ?? null);
-      }
-      pivotRows.push({ id: proj.id, label: `${proj.name} (${proj.clientName ?? "—"})`, values });
+      const projRoles    = rolesByProject.get(proj.id) ?? [];
+      const projRoleStrs = allRoleStrsForProj(proj.id);
+      const empIds       = activeEmpIdsForProj(proj.id);
+      if (empIds.length === 0) continue;
+
+      const roleChildren: DrillRow[] = projRoleStrs
+        .map((rk) => {
+          const rId     = rk === "null" ? null : parseInt(rk, 10);
+          const rIds    = rId != null && roleById.has(rId) ? [rId] : [];
+          const rEmpIds = activeEmpIdsForProjRole(proj.id, rk);
+          if (rEmpIds.length === 0) return null;
+
+          const empChildren: DrillRow[] = rEmpIds.map((eid) => ({
+            id:         `proj-${proj.id}-role-${rk}-emp-${eid}`,
+            name:       employeeById.get(eid)!.name,
+            type:       "employee" as const,
+            expandable: false,
+            data:       empProjRoleAllBuckets(eid, proj.id, rk, rIds),
+            children:   [],
+          }));
+
+          return {
+            id:         `proj-${proj.id}-role-${rk}`,
+            name:       rId != null ? (roleById.get(rId)?.name ?? `Role ${rId}`) : "No role",
+            type:       "role" as const,
+            expandable: empChildren.length > 0,
+            data:       projRoleAllBuckets(proj.id, rk, rEmpIds, rIds),
+            children:   empChildren,
+          };
+        })
+        .filter((r): r is DrillRow => r !== null);
+
+      const projRoleIds = projRoles.map((r) => r.id);
+      rows.push({
+        id:         `proj-${proj.id}`,
+        name:       `${proj.name}${proj.clientName ? ` (${proj.clientName})` : ""}`,
+        type:       "project",
+        expandable: roleChildren.length > 0,
+        data:       projAllBuckets(proj.id, empIds, projRoleIds),
+        children:   roleChildren,
+      });
     }
 
   } else if (rowDimension === "clients") {
-    const clientMonthData = new Map<string, { id: number; name: string; billable: number; total: number; booked: number }>();
+    // Client → Projects → Roles → Employees
+    const uniqueClients = new Map<number, { id: number; name: string; projects: typeof allProjects }>();
     for (const proj of allProjects) {
       if (!proj.clientId) continue;
-      for (const month of months) {
-        const key = `${proj.clientId}:${month}`;
-        if (!clientMonthData.has(key)) clientMonthData.set(key, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0, booked: 0 });
-        const c = clientMonthData.get(key)!;
-        const monthEntries = entries.filter((e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month);
-        c.billable += monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        c.total    += monthEntries.reduce((s, e) => s + e.hours, 0);
-        c.booked   += bookedHoursByProjectMonth.get(`${proj.id}:${month}`) ?? 0;
-      }
+      if (!uniqueClients.has(proj.clientId))
+        uniqueClients.set(proj.clientId, { id: proj.clientId, name: proj.clientName ?? "—", projects: [] });
+      uniqueClients.get(proj.clientId)!.projects.push(proj);
     }
 
-    // Compute per-client total budgetHours (sum of project budgets)
-    const clientBudgetMap = new Map<number, number | null>();
-    for (const proj of allProjects) {
-      if (!proj.clientId) continue;
-      const cur = clientBudgetMap.get(proj.clientId);
-      if (proj.budgetHours != null) {
-        clientBudgetMap.set(proj.clientId, (cur ?? 0) + proj.budgetHours);
-      } else if (!clientBudgetMap.has(proj.clientId)) {
-        clientBudgetMap.set(proj.clientId, null);
+    for (const client of uniqueClients.values()) {
+      const clientProjIds = client.projects.map((p) => p.id);
+      const clientEmpIds  = [...new Set(clientProjIds.flatMap((pid) => activeEmpIdsForProj(pid)))];
+      if (clientEmpIds.length === 0) continue;
+
+      const clientRoleIds = clientProjIds.flatMap(
+        (pid) => (rolesByProject.get(pid) ?? []).map((r) => r.id)
+      );
+      const clientBudgeted = getBudgeted(clientRoleIds);
+
+      const clientData: Record<string, Record<string, number>> = {};
+      for (const bucket of allColKeys) {
+        let booked = 0, billable = 0, planned = 0;
+        for (const pid of clientProjIds) {
+          const ea  = projEntrySum(pid, bucket);
+          booked   += ea.booked;
+          billable += ea.billable;
+          planned  += projPlannedSum(pid, bucket);
+        }
+        const avail = empSetAvail(clientEmpIds, bucket);
+        clientData[bucket] = mkMetrics({ booked, billable }, planned, avail, clientBudgeted);
       }
+
+      const projChildren: DrillRow[] = client.projects
+        .map((proj) => {
+          const projRoles    = rolesByProject.get(proj.id) ?? [];
+          const projRoleStrs = allRoleStrsForProj(proj.id);
+          const projEmpIds   = activeEmpIdsForProj(proj.id);
+          if (projEmpIds.length === 0) return null;
+
+          const roleChildren: DrillRow[] = projRoleStrs
+            .map((rk) => {
+              const rId     = rk === "null" ? null : parseInt(rk, 10);
+              const rIds    = rId != null && roleById.has(rId) ? [rId] : [];
+              const rEmpIds = activeEmpIdsForProjRole(proj.id, rk);
+              if (rEmpIds.length === 0) return null;
+
+              const empChildren: DrillRow[] = rEmpIds.map((eid) => ({
+                id:         `cl-${client.id}-proj-${proj.id}-role-${rk}-emp-${eid}`,
+                name:       employeeById.get(eid)!.name,
+                type:       "employee" as const,
+                expandable: false,
+                data:       empProjRoleAllBuckets(eid, proj.id, rk, rIds),
+                children:   [],
+              }));
+
+              return {
+                id:         `cl-${client.id}-proj-${proj.id}-role-${rk}`,
+                name:       rId != null ? (roleById.get(rId)?.name ?? `Role ${rId}`) : "No role",
+                type:       "role" as const,
+                expandable: empChildren.length > 0,
+                data:       projRoleAllBuckets(proj.id, rk, rEmpIds, rIds),
+                children:   empChildren,
+              };
+            })
+            .filter((r): r is DrillRow => r !== null);
+
+          const projRoleIds = projRoles.map((r) => r.id);
+          return {
+            id:         `cl-${client.id}-proj-${proj.id}`,
+            name:       proj.name,
+            type:       "project" as const,
+            expandable: roleChildren.length > 0,
+            data:       projAllBuckets(proj.id, projEmpIds, projRoleIds),
+            children:   roleChildren,
+          };
+        })
+        .filter((r): r is DrillRow => r !== null);
+
+      rows.push({
+        id:         `client-${client.id}`,
+        name:       client.name,
+        type:       "client",
+        expandable: projChildren.length > 0,
+        data:       clientData,
+        children:   projChildren,
+      });
     }
 
-    const uniqueClients = new Map<number, string>();
-    for (const proj of allProjects) {
-      if (proj.clientId) uniqueClients.set(proj.clientId, proj.clientName ?? "—");
-    }
-    for (const [clientId, clientName] of uniqueClients) {
-      const values: Record<string, number> = {};
-      const clientBudget = clientBudgetMap.get(clientId) ?? null;
-      for (const month of months) {
-        const c = clientMonthData.get(`${clientId}:${month}`);
-        if (!c) { values[month] = 0; continue; }
-        values[month] = computeMetric(metric, c.billable, c.total, 0, c.booked, clientBudget);
+  } else if (rowDimension === "roles") {
+    // Role → Employees
+    for (const role of allRoles) {
+      const roleStr = String(role.id);
+      const empIds  = activeEmpIdsForProjRole(role.projectId, roleStr);
+      if (empIds.length === 0) continue;
+
+      const proj     = projectById.get(role.projectId);
+      const budgeted = getBudgeted([role.id]);
+
+      const roleData: Record<string, Record<string, number>> = {};
+      for (const bucket of allColKeys) {
+        const ea    = projRoleEntrySum(role.projectId, roleStr, bucket);
+        const plan  = projRolePlannedSum(role.projectId, roleStr, bucket);
+        const avail = empSetAvail(empIds, bucket);
+        roleData[bucket] = mkMetrics(ea, plan, avail, budgeted);
       }
-      pivotRows.push({ id: clientId, label: clientName, values });
+
+      const empChildren: DrillRow[] = empIds.map((eid) => ({
+        id:         `role-${role.id}-emp-${eid}`,
+        name:       employeeById.get(eid)!.name,
+        type:       "employee" as const,
+        expandable: false,
+        data:       empProjRoleAllBuckets(eid, role.projectId, roleStr, [role.id]),
+        children:   [],
+      }));
+
+      rows.push({
+        id:         `role-${role.id}`,
+        name:       proj ? `${role.name} (${proj.name})` : role.name,
+        type:       "role",
+        expandable: empChildren.length > 0,
+        data:       roleData,
+        children:   empChildren,
+      });
     }
   }
 
-  res.json({ type: "pivot", rowDimension, colDimension, metric, columns: months, rows: pivotRows });
+  // ── 15. Totals ────────────────────────────────────────────────────────────
+  const totals: Record<string, Record<string, number>> = {};
+  const globalBudgeted = getBudgeted(allRoles.map((r) => r.id));
+
+  for (const bucket of allColKeys) {
+    let booked = 0, billable = 0, planned = 0;
+    for (const em of entryAgg.values())
+      for (const pm of em.values())
+        for (const rm of pm.values()) {
+          const a = rm.get(bucket);
+          if (a) { booked += a.booked; billable += a.billable; }
+        }
+    for (const em of plannedAgg.values())
+      for (const pm of em.values())
+        for (const rm of pm.values())
+          planned += rm.get(bucket) ?? 0;
+    const available = empSetAvail(inScopeEmpIds, bucket);
+    totals[bucket] = computeMetrics(metrics, { booked, billable, planned, available, budgeted: globalBudgeted });
+  }
+
+  const response: DrillResponse = {
+    type:         "drill",
+    rowDimension,
+    colDimension,
+    metrics,
+    columns:      allColKeys,
+    columnLabels,
+    rows,
+    totals,
+  };
+
+  res.json(response);
 });
 
 export default router;
