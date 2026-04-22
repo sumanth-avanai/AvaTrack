@@ -5,7 +5,7 @@ import {
   getGetEmployeeByTokenQueryKey,
   useVerifyEmployeePin
 } from "@workspace/api-client-react";
-import { TimesheetGrid } from "@/components/timesheet/timesheet-grid";
+import { PortalTimesheetGrid } from "@/components/timesheet/portal-timesheet-grid";
 import { startOfWeek, addWeeks, subWeeks } from "date-fns";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -144,8 +144,9 @@ export default function EmployeePortal() {
             <p className="text-xs text-muted-foreground mt-0.5">Log your hours for the week.</p>
           </div>
 
-          <TimesheetGrid 
+          <PortalTimesheetGrid
             employeeId={employee.id}
+            employeeToken={employee.personalAccessToken || token || ""}
             weekStartDate={currentWeekStart}
             capacityHours={employee.weeklyCapacityHours || 40}
             workingDaysMask={employee.workingDaysMask}

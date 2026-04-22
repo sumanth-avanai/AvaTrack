@@ -40,8 +40,12 @@ A lightweight internal time-tracking web app for small agencies, branded as **Av
 - **Project Roles (T&M)** — Per-project role management (name, day rate €/day, budgeted days, assigned employees); role selection in Timesheet "Add Project" flow; Budget tab with booked vs. budgeted per role; Allocations tab with planned vs. booked per employee per role
 
 ### Employee Personal Links (`/u/:token`)
-- PIN-protected personal URL per employee
+- PIN-protected personal URL per employee (route no longer requires admin session)
 - Shows only own timesheet after PIN verified (stored in sessionStorage)
+- **Role-filtered**: employees see only their assigned project roles via `PortalTimesheetGrid`
+- Legacy entries (time logged before role assignment) shown with a "legacy" badge
+- Projects are collapsible; a "Planned" column shows hours from active resource bookings
+- Save validates assignments server-side (403 for unassigned roles); grandfathers existing entries
 
 ## Demo Credentials
 - **Max Mustermann** (40h, Mon-Fri, since 2024-01-01) — PIN: `1234`
@@ -100,6 +104,16 @@ POST   /api/vacations               — create entry { employeeId, startDate, en
 PATCH  /api/vacations/:id           — update entry (partial)
 DELETE /api/vacations/:id           — delete entry
 ```
+
+## API Endpoints (employee timesheet portal — not in OpenAPI spec, called directly)
+
+```
+GET  /api/employee-timesheet/:employeeId/week/:weekStart?token=   — load portal timesheet (assignments, bookings, entries)
+POST /api/employee-timesheet/:employeeId/week/:weekStart?token=   — save timesheet entries (validates role assignment)
+```
+- Routes are public (bypasses admin session check), validated by employee's `personalAccessToken` query param
+- GET returns `availableProjects`, `prefilled` rows with `isLegacy` flag and `plannedHours` from resource bookings
+- POST grandfathers existing entries; new entries with unassigned roles receive 403
 
 ## API Endpoints (project roles — not in OpenAPI spec, called directly)
 

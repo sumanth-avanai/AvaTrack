@@ -61,7 +61,7 @@ const PUBLIC_EXACT = new Set([
 export function requireAppAuth(req: Request, res: Response, next: NextFunction): void {
   const path = req.path;
 
-  if (PUBLIC_EXACT.has(path) || path.startsWith("/auth/employee/")) {
+  if (PUBLIC_EXACT.has(path) || path.startsWith("/auth/employee/") || path.startsWith("/employee-timesheet/")) {
     next();
     return;
   }

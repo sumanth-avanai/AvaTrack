@@ -64,7 +64,7 @@ function Router() {
       <Route path="/settings"><AuthGuard><Settings /></AuthGuard></Route>
       <Route path="/vacations"><Redirect to="/employees" /></Route>
 
-      <Route path="/u/:token"><AuthGuard><EmployeePortal /></AuthGuard></Route>
+      <Route path="/u/:token"><EmployeePortal /></Route>
       <Route component={NotFound} />
     </Switch>
   );
