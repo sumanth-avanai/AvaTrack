@@ -655,9 +655,9 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     // Employee → Projects → Roles
     for (const emp of allEmployees) {
       const activeProjIds = activeProjectIdsForEmp(emp.id);
-      const empRoleIds = activeProjIds.flatMap(
-        (pid) => (rolesByProject.get(pid) ?? []).map((r) => r.id)
-      );
+      // Budget only for roles this employee has actual activity on, not all roles in active projects
+      const empRoleStrs = activeProjIds.flatMap((pid) => activeRoleStrsForEmpProj(emp.id, pid));
+      const empRoleIds  = empRoleStrs.filter((s) => s !== "null").map(Number).filter((id) => roleById.has(id));
 
       const projChildren: DrillRow[] = activeProjIds.map((pid) => {
         const proj        = projectById.get(pid)!;
@@ -704,7 +704,6 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
       const projRoles    = rolesByProject.get(proj.id) ?? [];
       const projRoleStrs = allRoleStrsForProj(proj.id);
       const empIds       = activeEmpIdsForProj(proj.id);
-      if (empIds.length === 0) continue;
 
       const roleChildren: DrillRow[] = projRoleStrs
         .map((rk) => {
@@ -757,7 +756,6 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     for (const client of uniqueClients.values()) {
       const clientProjIds = client.projects.map((p) => p.id);
       const clientEmpIds  = [...new Set(clientProjIds.flatMap((pid) => activeEmpIdsForProj(pid)))];
-      if (clientEmpIds.length === 0) continue;
 
       const clientRoleIds = clientProjIds.flatMap(
         (pid) => (rolesByProject.get(pid) ?? []).map((r) => r.id)
@@ -782,7 +780,6 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
           const projRoles    = rolesByProject.get(proj.id) ?? [];
           const projRoleStrs = allRoleStrsForProj(proj.id);
           const projEmpIds   = activeEmpIdsForProj(proj.id);
-          if (projEmpIds.length === 0) return null;
 
           const roleChildren: DrillRow[] = projRoleStrs
             .map((rk) => {
@@ -838,7 +835,6 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     for (const role of allRoles) {
       const roleStr = String(role.id);
       const empIds  = activeEmpIdsForProjRole(role.projectId, roleStr);
-      if (empIds.length === 0) continue;
 
       const proj     = projectById.get(role.projectId);
       const budgeted = getBudgeted([role.id]);
@@ -871,24 +867,19 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     }
   }
 
-  // ── 15. Totals ────────────────────────────────────────────────────────────
+  // ── 15. Totals — aggregate from top-level rows ────────────────────────────
+  // Additive metrics sum cleanly; percentage metrics (utilization_pct etc.) sum to
+  // "combined" values which the frontend can choose to display or hide.
   const totals: Record<string, Record<string, number>> = {};
-  const globalBudgeted = getBudgeted(allRoles.map((r) => r.id));
-
   for (const bucket of allColKeys) {
-    let booked = 0, billable = 0, planned = 0;
-    for (const em of entryAgg.values())
-      for (const pm of em.values())
-        for (const rm of pm.values()) {
-          const a = rm.get(bucket);
-          if (a) { booked += a.booked; billable += a.billable; }
-        }
-    for (const em of plannedAgg.values())
-      for (const pm of em.values())
-        for (const rm of pm.values())
-          planned += rm.get(bucket) ?? 0;
-    const available = empSetAvail(inScopeEmpIds, bucket);
-    totals[bucket] = computeMetrics(metrics, { booked, billable, planned, available, budgeted: globalBudgeted });
+    const bucketTotals: Record<string, number> = {};
+    for (const metricKey of metrics) {
+      bucketTotals[metricKey] = rows.reduce(
+        (sum, row) => sum + (row.data[bucket]?.[metricKey] ?? 0),
+        0
+      );
+    }
+    totals[bucket] = bucketTotals;
   }
 
   const response: DrillResponse = {
