@@ -7,20 +7,22 @@
  *   rowDimension     employees | projects | clients
  *   colDimension     none | month
  *   metric           billable_hours | total_hours |
- *                    billable_utilization_percent | overall_utilization_percent
+ *                    billable_utilization_percent | overall_utilization_percent |
+ *                    booked_hours | budget_hours | remaining_hours | budget_used_pct
  *   employeeIds      comma-separated IDs  (optional)
  *   projectIds       comma-separated IDs  (optional)
  *   clientIds        comma-separated IDs  (optional)
  */
 
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, inArray, or } from "drizzle-orm";
 import {
   db,
   timeEntriesTable,
   projectsTable,
   clientsTable,
   employeesTable,
+  resourceBookingsTable,
 } from "@workspace/db";
 import { calculateAvailableHours } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
@@ -69,7 +71,14 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
-function computeMetric(metric: string, billableHours: number, totalHours: number, availableHours: number): number {
+function computeMetric(
+  metric: string,
+  billableHours: number,
+  totalHours: number,
+  availableHours: number,
+  bookedHours: number,
+  budgetHours: number | null
+): number {
   switch (metric) {
     case "billable_hours":              return billableHours;
     case "total_hours":                 return totalHours;
@@ -77,8 +86,30 @@ function computeMetric(metric: string, billableHours: number, totalHours: number
       return availableHours > 0 ? round2(billableHours / availableHours) : 0;
     case "overall_utilization_percent":
       return availableHours > 0 ? round2(totalHours    / availableHours) : 0;
+    case "booked_hours":               return bookedHours;
+    case "budget_hours":               return budgetHours ?? 0;
+    case "remaining_hours":            return budgetHours != null ? round2(budgetHours - totalHours) : 0;
+    case "budget_used_pct":            return budgetHours != null && budgetHours > 0 ? round2(totalHours / budgetHours) : 0;
     default: return billableHours;
   }
+}
+
+/**
+ * Compute the overlapping booked hours between a booking and a date range.
+ * Uses the simple formula: overlap_days / 7 * hoursPerWeek
+ */
+function computeBookedHoursInRange(
+  bookingStart: string,
+  bookingEnd: string,
+  rangeStart: string,
+  rangeEnd: string,
+  hoursPerWeek: number
+): number {
+  const overlapStart = bookingStart > rangeStart ? bookingStart : rangeStart;
+  const overlapEnd   = bookingEnd   < rangeEnd   ? bookingEnd   : rangeEnd;
+  if (overlapStart > overlapEnd) return 0;
+  const days = (new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000 + 1;
+  return (days / 7) * hoursPerWeek;
 }
 
 // ─── main route ─────────────────────────────────────────────────────────────
@@ -106,11 +137,12 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
 
   const allProjects = await db
     .select({
-      id:         projectsTable.id,
-      name:       projectsTable.name,
-      clientId:   projectsTable.clientId,
-      clientName: clientsTable.name,
-      isBillable: projectsTable.isBillable,
+      id:          projectsTable.id,
+      name:        projectsTable.name,
+      clientId:    projectsTable.clientId,
+      clientName:  clientsTable.name,
+      isBillable:  projectsTable.isBillable,
+      budgetHours: projectsTable.budgetHours,
     })
     .from(projectsTable)
     .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))
@@ -147,16 +179,47 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     clientId:   projectById.get(e.projectId)?.clientId   ?? null,
   }));
 
-  // ── 4. Employee availability (holidays + vacations + contract dates) ──────
+  // ── 4. Resource bookings overlapping the date range (for projects/clients) ─
+  let bookedHoursByProject = new Map<number, number>();
+  if (rowDimension === "projects" || rowDimension === "clients") {
+    const bookingConds: any[] = [
+      lte(resourceBookingsTable.startDate, endDate),
+      gte(resourceBookingsTable.endDate, startDate),
+    ];
+    if (inScopeProjIds.length > 0) {
+      bookingConds.push(inArray(resourceBookingsTable.projectId, inScopeProjIds));
+    }
+    const bookings = await db
+      .select({
+        projectId:    resourceBookingsTable.projectId,
+        startDate:    resourceBookingsTable.startDate,
+        endDate:      resourceBookingsTable.endDate,
+        hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      })
+      .from(resourceBookingsTable)
+      .where(and(...bookingConds));
+
+    for (const b of bookings) {
+      const hrs = computeBookedHoursInRange(b.startDate, b.endDate, startDate, endDate, b.hoursPerWeek);
+      bookedHoursByProject.set(b.projectId, (bookedHoursByProject.get(b.projectId) ?? 0) + hrs);
+    }
+  }
+
+  // ── 5. Employee availability (holidays + vacations + contract dates) ──────
   const availMap = await fetchEmpAvailabilityMap(allEmployees, startDate, endDate);
 
   // ─── CASE A: colDimension = "none"  → flat table ─────────────────────────
   if (colDimension === "none") {
-    const flatRows: {
+    type FlatRowOut = {
       id: number; label: string;
       availableHours: number; billableHours: number; nonBillableHours: number;
       totalHours: number; billableUtilization: number; overallUtilization: number;
-    }[] = [];
+      budgetHours?: number | null;
+      bookedHours?: number;
+      remainingHours?: number | null;
+      budgetUsedPct?: number | null;
+    };
+    const flatRows: FlatRowOut[] = [];
 
     if (rowDimension === "employees") {
       for (const emp of allEmployees) {
@@ -186,30 +249,51 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
         const projEntries = entries.filter((e) => e.projectId === proj.id);
         const billable    = projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         const total       = projEntries.reduce((s, e) => s + e.hours, 0);
+        const bookedHrs   = round2(bookedHoursByProject.get(proj.id) ?? 0);
+        const budgetHrs   = proj.budgetHours ?? null;
+        const remaining   = budgetHrs != null ? round2(budgetHrs - total) : null;
+        const budgetUsed  = budgetHrs != null && budgetHrs > 0 ? round2(total / budgetHrs) : null;
         flatRows.push({
           id: proj.id, label: `${proj.name} (${proj.clientName ?? "—"})`,
           availableHours: 0, billableHours: round2(billable),
           nonBillableHours: round2(total - billable), totalHours: round2(total),
           billableUtilization: 0, overallUtilization: 0,
+          budgetHours: budgetHrs, bookedHours: bookedHrs,
+          remainingHours: remaining, budgetUsedPct: budgetUsed,
         });
       }
 
     } else if (rowDimension === "clients") {
-      const clientMap = new Map<number, { id: number; name: string; billable: number; total: number }>();
+      const clientMap = new Map<number, {
+        id: number; name: string; billable: number; total: number;
+        budgetHours: number; hasBudget: boolean; bookedHours: number;
+      }>();
       for (const proj of allProjects) {
         if (!proj.clientId) continue;
-        if (!clientMap.has(proj.clientId)) clientMap.set(proj.clientId, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0 });
+        if (!clientMap.has(proj.clientId)) {
+          clientMap.set(proj.clientId, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0, budgetHours: 0, hasBudget: false, bookedHours: 0 });
+        }
         const projEntries = entries.filter((e) => e.projectId === proj.id);
         const c = clientMap.get(proj.clientId)!;
-        c.billable += projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        c.total    += projEntries.reduce((s, e) => s + e.hours, 0);
+        c.billable    += projEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
+        c.total       += projEntries.reduce((s, e) => s + e.hours, 0);
+        if (proj.budgetHours != null) {
+          c.budgetHours += proj.budgetHours;
+          c.hasBudget = true;
+        }
+        c.bookedHours += bookedHoursByProject.get(proj.id) ?? 0;
       }
       for (const c of clientMap.values()) {
+        const budgetHrs  = c.hasBudget ? c.budgetHours : null;
+        const remaining  = budgetHrs != null ? round2(budgetHrs - c.total) : null;
+        const budgetUsed = budgetHrs != null && budgetHrs > 0 ? round2(c.total / budgetHrs) : null;
         flatRows.push({
           id: c.id, label: c.name,
           availableHours: 0, billableHours: round2(c.billable),
           nonBillableHours: round2(c.total - c.billable), totalHours: round2(c.total),
           billableUtilization: 0, overallUtilization: 0,
+          budgetHours: budgetHrs, bookedHours: round2(c.bookedHours),
+          remainingHours: remaining, budgetUsedPct: budgetUsed,
         });
       }
     }
@@ -237,6 +321,38 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     }
   }
 
+  // Pre-compute booked hours per project per month (for pivot)
+  let bookedHoursByProjectMonth = new Map<string, number>();
+  if (rowDimension === "projects" || rowDimension === "clients") {
+    const bookingConds: any[] = [
+      lte(resourceBookingsTable.startDate, endDate),
+      gte(resourceBookingsTable.endDate, startDate),
+    ];
+    if (inScopeProjIds.length > 0) {
+      bookingConds.push(inArray(resourceBookingsTable.projectId, inScopeProjIds));
+    }
+    const bookings = await db
+      .select({
+        projectId:    resourceBookingsTable.projectId,
+        startDate:    resourceBookingsTable.startDate,
+        endDate:      resourceBookingsTable.endDate,
+        hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      })
+      .from(resourceBookingsTable)
+      .where(and(...bookingConds));
+
+    for (const b of bookings) {
+      for (const month of months) {
+        const { start, end } = monthBounds(month, startDate, endDate);
+        const hrs = computeBookedHoursInRange(b.startDate, b.endDate, start, end, b.hoursPerWeek);
+        if (hrs > 0) {
+          const key = `${b.projectId}:${month}`;
+          bookedHoursByProjectMonth.set(key, (bookedHoursByProjectMonth.get(key) ?? 0) + hrs);
+        }
+      }
+    }
+  }
+
   const pivotRows: { id: number; label: string; values: Record<string, number> }[] = [];
 
   if (rowDimension === "employees") {
@@ -247,7 +363,7 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
         const billable  = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         const total     = monthEntries.reduce((s, e) => s + e.hours, 0);
         const available = empMonthAvail.get(`${emp.id}:${month}`) ?? 0;
-        values[month]   = computeMetric(metric, billable, total, available);
+        values[month]   = computeMetric(metric, billable, total, available, 0, null);
       }
       pivotRows.push({ id: emp.id, label: emp.name, values });
     }
@@ -257,35 +373,52 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
       const values: Record<string, number> = {};
       for (const month of months) {
         const monthEntries = entries.filter((e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month);
-        const billable = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
-        const total    = monthEntries.reduce((s, e) => s + e.hours, 0);
-        values[month]  = computeMetric(metric, billable, total, 0);
+        const billable   = monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
+        const total      = monthEntries.reduce((s, e) => s + e.hours, 0);
+        const bookedHrs  = bookedHoursByProjectMonth.get(`${proj.id}:${month}`) ?? 0;
+        values[month]    = computeMetric(metric, billable, total, 0, bookedHrs, proj.budgetHours ?? null);
       }
       pivotRows.push({ id: proj.id, label: `${proj.name} (${proj.clientName ?? "—"})`, values });
     }
 
   } else if (rowDimension === "clients") {
-    const clientMonthData = new Map<string, { id: number; name: string; billable: number; total: number }>();
+    const clientMonthData = new Map<string, { id: number; name: string; billable: number; total: number; booked: number }>();
     for (const proj of allProjects) {
       if (!proj.clientId) continue;
       for (const month of months) {
         const key = `${proj.clientId}:${month}`;
-        if (!clientMonthData.has(key)) clientMonthData.set(key, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0 });
+        if (!clientMonthData.has(key)) clientMonthData.set(key, { id: proj.clientId, name: proj.clientName ?? "—", billable: 0, total: 0, booked: 0 });
         const c = clientMonthData.get(key)!;
         const monthEntries = entries.filter((e) => e.projectId === proj.id && e.entryDate.slice(0, 7) === month);
         c.billable += monthEntries.filter((e) => e.isBillable).reduce((s, e) => s + e.hours, 0);
         c.total    += monthEntries.reduce((s, e) => s + e.hours, 0);
+        c.booked   += bookedHoursByProjectMonth.get(`${proj.id}:${month}`) ?? 0;
       }
     }
+
+    // Compute per-client total budgetHours (sum of project budgets)
+    const clientBudgetMap = new Map<number, number | null>();
+    for (const proj of allProjects) {
+      if (!proj.clientId) continue;
+      const cur = clientBudgetMap.get(proj.clientId);
+      if (proj.budgetHours != null) {
+        clientBudgetMap.set(proj.clientId, (cur ?? 0) + proj.budgetHours);
+      } else if (!clientBudgetMap.has(proj.clientId)) {
+        clientBudgetMap.set(proj.clientId, null);
+      }
+    }
+
     const uniqueClients = new Map<number, string>();
     for (const proj of allProjects) {
       if (proj.clientId) uniqueClients.set(proj.clientId, proj.clientName ?? "—");
     }
     for (const [clientId, clientName] of uniqueClients) {
       const values: Record<string, number> = {};
+      const clientBudget = clientBudgetMap.get(clientId) ?? null;
       for (const month of months) {
         const c = clientMonthData.get(`${clientId}:${month}`);
-        values[month] = c ? computeMetric(metric, c.billable, c.total, 0) : 0;
+        if (!c) { values[month] = 0; continue; }
+        values[month] = computeMetric(metric, c.billable, c.total, 0, c.booked, clientBudget);
       }
       pivotRows.push({ id: clientId, label: clientName, values });
     }

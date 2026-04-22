@@ -95,7 +95,11 @@ type Metric =
   | "billable_hours"
   | "total_hours"
   | "billable_utilization_percent"
-  | "overall_utilization_percent";
+  | "overall_utilization_percent"
+  | "booked_hours"
+  | "budget_hours"
+  | "remaining_hours"
+  | "budget_used_pct";
 
 interface FlatRow {
   id: number;
@@ -106,6 +110,11 @@ interface FlatRow {
   totalHours: number;
   billableUtilization: number;
   overallUtilization: number;
+  // budget fields (only present for projects / clients)
+  budgetHours?: number | null;
+  bookedHours?: number;
+  remainingHours?: number | null;
+  budgetUsedPct?: number | null;
 }
 
 interface PivotRow {
@@ -171,8 +180,12 @@ async function fetchPivot(params: URLSearchParams): Promise<ReportData> {
 
 // ─── Formatting ─────────────────────────────────────────────────────────────
 
-function formatMetricValue(metric: Metric, value: number): string {
-  if (metric === "billable_utilization_percent" || metric === "overall_utilization_percent") {
+function formatMetricValue(metric: Metric | string, value: number): string {
+  if (
+    metric === "billable_utilization_percent" ||
+    metric === "overall_utilization_percent" ||
+    metric === "budget_used_pct"
+  ) {
     return `${Math.round(value * 100)}%`;
   }
   return value.toFixed(1);
@@ -192,6 +205,14 @@ function utilizationColor(value: number): string {
   if (pct >= 60) return "text-foreground";
   if (pct >= 40) return "text-amber-600";
   return "text-red-500";
+}
+
+function isPctMetric(metric: Metric | string): boolean {
+  return (
+    metric === "billable_utilization_percent" ||
+    metric === "overall_utilization_percent" ||
+    metric === "budget_used_pct"
+  );
 }
 
 // ─── Multi-select badge component ────────────────────────────────────────────
@@ -255,22 +276,39 @@ function MultiSelect({ label, options, selected, onChange }: MultiSelectProps) {
 
 // ─── CSV export ──────────────────────────────────────────────────────────────
 
-function exportCSV(data: ReportData, metric: Metric, startDate: string, endDate: string) {
+function exportCSV(data: ReportData, metric: Metric, startDate: string, endDate: string, rowDimension: RowDimension) {
   let lines: string[] = [];
+  const showBudget = rowDimension === "projects" || rowDimension === "clients";
 
   if (data.type === "flat") {
-    lines.push(["Name","Available Hrs","Billable Hrs","Non-Billable Hrs","Total Hrs","Billable Util%","Overall Util%"].join(","));
-    data.rows.forEach((r) => {
-      lines.push([
-        `"${r.label}"`,
-        r.availableHours,
-        r.billableHours,
-        r.nonBillableHours,
-        r.totalHours,
-        `${Math.round(r.billableUtilization * 100)}%`,
-        `${Math.round(r.overallUtilization * 100)}%`,
-      ].join(","));
-    });
+    if (rowDimension === "employees") {
+      lines.push(["Name","Available Hrs","Billable Hrs","Non-Billable Hrs","Total Hrs","Billable Util%","Overall Util%"].join(","));
+      data.rows.forEach((r) => {
+        lines.push([
+          `"${r.label}"`,
+          r.availableHours,
+          r.billableHours,
+          r.nonBillableHours,
+          r.totalHours,
+          `${Math.round(r.billableUtilization * 100)}%`,
+          `${Math.round(r.overallUtilization * 100)}%`,
+        ].join(","));
+      });
+    } else {
+      lines.push(["Name","Budget Hrs","Booked Hrs","Logged Hrs","Remaining Hrs","Budget Used %","Billable Hrs","Non-Billable Hrs"].join(","));
+      data.rows.forEach((r) => {
+        lines.push([
+          `"${r.label}"`,
+          r.budgetHours != null ? r.budgetHours.toFixed(1) : "—",
+          r.bookedHours != null ? r.bookedHours.toFixed(1) : "0.0",
+          r.totalHours.toFixed(1),
+          r.remainingHours != null ? r.remainingHours.toFixed(1) : "—",
+          r.budgetUsedPct != null ? `${Math.round(r.budgetUsedPct * 100)}%` : "—",
+          r.billableHours.toFixed(1),
+          r.nonBillableHours.toFixed(1),
+        ].join(","));
+      });
+    }
   } else {
     const colLabels = data.columns.map(formatMonthLabel);
     lines.push(["Name", ...colLabels].join(","));
@@ -398,6 +436,8 @@ export default function Reports() {
     [clients]
   );
 
+  const showBudgetColumns = rowDimension === "projects" || rowDimension === "clients";
+
   // Build query params
   const params = useMemo(() => {
     const p = new URLSearchParams({
@@ -439,6 +479,11 @@ export default function Reports() {
 
   const showAvailableHours =
     data?.type === "flat" && rowDimension === "employees";
+
+  // Flat table column count (for empty-state colSpan)
+  const flatColCount = rowDimension === "employees"
+    ? 7  // name + available + billable + non-billable + total + 2 util
+    : 8; // name + budget + booked + logged + remaining + budget% + billable + non-billable
 
   return (
     <AdminLayout>
@@ -527,6 +572,14 @@ export default function Reports() {
                     <SelectItem value="total_hours">Total Hours</SelectItem>
                     <SelectItem value="billable_utilization_percent">Billable Utilization %</SelectItem>
                     <SelectItem value="overall_utilization_percent">Overall Utilization %</SelectItem>
+                    {showBudgetColumns && (
+                      <>
+                        <SelectItem value="booked_hours">Booked Hours</SelectItem>
+                        <SelectItem value="budget_hours">Budget Hours</SelectItem>
+                        <SelectItem value="remaining_hours">Remaining Hours</SelectItem>
+                        <SelectItem value="budget_used_pct">Budget Used %</SelectItem>
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -621,7 +674,7 @@ export default function Reports() {
             variant="outline"
             size="sm"
             disabled={!data || (data.rows.length === 0)}
-            onClick={() => data && exportCSV(data, metric, startDate, endDate)}
+            onClick={() => data && exportCSV(data, metric, startDate, endDate, rowDimension)}
           >
             <Download className="h-4 w-4 mr-2" /> Export CSV
           </Button>
@@ -648,16 +701,26 @@ export default function Reports() {
               <TableHeader className="bg-muted/30">
                 <TableRow>
                   <TableHead className="min-w-[180px]">Name</TableHead>
-                  {showAvailableHours && (
-                    <TableHead className="text-right">Available Hrs</TableHead>
-                  )}
-                  <TableHead className="text-right">Billable Hrs</TableHead>
-                  <TableHead className="text-right">Non-Billable Hrs</TableHead>
-                  <TableHead className="text-right">Total Hrs</TableHead>
-                  {rowDimension === "employees" && (
+                  {rowDimension === "employees" ? (
                     <>
+                      {showAvailableHours && (
+                        <TableHead className="text-right">Available Hrs</TableHead>
+                      )}
+                      <TableHead className="text-right">Billable Hrs</TableHead>
+                      <TableHead className="text-right">Non-Billable Hrs</TableHead>
+                      <TableHead className="text-right">Total Hrs</TableHead>
                       <TableHead className="text-right">Billable Util</TableHead>
                       <TableHead className="text-right">Overall Util</TableHead>
+                    </>
+                  ) : (
+                    <>
+                      <TableHead className="text-right">Budget Hrs</TableHead>
+                      <TableHead className="text-right">Booked Hrs</TableHead>
+                      <TableHead className="text-right">Logged Hrs</TableHead>
+                      <TableHead className="text-right">Remaining Hrs</TableHead>
+                      <TableHead className="text-right">Budget Used %</TableHead>
+                      <TableHead className="text-right">Billable Hrs</TableHead>
+                      <TableHead className="text-right">Non-Billable Hrs</TableHead>
                     </>
                   )}
                 </TableRow>
@@ -666,7 +729,7 @@ export default function Reports() {
                 {data.rows.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={rowDimension === "employees" ? 7 : 4}
+                      colSpan={flatColCount}
                       className="text-center py-12 text-muted-foreground"
                     >
                       No data for the selected period and filters.
@@ -686,27 +749,62 @@ export default function Reports() {
                           </div>
                         ) : row.label}
                       </TableCell>
-                      {showAvailableHours && (
-                        <TableCell className="text-right text-muted-foreground">
-                          {row.availableHours.toFixed(1)}
-                        </TableCell>
-                      )}
-                      <TableCell className="text-right text-primary font-medium">
-                        {row.billableHours.toFixed(1)}
-                      </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        {row.nonBillableHours.toFixed(1)}
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        {row.totalHours.toFixed(1)}
-                      </TableCell>
-                      {rowDimension === "employees" && (
+
+                      {rowDimension === "employees" ? (
                         <>
+                          {showAvailableHours && (
+                            <TableCell className="text-right text-muted-foreground">
+                              {row.availableHours.toFixed(1)}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-right text-primary font-medium">
+                            {row.billableHours.toFixed(1)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {row.nonBillableHours.toFixed(1)}
+                          </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {row.totalHours.toFixed(1)}
+                          </TableCell>
                           <TableCell className={`text-right ${utilizationColor(row.billableUtilization)}`}>
                             {Math.round(row.billableUtilization * 100)}%
                           </TableCell>
                           <TableCell className={`text-right ${utilizationColor(row.overallUtilization)}`}>
                             {Math.round(row.overallUtilization * 100)}%
+                          </TableCell>
+                        </>
+                      ) : (
+                        <>
+                          <TableCell className="text-right text-muted-foreground">
+                            {row.budgetHours != null ? row.budgetHours.toFixed(1) : <span className="text-muted-foreground/40">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {(row.bookedHours ?? 0).toFixed(1)}
+                          </TableCell>
+                          <TableCell className="text-right font-medium">
+                            {row.totalHours.toFixed(1)}
+                          </TableCell>
+                          <TableCell className={`text-right font-medium ${
+                            row.remainingHours != null && row.remainingHours < 0
+                              ? "text-red-500"
+                              : row.remainingHours != null
+                              ? "text-emerald-600"
+                              : "text-muted-foreground/40"
+                          }`}>
+                            {row.remainingHours != null
+                              ? row.remainingHours.toFixed(1)
+                              : <span>—</span>}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {row.budgetUsedPct != null
+                              ? `${Math.round(row.budgetUsedPct * 100)}%`
+                              : <span className="text-muted-foreground/40">—</span>}
+                          </TableCell>
+                          <TableCell className="text-right text-primary">
+                            {row.billableHours.toFixed(1)}
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {row.nonBillableHours.toFixed(1)}
                           </TableCell>
                         </>
                       )}
@@ -759,8 +857,13 @@ export default function Reports() {
                       {data.columns.map((col) => {
                         const val = row.values[col] ?? 0;
                         const isEmpty = val === 0;
+                        const isNegative = metric === "remaining_hours" && val < 0;
                         const colorClass =
-                          isUtilizationMetric && !isEmpty ? utilizationColor(val) : "";
+                          isNegative
+                            ? "text-red-500 font-medium"
+                            : isUtilizationMetric && !isEmpty
+                            ? utilizationColor(val)
+                            : "";
                         return (
                           <TableCell
                             key={col}
