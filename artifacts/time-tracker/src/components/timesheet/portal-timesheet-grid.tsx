@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { format, addDays, getISODay, subWeeks } from "date-fns";
+import { format, addDays, getISODay } from "date-fns";
 import {
   Table,
   TableBody,
@@ -26,15 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  useListHolidayCalendars,
-  getListHolidayCalendarsQueryKey,
-  useListHolidays,
-  getListHolidaysQueryKey,
-} from "@workspace/api-client-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save, CheckCircle2, Loader2, Plus, ChevronRight, ChevronDown, AlertCircle } from "lucide-react";
-import { VacationEntry } from "@/lib/bookable-dates";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface PortalRole {
@@ -60,10 +53,27 @@ interface PrefilledRow {
   isLegacy: boolean;
 }
 
+interface VacationEntry {
+  id: number;
+  startDate: string;
+  endDate: string;
+  vacationType: string;
+  note: string | null;
+}
+
+interface HolidayEntry {
+  id: number;
+  calendarId: number;
+  date: string;
+  name: string;
+}
+
 interface PortalTimesheetResponse {
   week: { start: string; end: string };
   availableProjects: PortalProject[];
   prefilled: PrefilledRow[];
+  vacations: VacationEntry[];
+  holidays: HolidayEntry[];
 }
 
 interface RowDef {
@@ -226,7 +236,6 @@ interface PortalTimesheetGridProps {
   workingDaysMask?: number[];
   contractStartDate?: string | null;
   contractEndDate?: string | null;
-  holidayCalendarCode?: string | null;
   onPreviousWeek?: () => void;
   onNextWeek?: () => void;
 }
@@ -248,7 +257,6 @@ export function PortalTimesheetGrid({
   workingDaysMask = ALL_DAYS_MASK,
   contractStartDate = null,
   contractEndDate = null,
-  holidayCalendarCode = null,
   onPreviousWeek,
   onNextWeek,
 }: PortalTimesheetGridProps) {
@@ -333,54 +341,24 @@ export function PortalTimesheetGrid({
   }, [tsData, startDateStr]);
 
   // ── Holiday / vacation blocking ───────────────────────────────────────────
-  const { data: holidayCalendars } = useListHolidayCalendars({
-    query: {
-      queryKey: getListHolidayCalendarsQueryKey(),
-      enabled: !!holidayCalendarCode,
-    },
-  });
-
-  const calendarId = useMemo(() => {
-    if (!holidayCalendarCode || !holidayCalendars) return null;
-    return holidayCalendars.find((c) => c.code === holidayCalendarCode)?.id ?? null;
-  }, [holidayCalendarCode, holidayCalendars]);
-
-  const weekYear = weekDays[0].getFullYear();
-  const { data: holidays } = useListHolidays(
-    calendarId ?? 0,
-    { year: weekYear },
-    {
-      query: {
-        queryKey: getListHolidaysQueryKey(calendarId ?? 0, { year: weekYear }),
-        enabled: !!calendarId,
-      },
-    }
-  );
-
-  const { data: vacations } = useQuery<VacationEntry[]>({
-    queryKey: ["vacations", employeeId],
-    queryFn: async () => {
-      const res = await fetch(apiUrl(`/api/vacations?employeeId=${employeeId}`));
-      if (!res.ok) throw new Error("Failed to fetch vacations");
-      return res.json() as Promise<VacationEntry[]>;
-    },
-    enabled: !!employeeId,
-  });
-
+  // Vacation and holiday data are bundled directly into the timesheet response
+  // so no extra API calls are needed (those endpoints require admin auth).
   const disabledDateReasons = useMemo(() => {
     const reasons = new Map<string, string>();
+    const vacations = tsData?.vacations ?? [];
+    const holidays = tsData?.holidays ?? [];
     for (const day of weekDays) {
       const dateStr = format(day, "yyyy-MM-dd");
       const isoDayIndex = getISODay(day) - 1;
       if (!workingDaysMask[isoDayIndex]) { reasons.set(dateStr, "Non-working day"); continue; }
       if (contractStartDate && dateStr < contractStartDate) { reasons.set(dateStr, "Outside contract period"); continue; }
       if (contractEndDate && dateStr > contractEndDate) { reasons.set(dateStr, "Outside contract period"); continue; }
-      const matchedHoliday = holidays?.find((h) => String(h.date).slice(0, 10) === dateStr);
+      const matchedHoliday = holidays.find((h) => h.date === dateStr);
       if (matchedHoliday) { reasons.set(dateStr, `Public holiday: ${matchedHoliday.name}`); continue; }
-      if (vacations?.some((v) => v.startDate <= dateStr && dateStr <= v.endDate)) { reasons.set(dateStr, "Vacation / absence"); continue; }
+      if (vacations.some((v) => v.startDate <= dateStr && dateStr <= v.endDate)) { reasons.set(dateStr, "Vacation / absence"); continue; }
     }
     return reasons;
-  }, [weekDays, workingDaysMask, contractStartDate, contractEndDate, holidays, vacations]);
+  }, [weekDays, workingDaysMask, contractStartDate, contractEndDate, tsData?.vacations, tsData?.holidays]);
 
   // ── Save ──────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {

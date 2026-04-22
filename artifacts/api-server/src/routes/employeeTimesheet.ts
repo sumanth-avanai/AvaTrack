@@ -10,6 +10,9 @@ import {
   projectRoleAssignmentsTable,
   resourceBookingsTable,
   employeesTable,
+  employeeVacationsTable,
+  holidayCalendarsTable,
+  holidaysTable,
 } from "@workspace/db";
 
 const router: IRouter = Router();
@@ -62,6 +65,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
       id: employeesTable.id,
       name: employeesTable.name,
       weeklyCapacityHours: employeesTable.weeklyCapacityHours,
+      holidayCalendarCode: employeesTable.holidayCalendarCode,
     })
     .from(employeesTable)
     .where(eq(employeesTable.id, employeeId));
@@ -222,11 +226,65 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
     a.projectName.localeCompare(b.projectName) || (a.roleName ?? "").localeCompare(b.roleName ?? "")
   );
 
+  // ── Fetch vacations overlapping this week ─────────────────────────────────
+  const vacations = await db
+    .select({
+      id: employeeVacationsTable.id,
+      startDate: employeeVacationsTable.startDate,
+      endDate: employeeVacationsTable.endDate,
+      vacationType: employeeVacationsTable.vacationType,
+      note: employeeVacationsTable.note,
+    })
+    .from(employeeVacationsTable)
+    .where(
+      and(
+        eq(employeeVacationsTable.employeeId, employeeId),
+        lte(employeeVacationsTable.startDate, weekEnd),
+        gte(employeeVacationsTable.endDate, weekStart)
+      )
+    );
+
+  // ── Fetch public holidays for this week (if employee has a calendar) ───────
+  let holidays: { id: number; calendarId: number; date: string; name: string }[] = [];
+  if (employeeRow.holidayCalendarCode) {
+    const [cal] = await db
+      .select({ id: holidayCalendarsTable.id })
+      .from(holidayCalendarsTable)
+      .where(eq(holidayCalendarsTable.code, employeeRow.holidayCalendarCode));
+
+    if (cal) {
+      const weekHolidays = await db
+        .select()
+        .from(holidaysTable)
+        .where(
+          and(
+            eq(holidaysTable.calendarId, cal.id),
+            gte(holidaysTable.date, weekStart),
+            lte(holidaysTable.date, weekEnd)
+          )
+        );
+      holidays = weekHolidays.map((h) => ({
+        id: h.id,
+        calendarId: h.calendarId,
+        date: String(h.date).slice(0, 10),
+        name: h.name,
+      }));
+    }
+  }
+
   res.json({
     employee: employeeRow,
     week: { start: weekStart, end: weekEnd },
     availableProjects,
     prefilled,
+    vacations: vacations.map((v) => ({
+      id: v.id,
+      startDate: String(v.startDate).slice(0, 10),
+      endDate: String(v.endDate).slice(0, 10),
+      vacationType: v.vacationType,
+      note: v.note,
+    })),
+    holidays,
   });
 });
 
