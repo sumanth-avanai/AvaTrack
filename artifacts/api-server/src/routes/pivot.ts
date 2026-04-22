@@ -77,10 +77,12 @@ function round2(n: number): number {
 }
 
 // Legacy metric alias normalisation
+// billable_utilization_percent → billable_utilization_pct (billable_booked / available × 100)
+// overall_utilization_percent  → utilization_pct          (booked / available × 100)
 const LEGACY_METRIC_MAP: Record<string, string> = {
   billable_hours:               "billable_booked",
   total_hours:                  "booked",
-  billable_utilization_percent: "utilization_pct",
+  billable_utilization_percent: "billable_utilization_pct",
   overall_utilization_percent:  "utilization_pct",
   booked_hours:                 "planned",
   budget_hours:                 "budgeted",
@@ -247,8 +249,9 @@ function computeMetrics(
       case "budgeted":            v = round2(agg.budgeted ?? 0); break;
       case "remaining_unbooked":  v = agg.budgeted != null ? round2(agg.budgeted - agg.booked)            : 0; break;
       case "remaining_unplanned": v = agg.budgeted != null ? round2(agg.budgeted - agg.planned)           : 0; break;
-      case "utilization_pct":     v = agg.available > 0    ? round2((agg.booked  / agg.available) * 100) : 0; break;
-      case "plan_completion_pct": v = agg.planned   > 0    ? round2((agg.booked  / agg.planned)   * 100) : 0; break;
+      case "utilization_pct":          v = agg.available > 0    ? round2((agg.booked   / agg.available) * 100) : 0; break;
+      case "billable_utilization_pct": v = agg.available > 0    ? round2((agg.billable / agg.available) * 100) : 0; break;
+      case "plan_completion_pct":      v = agg.planned   > 0    ? round2((agg.booked   / agg.planned)   * 100) : 0; break;
       case "budget_used_pct":     v = (agg.budgeted != null && agg.budgeted > 0) ? round2((agg.booked / agg.budgeted) * 100) : 0; break;
       default:                    v = round2(agg.booked);   break;
     }
@@ -270,11 +273,12 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
   const rowDimension = String(req.query.rowDimension ?? "employees");
   const colDimension = String(req.query.colDimension ?? "none");
 
-  // Parse metrics — new array param or legacy single metric
+  // Parse metrics — new array param or legacy single metric.
+  // Handles both ?metrics=a,b and ?metrics=a&metrics=b and mixed ?metrics=a,b&metrics=c
   let rawMetrics: string[] = [];
   const qm = req.query.metrics;
   if (qm) {
-    rawMetrics = (Array.isArray(qm) ? qm.map(String) : String(qm).split(","))
+    rawMetrics = (Array.isArray(qm) ? qm.flatMap((s) => String(s).split(",")) : String(qm).split(","))
       .map((s) => s.trim()).filter(Boolean);
   } else if (req.query.metric) {
     rawMetrics = [String(req.query.metric)];
