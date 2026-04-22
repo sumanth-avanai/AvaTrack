@@ -410,8 +410,10 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
   }
 
   // ── 10. Employee availability per bucket ──────────────────────────────────
+  // Any metric whose computation divides by `available` requires this precomputation.
+  const AVAIL_DEPENDENT_METRICS = new Set(["available", "utilization_pct", "billable_utilization_pct"]);
   const empAvailBucket = new Map<string, number>(); // `${empId}::${bucket}`
-  const needsAvail = metrics.some((m) => m === "available" || m === "utilization_pct");
+  const needsAvail = metrics.some((m) => AVAIL_DEPENDENT_METRICS.has(m));
   if (needsAvail) {
     for (const emp of allEmployees) {
       const { holidayDates, vacationDateSet } = availMap.get(emp.id)!;
