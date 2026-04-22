@@ -290,17 +290,10 @@ function MultiSelect({ label, options, selected, onChange }: MultiSelectProps) {
 
 // ─── CSV export ──────────────────────────────────────────────────────────────
 
-function flattenTree(rows: DrillRow[], depth = 0): { row: DrillRow; depth: number }[] {
-  const result: { row: DrillRow; depth: number }[] = [];
-  for (const row of rows) {
-    result.push({ row, depth });
-    result.push(...flattenTree(row.children, depth + 1));
-  }
-  return result;
-}
 
 function exportCSV(
   data: DrillResponse,
+  visibleRows: { row: DrillRow; depth: number }[],
   unit: Unit,
   startDate: string,
   endDate: string
@@ -316,7 +309,7 @@ function exportCSV(
   }
 
   const lines: string[] = [headerCells.join(",")];
-  for (const { row, depth } of flattenTree(data.rows)) {
+  for (const { row, depth } of visibleRows) {
     const indent = "  ".repeat(depth);
     const cells: string[] = [`"${indent}${row.name}"`, row.type];
     for (const col of data.columns) {
@@ -507,9 +500,10 @@ export default function Reports() {
   const [appliedParams, setAppliedParams] = useState<URLSearchParams | null>(null);
 
   // saved reports
-  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
-  const [saveName, setSaveName]             = useState("");
-  const [saveError, setSaveError]           = useState("");
+  const [saveDialogOpen, setSaveDialogOpen]       = useState(false);
+  const [saveName, setSaveName]                   = useState("");
+  const [saveError, setSaveError]                 = useState("");
+  const [savedReportsOpen, setSavedReportsOpen]   = useState(true);
   const queryClient = useQueryClient();
 
   const { data: savedReports = [] } = useQuery<SavedReportRow[]>({
@@ -764,33 +758,43 @@ export default function Reports() {
 
         {/* ── Saved reports ────────────────────────────────────────────── */}
         {savedReports.length > 0 && (
-          <div className="border rounded-lg bg-card p-3 shadow-sm space-y-2">
-            <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <BookOpen className="h-4 w-4" />
-              Saved Reports
-            </div>
-            <div className="divide-y divide-border">
-              {savedReports.map((r) => {
-                let summary = "";
-                try { summary = configSummary(JSON.parse(r.config)); } catch { /* ok */ }
-                return (
-                  <div key={r.id} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
-                    <button className="flex-1 text-left hover:text-primary transition-colors min-w-0" onClick={() => handleLoadReport(r)}>
-                      <span className="font-medium text-sm truncate block">{r.name}</span>
-                      {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
-                    </button>
-                    <Button
-                      variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
-                      disabled={deleteReport.isPending}
-                      onClick={() => deleteReport.mutate(r.id)}
-                      title="Delete saved report"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="border rounded-lg bg-card shadow-sm">
+            <button
+              className="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setSavedReportsOpen((o) => !o)}
+              aria-expanded={savedReportsOpen}
+            >
+              <span className="flex items-center gap-2">
+                <BookOpen className="h-4 w-4" />
+                Saved Reports
+                <span className="text-xs text-muted-foreground/60 font-normal">({savedReports.length})</span>
+              </span>
+              {savedReportsOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+            {savedReportsOpen && (
+              <div className="border-t divide-y divide-border px-3 pb-1">
+                {savedReports.map((r) => {
+                  let summary = "";
+                  try { summary = configSummary(JSON.parse(r.config)); } catch { /* ok */ }
+                  return (
+                    <div key={r.id} className="flex items-center justify-between gap-3 py-2 first:pt-2 last:pb-2">
+                      <button className="flex-1 text-left hover:text-primary transition-colors min-w-0" onClick={() => handleLoadReport(r)}>
+                        <span className="font-medium text-sm truncate block">{r.name}</span>
+                        {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
+                      </button>
+                      <Button
+                        variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                        disabled={deleteReport.isPending}
+                        onClick={() => deleteReport.mutate(r.id)}
+                        title="Delete saved report"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -802,7 +806,7 @@ export default function Reports() {
           <Button
             variant="outline" size="sm"
             disabled={!data || data.rows.length === 0}
-            onClick={() => data && exportCSV(data, unit, startDate, endDate)}
+            onClick={() => data && exportCSV(data, visibleRows, unit, startDate, endDate)}
           >
             <Download className="h-4 w-4 mr-2" /> Export CSV
           </Button>
