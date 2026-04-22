@@ -31,7 +31,6 @@ import {
   employeesTable,
   resourceBookingsTable,
   projectRolesTable,
-  projectRoleAssignmentsTable,
 } from "@workspace/db";
 import { calculateAvailableHours } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
@@ -86,7 +85,7 @@ const LEGACY_METRIC_MAP: Record<string, string> = {
   booked_hours:                 "planned",
   budget_hours:                 "budgeted",
   remaining_hours:              "remaining_unbooked",
-  budget_used_pct:              "remaining_unbooked",
+  // budget_used_pct is kept as its own canonical key (booked / budgeted × 100)
 };
 
 function normalizeMetric(m: string): string {
@@ -246,10 +245,11 @@ function computeMetrics(
       case "planned":             v = round2(agg.planned);  break;
       case "available":           v = round2(agg.available); break;
       case "budgeted":            v = round2(agg.budgeted ?? 0); break;
-      case "remaining_unbooked":  v = agg.budgeted != null ? round2(agg.budgeted - agg.booked)  : 0; break;
-      case "remaining_unplanned": v = agg.budgeted != null ? round2(agg.budgeted - agg.planned) : 0; break;
-      case "utilization_pct":     v = agg.available > 0    ? round2(agg.booked / agg.available) : 0; break;
-      case "plan_completion_pct": v = agg.planned   > 0    ? round2(agg.booked / agg.planned)   : 0; break;
+      case "remaining_unbooked":  v = agg.budgeted != null ? round2(agg.budgeted - agg.booked)            : 0; break;
+      case "remaining_unplanned": v = agg.budgeted != null ? round2(agg.budgeted - agg.planned)           : 0; break;
+      case "utilization_pct":     v = agg.available > 0    ? round2((agg.booked  / agg.available) * 100) : 0; break;
+      case "plan_completion_pct": v = agg.planned   > 0    ? round2((agg.booked  / agg.planned)   * 100) : 0; break;
+      case "budget_used_pct":     v = (agg.budgeted != null && agg.budgeted > 0) ? round2((agg.booked / agg.budgeted) * 100) : 0; break;
       default:                    v = round2(agg.booked);   break;
     }
     r[k] = v;
@@ -329,19 +329,7 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     rolesByProject.get(r.projectId)!.push(r);
   }
 
-  // ── 4. Role assignments ───────────────────────────────────────────────────
-  if (allRoles.length > 0) {
-    await db
-      .select({
-        projectRoleId: projectRoleAssignmentsTable.projectRoleId,
-        employeeId:    projectRoleAssignmentsTable.employeeId,
-      })
-      .from(projectRoleAssignmentsTable)
-      .where(inArray(projectRoleAssignmentsTable.projectRoleId, allRoles.map((r) => r.id)));
-    // (assignments used only for reference; activity is driven by actual entries/bookings)
-  }
-
-  // ── 5. Time entries ───────────────────────────────────────────────────────
+  // ── 4. Time entries ───────────────────────────────────────────────────────
   const entryConds: any[] = [
     gte(timeEntriesTable.entryDate, startDate),
     lte(timeEntriesTable.entryDate, endDate),
