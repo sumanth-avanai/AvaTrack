@@ -1,0 +1,221 @@
+FEATURE: Employee Self-Service Timesheet with Role-Based Access.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes. Existing time entries without role assignments must remain intact (grandfather clause).
+
+=== CONTEXT ===
+
+Two ways to book time:
+1. Admin Timesheet (in main app) – can book for any employee on any project
+2. Personal Link + PIN (employee self-service) – restricted to assigned projects/roles
+
+=== SCOPE ===
+
+This feature updates the Personal Link Timesheet experience:
+- Employee sees only projects they are assigned to
+- Projects with active ResourceBooking this week are pre-filled
+- Shows planned hours for reference
+- Role is pre-selected from ResourceBooking but changeable
+
+=== ACCESS RULES ===
+
+| Context | Who can book | On which projects | Roles |
+|---------|--------------|-------------------|-------|
+| Admin Timesheet | Admin (anyone logged in) | ALL projects | ALL roles |
+| Personal Link | Employee (via PIN) | Only assigned projects | Only assigned roles |
+
+"Assigned" = Employee has ProjectRoleAssignment for that project/role
+
+=== GRANDFATHER CLAUSE ===
+
+- Existing TimeEntries (before this feature) remain untouched
+- Even if employee was not formally assigned to project/role
+- This restriction applies only to NEW entries going forward
+- No migration or cleanup of old data
+
+=== PERSONAL LINK TIMESHEET UI ===
+
+Structure:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Timesheet                                         Apr 20 – Apr 26, 2026    │
+│ Welcome, Keshav Reddy                              [← Prev] [Next →]       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│ Project / Role               │ Planned │ Mo │ Di │ Mi │ Do │ Fr │ Total   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ▼ n8n extention (Bayer)                                                    │
+│    └─ Tech Lead         [▼]  │ 40h     │ 8  │ 8  │ 8  │ 8  │ 8  │ 40      │
+│    └─ Engineer          [▼]  │ -       │ -  │ -  │ -  │ -  │ -  │ 0       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ▶ AI Chatbot (Telekom)       │         │    │    │    │    │    │         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ [+ Add Project]                                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ TOTAL                        │         │ 8  │ 8  │ 8  │ 8  │ 8  │ 40      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                        [Save]              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+=== BEHAVIOR ===
+
+1. AUTO-POPULATE ROWS:
+   - On page load, check: which ResourceBookings exist for this employee in this week?
+   - For each active booking: auto-add project + role as a row
+   - Grouped by project, roles as sub-rows
+
+2. "PLANNED" COLUMN:
+   - Shows planned hours for this week from ResourceBooking
+   - Format: "40h" (total for week)
+   - If no booking for this role/week: show "-"
+   - Read-only (just for reference)
+
+3. ROLE DISPLAY:
+   - Role is pre-selected from ResourceBooking
+   - Dropdown [▼] allows changing to other assigned roles
+   - Only shows roles the employee is assigned to for this project
+
+4. ADD PROJECT:
+   - [+ Add Project] shows dropdown with:
+     - Only projects where employee has ProjectRoleAssignment
+     - Excludes projects already in timesheet
+   - After selecting project → shows available roles for that project
+   - Grouped display: Project → Roles as sub-rows
+
+5. PROJECT GROUPING:
+   - Project name as header row (collapsible ▼/▶)
+   - Roles as indented sub-rows
+   - Each role row has its own Planned + hour inputs
+
+6. BOOKING OUTSIDE PLANNED PERIOD:
+   - Employee can book on assigned projects even without active ResourceBooking
+   - "Planned" column shows "-"
+   - No error, just no planned reference
+
+=== ADMIN TIMESHEET (no changes to access) ===
+
+- Still shows ALL projects in dropdown (not filtered)
+- Can book any employee on any project/role
+- Same UI improvements apply:
+  - Grouped project/role display
+  - "Planned" column (shows booking if exists)
+  - But no restrictions on what can be selected
+
+=== DATA MODEL ===
+
+No schema changes needed. Use existing:
+- ProjectRoleAssignment (employee ↔ project role)
+- ResourceBooking (planned hours)
+- TimeEntry (booked hours)
+
+Logic:
+// Get available projects for employee (Personal Link)
+availableProjects = ProjectRoleAssignment
+.where(employeeId = currentEmployee)
+.include(projectRole.project)
+
+// Get pre-filled rows (active bookings this week)
+prefilledRows = ResourceBooking
+.where(employeeId = currentEmployee)
+.where(startDate <= weekEnd AND endDate >= weekStart)
+.include(project, projectRole)
+
+// Get available roles for a project
+availableRoles = ProjectRoleAssignment
+.where(employeeId = currentEmployee)
+.where(projectRole.projectId = selectedProject)
+.include(projectRole)
+
+
+=== API CHANGES ===
+
+GET /api/employee-timesheet/:employeeId/week/:weekStart
+(Used by Personal Link)
+
+Response:
+```json
+{
+  "employee": {
+    "id": "...",
+    "name": "Keshav Reddy"
+  },
+  "week": {
+    "start": "2026-04-20",
+    "end": "2026-04-26"
+  },
+  "availableProjects": [
+    {
+      "projectId": "...",
+      "projectName": "n8n extention",
+      "clientName": "Bayer",
+      "roles": [
+        { "roleId": "...", "roleName": "Tech Lead", "assigned": true },
+        { "roleId": "...", "roleName": "Engineer", "assigned": true }
+      ]
+    }
+  ],
+  "prefilled": [
+    {
+      "projectId": "...",
+      "projectName": "n8n extention",
+      "clientName": "Bayer",
+      "roleId": "...",
+      "roleName": "Tech Lead",
+      "plannedHours": 40,
+      "entries": {
+        "2026-04-20": 8,
+        "2026-04-21": 8,
+        ...
+      }
+    }
+  ]
+}
+POST /api/employee-timesheet/:employeeId/week/:weekStart
+(Save entries – validate project/role assignment for Personal Link)
+
+Validation (Personal Link only):
+
+Check: is employee assigned to this project role?
+If not: reject with 403 "Not assigned to this project role"
+Admin Timesheet: skip this validation
+=== UI DETAILS ===
+
+Collapsed/Expanded Project:
+
+▶ Collapsed: shows project name only
+▼ Expanded: shows project name + role sub-rows
+Default: expanded for projects with planned hours
+Role Dropdown:
+
+Small dropdown arrow next to role name
+Shows only assigned roles for this project
+Changing role moves hours to new role
+Visual Hierarchy:
+
+Project row: bold, slightly grey background
+Role rows: indented 24px, normal weight
+Planned column: grey text, right-aligned
+Empty State:
+
+No assignments: "No projects assigned. Contact your manager."
+No planned this week: "No planned work this week. Add a project below."
+=== ACCEPTANCE CRITERIA ===
+
+Tabelle
+
+
+#	Item	Done when...
+1	Personal Link access	Employee only sees assigned projects/roles
+2	Auto-prefill	Projects with ResourceBooking this week appear automatically
+3	Planned column	Shows planned hours per role for this week
+4	Add project	Can add other assigned projects (not already shown)
+5	Role selection	Role pre-selected from booking, changeable via dropdown
+6	Grouped display	Projects as headers, roles as sub-rows
+7	Admin unrestricted	Admin Timesheet can still book any project/role
+8	Grandfather clause	Existing entries without assignment remain visible/editable
+9	Validation	Personal Link rejects booking on unassigned projects
+10	No assignment	Can book on assigned project even without active ResourceBooking
+=== OUT OF SCOPE ===
+
+Approval workflow for time entries
+Notifications when booking exceeds planned
+Mobile optimization (separate feature)
+Preserve all existing data and functionality.
