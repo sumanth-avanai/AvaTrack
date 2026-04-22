@@ -9,7 +9,7 @@ import {
   subWeeks, subMonths, subQuarters, subYears,
   parseISO,
 } from "date-fns";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useListEmployees,
   useListProjects,
@@ -34,7 +34,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Download, X, Save, Trash2, BookOpen } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Download, X, Save, Trash2, BookOpen, ChevronRight, ChevronDown, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -43,9 +44,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-// ─── Date preset helpers ────────────────────────────────────────────────────
+// ─── Date preset helpers ─────────────────────────────────────────────────────
 
 type Preset =
   | "today" | "this_week" | "last_week"
@@ -55,16 +55,16 @@ type Preset =
   | "custom";
 
 const PRESET_LABELS: Record<Preset, string> = {
-  today:          "Today",
-  this_week:      "This Week",
-  last_week:      "Last Week",
-  this_month:     "This Month",
-  last_month:     "Last Month",
-  this_quarter:   "This Quarter",
-  last_quarter:   "Last Quarter",
-  this_year:      "This Year",
-  last_year:      "Last Year",
-  custom:         "Custom",
+  today:        "Today",
+  this_week:    "This Week",
+  last_week:    "Last Week",
+  this_month:   "This Month",
+  last_month:   "Last Month",
+  this_quarter: "This Quarter",
+  last_quarter: "Last Quarter",
+  this_year:    "This Year",
+  last_year:    "Last Year",
+  custom:       "Custom",
 };
 
 function toIso(d: Date) {
@@ -74,60 +74,69 @@ function toIso(d: Date) {
 function presetsFor(preset: Preset): { startDate: string; endDate: string } {
   const now = new Date();
   switch (preset) {
-    case "today":         return { startDate: toIso(now), endDate: toIso(now) };
-    case "this_week":     return { startDate: toIso(startOfWeek(now, { weekStartsOn: 1 })), endDate: toIso(endOfWeek(now, { weekStartsOn: 1 })) };
-    case "last_week":     return { startDate: toIso(startOfWeek(subWeeks(now, 1), { weekStartsOn: 1 })), endDate: toIso(endOfWeek(subWeeks(now, 1), { weekStartsOn: 1 })) };
-    case "this_month":    return { startDate: toIso(startOfMonth(now)), endDate: toIso(endOfMonth(now)) };
-    case "last_month":    return { startDate: toIso(startOfMonth(subMonths(now, 1))), endDate: toIso(endOfMonth(subMonths(now, 1))) };
-    case "this_quarter":  return { startDate: toIso(startOfQuarter(now)), endDate: toIso(endOfQuarter(now)) };
-    case "last_quarter":  return { startDate: toIso(startOfQuarter(subQuarters(now, 1))), endDate: toIso(endOfQuarter(subQuarters(now, 1))) };
-    case "this_year":     return { startDate: toIso(startOfYear(now)), endDate: toIso(endOfYear(now)) };
-    case "last_year":     return { startDate: toIso(startOfYear(subYears(now, 1))), endDate: toIso(endOfYear(subYears(now, 1))) };
-    default:              return { startDate: toIso(startOfMonth(now)), endDate: toIso(endOfMonth(now)) };
+    case "today":        return { startDate: toIso(now), endDate: toIso(now) };
+    case "this_week":    return { startDate: toIso(startOfWeek(now, { weekStartsOn: 1 })), endDate: toIso(endOfWeek(now, { weekStartsOn: 1 })) };
+    case "last_week":    return { startDate: toIso(startOfWeek(subWeeks(now, 1), { weekStartsOn: 1 })), endDate: toIso(endOfWeek(subWeeks(now, 1), { weekStartsOn: 1 })) };
+    case "this_month":   return { startDate: toIso(startOfMonth(now)), endDate: toIso(endOfMonth(now)) };
+    case "last_month":   return { startDate: toIso(startOfMonth(subMonths(now, 1))), endDate: toIso(endOfMonth(subMonths(now, 1))) };
+    case "this_quarter": return { startDate: toIso(startOfQuarter(now)), endDate: toIso(endOfQuarter(now)) };
+    case "last_quarter": return { startDate: toIso(startOfQuarter(subQuarters(now, 1))), endDate: toIso(endOfQuarter(subQuarters(now, 1))) };
+    case "this_year":    return { startDate: toIso(startOfYear(now)), endDate: toIso(endOfYear(now)) };
+    case "last_year":    return { startDate: toIso(startOfYear(subYears(now, 1))), endDate: toIso(endOfYear(subYears(now, 1))) };
+    default:             return { startDate: toIso(startOfMonth(now)), endDate: toIso(endOfMonth(now)) };
   }
 }
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-type RowDimension = "employees" | "projects" | "clients";
-type ColDimension = "none" | "month";
-type Metric =
-  | "billable_hours"
-  | "total_hours"
-  | "billable_utilization_percent"
-  | "overall_utilization_percent"
-  | "booked_hours"
-  | "budget_hours"
-  | "remaining_hours"
-  | "budget_used_pct";
+type RowDimension = "employees" | "projects" | "clients" | "roles";
+type ColDimension = "none" | "week" | "month" | "quarter";
+type Unit = "hours" | "days";
 
-interface FlatRow {
-  id: number;
-  label: string;
-  availableHours: number;
-  billableHours: number;
-  nonBillableHours: number;
-  totalHours: number;
-  billableUtilization: number;
-  overallUtilization: number;
-  // budget fields (only present for projects / clients)
-  budgetHours?: number | null;
-  bookedHours?: number;
-  remainingHours?: number | null;
-  budgetUsedPct?: number | null;
+const ALL_METRICS: { key: string; label: string }[] = [
+  { key: "booked",                label: "Booked" },
+  { key: "billable_booked",       label: "Billable Booked" },
+  { key: "planned",               label: "Planned" },
+  { key: "available",             label: "Available" },
+  { key: "budgeted",              label: "Budgeted" },
+  { key: "remaining_unbooked",    label: "Remaining (unbooked)" },
+  { key: "remaining_unplanned",   label: "Remaining (unplanned)" },
+  { key: "utilization_pct",       label: "Utilization %" },
+  { key: "billable_utilization_pct", label: "Billable Util %" },
+  { key: "plan_completion_pct",   label: "Plan Completion %" },
+  { key: "budget_used_pct",       label: "Budget Used %" },
+];
+
+const METRIC_LABEL_MAP: Record<string, string> = Object.fromEntries(
+  ALL_METRICS.map((m) => [m.key, m.label])
+);
+
+const PCT_METRICS = new Set([
+  "utilization_pct", "billable_utilization_pct",
+  "plan_completion_pct", "budget_used_pct",
+]);
+
+interface DrillRow {
+  id: string;
+  name: string;
+  type: string;
+  expandable: boolean;
+  data: Record<string, Record<string, number>>;
+  children: DrillRow[];
 }
 
-interface PivotRow {
-  id: number;
-  label: string;
-  values: Record<string, number>;
+interface DrillResponse {
+  type: "drill";
+  rowDimension: string;
+  colDimension: string;
+  metrics: string[];
+  columns: string[];
+  columnLabels: string[];
+  rows: DrillRow[];
+  totals: Record<string, Record<string, number>>;
 }
 
-type ReportData =
-  | { type: "flat"; rowDimension: string; rows: FlatRow[] }
-  | { type: "pivot"; rowDimension: string; colDimension: string; metric: string; columns: string[]; rows: PivotRow[] };
-
-// ─── Saved report types & helpers ────────────────────────────────────────────
+// ─── Saved report config ─────────────────────────────────────────────────────
 
 interface ReportConfig {
   preset: Preset;
@@ -135,10 +144,13 @@ interface ReportConfig {
   endDate: string;
   rowDimension: RowDimension;
   colDimension: ColDimension;
-  metric: Metric;
+  metrics: string[];
+  unit: Unit;
   filterEmployees: number[];
   filterProjects: number[];
   filterClients: number[];
+  // legacy compat
+  metric?: string;
 }
 
 interface SavedReportRow {
@@ -170,52 +182,65 @@ async function apiDeleteSavedReport(id: string): Promise<void> {
   if (!res.ok && res.status !== 204) throw new Error(await res.text());
 }
 
-// ─── Fetch ──────────────────────────────────────────────────────────────────
+// ─── Fetch ───────────────────────────────────────────────────────────────────
 
-async function fetchPivot(params: URLSearchParams): Promise<ReportData> {
+async function fetchPivot(params: URLSearchParams): Promise<DrillResponse> {
   const res = await fetch(`/api/reports/pivot?${params.toString()}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-// ─── Formatting ─────────────────────────────────────────────────────────────
+// ─── Value formatting ────────────────────────────────────────────────────────
 
-function formatMetricValue(metric: Metric | string, value: number): string {
-  if (
-    metric === "billable_utilization_percent" ||
-    metric === "overall_utilization_percent" ||
-    metric === "budget_used_pct"
-  ) {
-    return `${Math.round(value * 100)}%`;
+function fmtVal(val: number, metricKey: string, unit: Unit): string {
+  if (PCT_METRICS.has(metricKey)) return `${val.toFixed(1)}%`;
+  const v = unit === "days" ? val / 8 : val;
+  const suffix = unit === "days" ? "d" : "h";
+  return `${v.toFixed(1)}${suffix}`;
+}
+
+function fmtLabel(col: string): string {
+  if (col === "Total") return "Total";
+  if (/^\d{4}-W\d+$/.test(col)) {
+    const [year, w] = col.split("-W");
+    return `W${w} ${year}`;
   }
-  return value.toFixed(1);
-}
-
-function formatMonthLabel(yyyymm: string): string {
-  try {
-    return format(parseISO(yyyymm + "-01"), "MMM yyyy");
-  } catch {
-    return yyyymm;
+  if (/^\d{4}-Q\d$/.test(col)) {
+    const [year, q] = col.split("-Q");
+    return `Q${q} ${year}`;
   }
+  if (/^\d{4}-\d{2}$/.test(col)) {
+    try { return format(parseISO(col + "-01"), "MMM yyyy"); } catch { return col; }
+  }
+  return col;
 }
 
-function utilizationColor(value: number): string {
-  const pct = value * 100;
-  if (pct >= 80) return "text-emerald-600 font-semibold";
-  if (pct >= 60) return "text-foreground";
-  if (pct >= 40) return "text-amber-600";
-  return "text-red-500";
+// ─── Color helpers ───────────────────────────────────────────────────────────
+
+function metricCellClass(
+  metricKey: string,
+  val: number,
+  budgetedVal?: number
+): string {
+  if (metricKey === "utilization_pct" || metricKey === "billable_utilization_pct") {
+    if (val > 100) return "text-red-500 font-semibold";
+    if (val >= 80)  return "text-emerald-600 font-semibold";
+    if (val >= 60)  return "text-amber-500";
+    return "text-muted-foreground";
+  }
+  if (metricKey === "plan_completion_pct") {
+    if (val > 100) return "text-red-500 font-semibold";
+    return "";
+  }
+  if (metricKey === "remaining_unbooked" || metricKey === "remaining_unplanned") {
+    if (val < 0) return "text-red-500 font-semibold";
+    if (budgetedVal != null && budgetedVal > 0 && val < budgetedVal * 0.2) return "text-amber-500 font-medium";
+    return "";
+  }
+  return "";
 }
 
-function isPctMetric(metric: Metric | string): boolean {
-  return (
-    metric === "billable_utilization_percent" ||
-    metric === "overall_utilization_percent" ||
-    metric === "budget_used_pct"
-  );
-}
-
-// ─── Multi-select badge component ────────────────────────────────────────────
+// ─── Multi-select filter ─────────────────────────────────────────────────────
 
 interface MultiSelectProps {
   label: string;
@@ -226,7 +251,6 @@ interface MultiSelectProps {
 
 function MultiSelect({ label, options, selected, onChange }: MultiSelectProps) {
   const available = options.filter((o) => !selected.includes(o.id));
-
   return (
     <div className="space-y-1.5">
       <Label className="text-xs text-muted-foreground">{label}</Label>
@@ -237,38 +261,26 @@ function MultiSelect({ label, options, selected, onChange }: MultiSelectProps) {
           return (
             <Badge key={id} variant="secondary" className="gap-1 h-6 text-xs">
               {opt.label}
-              <button
-                onClick={() => onChange(selected.filter((s) => s !== id))}
-                className="rounded-sm opacity-60 hover:opacity-100"
-              >
+              <button onClick={() => onChange(selected.filter((s) => s !== id))} className="rounded-sm opacity-60 hover:opacity-100">
                 <X className="h-3 w-3" />
               </button>
             </Badge>
           );
         })}
         {available.length > 0 && (
-          <Select
-            onValueChange={(v) => onChange([...selected, parseInt(v, 10)])}
-            value=""
-          >
+          <Select onValueChange={(v) => onChange([...selected, parseInt(v, 10)])} value="">
             <SelectTrigger className="h-6 w-auto border-none shadow-none px-1 text-xs text-muted-foreground hover:text-foreground bg-transparent">
               <SelectValue placeholder="+ Add filter" />
             </SelectTrigger>
             <SelectContent>
               {available.map((o) => (
-                <SelectItem key={o.id} value={String(o.id)} className="text-sm">
-                  {o.label}
-                </SelectItem>
+                <SelectItem key={o.id} value={String(o.id)} className="text-sm">{o.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         )}
-        {selected.length === 0 && available.length === 0 && (
-          <span className="text-xs text-muted-foreground">All</span>
-        )}
-        {selected.length === 0 && available.length > 0 && (
-          <span className="text-xs text-muted-foreground pointer-events-none">All (click to filter)</span>
-        )}
+        {selected.length === 0 && available.length === 0 && <span className="text-xs text-muted-foreground">All</span>}
+        {selected.length === 0 && available.length > 0 && <span className="text-xs text-muted-foreground pointer-events-none">All (click to filter)</span>}
       </div>
     </div>
   );
@@ -276,47 +288,53 @@ function MultiSelect({ label, options, selected, onChange }: MultiSelectProps) {
 
 // ─── CSV export ──────────────────────────────────────────────────────────────
 
-function exportCSV(data: ReportData, metric: Metric, startDate: string, endDate: string, rowDimension: RowDimension) {
-  let lines: string[] = [];
-  const showBudget = rowDimension === "projects" || rowDimension === "clients";
-
-  if (data.type === "flat") {
-    if (rowDimension === "employees") {
-      lines.push(["Name","Available Hrs","Billable Hrs","Non-Billable Hrs","Total Hrs","Billable Util%","Overall Util%"].join(","));
-      data.rows.forEach((r) => {
-        lines.push([
-          `"${r.label}"`,
-          r.availableHours,
-          r.billableHours,
-          r.nonBillableHours,
-          r.totalHours,
-          `${Math.round(r.billableUtilization * 100)}%`,
-          `${Math.round(r.overallUtilization * 100)}%`,
-        ].join(","));
-      });
-    } else {
-      lines.push(["Name","Budget Hrs","Booked Hrs","Logged Hrs","Remaining Hrs","Budget Used %","Billable Hrs","Non-Billable Hrs"].join(","));
-      data.rows.forEach((r) => {
-        lines.push([
-          `"${r.label}"`,
-          r.budgetHours != null ? r.budgetHours.toFixed(1) : "—",
-          r.bookedHours != null ? r.bookedHours.toFixed(1) : "0.0",
-          r.totalHours.toFixed(1),
-          r.remainingHours != null ? r.remainingHours.toFixed(1) : "—",
-          r.budgetUsedPct != null ? `${Math.round(r.budgetUsedPct * 100)}%` : "—",
-          r.billableHours.toFixed(1),
-          r.nonBillableHours.toFixed(1),
-        ].join(","));
-      });
-    }
-  } else {
-    const colLabels = data.columns.map(formatMonthLabel);
-    lines.push(["Name", ...colLabels].join(","));
-    data.rows.forEach((r) => {
-      const cells = data.columns.map((c) => formatMetricValue(metric, r.values[c] ?? 0));
-      lines.push([`"${r.label}"`, ...cells].join(","));
-    });
+function flattenTree(rows: DrillRow[], depth = 0): { row: DrillRow; depth: number }[] {
+  const result: { row: DrillRow; depth: number }[] = [];
+  for (const row of rows) {
+    result.push({ row, depth });
+    result.push(...flattenTree(row.children, depth + 1));
   }
+  return result;
+}
+
+function exportCSV(
+  data: DrillResponse,
+  unit: Unit,
+  startDate: string,
+  endDate: string
+) {
+  const metrics = data.metrics;
+  const colLabels = data.columns.map(fmtLabel);
+
+  const headerCells = ["Name", "Type"];
+  for (const col of colLabels) {
+    for (const m of metrics) {
+      headerCells.push(`${col} - ${METRIC_LABEL_MAP[m] ?? m}`);
+    }
+  }
+
+  const lines: string[] = [headerCells.join(",")];
+  for (const { row, depth } of flattenTree(data.rows)) {
+    const indent = "  ".repeat(depth);
+    const cells: string[] = [`"${indent}${row.name}"`, row.type];
+    for (const col of data.columns) {
+      for (const m of metrics) {
+        const val = row.data[col]?.[m] ?? 0;
+        cells.push(PCT_METRICS.has(m) ? `${val.toFixed(1)}%` : unit === "days" ? `${(val / 8).toFixed(1)}d` : `${val.toFixed(1)}h`);
+      }
+    }
+    lines.push(cells.join(","));
+  }
+
+  // Totals row
+  const totalCells: string[] = ['"Totals"', "total"];
+  for (const col of data.columns) {
+    for (const m of metrics) {
+      const val = data.totals[col]?.[m] ?? 0;
+      totalCells.push(PCT_METRICS.has(m) ? `${val.toFixed(1)}%` : unit === "days" ? `${(val / 8).toFixed(1)}d` : `${val.toFixed(1)}h`);
+    }
+  }
+  lines.push(totalCells.join(","));
 
   const csv  = lines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -330,26 +348,156 @@ function exportCSV(data: ReportData, metric: Metric, startDate: string, endDate:
   URL.revokeObjectURL(url);
 }
 
-// ─── Main component ──────────────────────────────────────────────────────────
+// ─── Drill-down row component ─────────────────────────────────────────────────
+
+interface DrillRowProps {
+  row: DrillRow;
+  depth: number;
+  metrics: string[];
+  columns: string[];
+  unit: Unit;
+  expanded: boolean;
+  onToggle: (id: string) => void;
+  budgetedByCol: Record<string, number>;
+}
+
+function DrillTableRow({ row, depth, metrics, columns, unit, expanded, onToggle, budgetedByCol }: DrillRowProps) {
+  const indentPx = depth * 20;
+
+  const rowTypeClass = depth === 0
+    ? "font-semibold bg-muted/20"
+    : depth === 1
+    ? "font-medium"
+    : "text-muted-foreground text-sm";
+
+  return (
+    <TableRow className={`${rowTypeClass} hover:bg-muted/30`}>
+      <TableCell
+        className="sticky left-0 bg-card z-10 min-w-[200px] max-w-[280px]"
+        style={{ paddingLeft: `${8 + indentPx}px` }}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          {row.expandable ? (
+            <button
+              onClick={() => onToggle(row.id)}
+              className="shrink-0 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+              aria-label={expanded ? "Collapse" : "Expand"}
+            >
+              {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+          ) : (
+            <span className="shrink-0 h-4 w-4" />
+          )}
+          <span className="truncate">{row.name}</span>
+        </div>
+      </TableCell>
+
+      {columns.map((col) =>
+        metrics.map((m) => {
+          const val = row.data[col]?.[m] ?? 0;
+          const isEmpty = val === 0 && !PCT_METRICS.has(m);
+          const budgeted = budgetedByCol[col];
+          const colorClass = metricCellClass(m, val, budgeted);
+          return (
+            <TableCell
+              key={`${col}::${m}`}
+              className={`text-right tabular-nums whitespace-nowrap px-3 ${colorClass} ${isEmpty ? "text-muted-foreground/30" : ""}`}
+            >
+              {isEmpty ? "—" : fmtVal(val, m, unit)}
+            </TableCell>
+          );
+        })
+      )}
+    </TableRow>
+  );
+}
+
+// ─── Recursive visible rows ───────────────────────────────────────────────────
+
+function collectVisible(
+  rows: DrillRow[],
+  expandedIds: Set<string>,
+  depth = 0
+): { row: DrillRow; depth: number }[] {
+  const result: { row: DrillRow; depth: number }[] = [];
+  for (const row of rows) {
+    result.push({ row, depth });
+    if (row.expandable && expandedIds.has(row.id)) {
+      result.push(...collectVisible(row.children, expandedIds, depth + 1));
+    }
+  }
+  return result;
+}
+
+// ─── Sort helpers ─────────────────────────────────────────────────────────────
+
+type SortDir = "asc" | "desc" | null;
+
+function sortRows(
+  rows: DrillRow[],
+  sortCol: string | null,
+  sortDir: SortDir,
+  primaryMetric: string
+): DrillRow[] {
+  if (!sortCol || !sortDir) return rows;
+  return [...rows].sort((a, b) => {
+    const av = a.data[sortCol]?.[primaryMetric] ?? 0;
+    const bv = b.data[sortCol]?.[primaryMetric] ?? 0;
+    return sortDir === "asc" ? av - bv : bv - av;
+  });
+}
+
+// ─── Saved report config summary ─────────────────────────────────────────────
+
+function configSummary(cfg: ReportConfig): string {
+  const presetLabel = cfg.preset !== "custom" ? PRESET_LABELS[cfg.preset] : `${cfg.startDate} → ${cfg.endDate}`;
+  const rdLabel: Record<string, string> = { employees: "Employees", projects: "Projects", clients: "Clients", roles: "Roles" };
+  const rd = rdLabel[cfg.rowDimension] ?? cfg.rowDimension;
+  const metricKeys = cfg.metrics ?? (cfg.metric ? [cfg.metric] : ["booked"]);
+  const metricLabels = metricKeys.map((k) => METRIC_LABEL_MAP[k] ?? k).join(", ");
+  return `${presetLabel} · ${rd} · ${metricLabels}`;
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+const DEFAULT_METRICS = ["booked", "utilization_pct"];
 
 export default function Reports() {
-  const now = new Date();
-
-  const [preset, setPreset]               = useState<Preset>("this_month");
-  const [startDate, setStartDate]         = useState(() => presetsFor("this_month").startDate);
-  const [endDate, setEndDate]             = useState(() => presetsFor("this_month").endDate);
-  const [rowDimension, setRowDimension]   = useState<RowDimension>("employees");
-  const [colDimension, setColDimension]   = useState<ColDimension>("none");
-  const [metric, setMetric]               = useState<Metric>("billable_utilization_percent");
+  const [preset, setPreset]             = useState<Preset>("this_month");
+  const [startDate, setStartDate]       = useState(() => presetsFor("this_month").startDate);
+  const [endDate, setEndDate]           = useState(() => presetsFor("this_month").endDate);
+  const [rowDimension, setRowDimension] = useState<RowDimension>("employees");
+  const [colDimension, setColDimension] = useState<ColDimension>("none");
+  const [metrics, setMetrics]           = useState<string[]>(DEFAULT_METRICS);
+  const [unit, setUnit]                 = useState<Unit>("hours");
   const [filterEmployees, setFilterEmployees] = useState<number[]>([]);
   const [filterProjects, setFilterProjects]   = useState<number[]>([]);
   const [filterClients, setFilterClients]     = useState<number[]>([]);
 
-  // ── Saved reports state ──────────────────────────────────────────────────
+  // expand/collapse
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // sort
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>(null);
+  const handleSortCol = (col: string) => {
+    if (sortCol !== col) { setSortCol(col); setSortDir("desc"); }
+    else if (sortDir === "desc") setSortDir("asc");
+    else { setSortCol(null); setSortDir(null); }
+  };
+
+  // saved reports
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveName, setSaveName]             = useState("");
   const [saveError, setSaveError]           = useState("");
-
   const queryClient = useQueryClient();
 
   const { data: savedReports = [] } = useQuery<SavedReportRow[]>({
@@ -362,9 +510,7 @@ export default function Reports() {
       apiCreateSavedReport(name, config),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["saved-reports"] });
-      setSaveDialogOpen(false);
-      setSaveName("");
-      setSaveError("");
+      setSaveDialogOpen(false); setSaveName(""); setSaveError("");
     },
   });
 
@@ -373,98 +519,59 @@ export default function Reports() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["saved-reports"] }),
   });
 
-  const handleOpenSaveDialog = () => {
-    setSaveName("");
-    setSaveError("");
-    setSaveDialogOpen(true);
-  };
-
-  const handleConfirmSave = () => {
-    const trimmed = saveName.trim();
-    if (!trimmed) {
-      setSaveError("Please enter a name for the report.");
-      return;
-    }
-    const config: ReportConfig = {
-      preset, startDate, endDate,
-      rowDimension, colDimension, metric,
-      filterEmployees, filterProjects, filterClients,
-    };
-    createReport.mutate({ name: trimmed, config });
-  };
-
   const handleLoadReport = (row: SavedReportRow) => {
     try {
       const cfg: ReportConfig = JSON.parse(row.config);
       setPreset(cfg.preset ?? "custom");
       setStartDate(cfg.startDate);
       setEndDate(cfg.endDate);
-      setRowDimension(cfg.rowDimension ?? "employees");
-      setColDimension(cfg.colDimension ?? "none");
-      setMetric(cfg.metric ?? "billable_utilization_percent");
+      setRowDimension((cfg.rowDimension ?? "employees") as RowDimension);
+      setColDimension((cfg.colDimension ?? "none") as ColDimension);
+      // Backward compat: old configs had single `metric` string
+      setMetrics(cfg.metrics ?? (cfg.metric ? [cfg.metric] : DEFAULT_METRICS));
+      setUnit(cfg.unit ?? "hours");
       setFilterEmployees(cfg.filterEmployees ?? []);
       setFilterProjects(cfg.filterProjects ?? []);
       setFilterClients(cfg.filterClients ?? []);
-    } catch {
-      // malformed config — ignore
-    }
+      setExpandedIds(new Set());
+    } catch { /* malformed config */ }
   };
 
-  const { data: employees } = useListEmployees();
-  const { data: projects }  = useListProjects({ includeInactive: false });
+  const { data: employees }   = useListEmployees();
+  const { data: projects }    = useListProjects({ includeInactive: false });
   const { data: allProjects } = useListProjects({ includeInactive: true });
-  const { data: clients }   = useListClients();
+  const { data: clients }     = useListClients();
 
   const projectColorMap = useMemo(() => {
     const map = new Map<number, string>();
-    (allProjects ?? []).forEach((p) => {
-      map.set(p.id, p.color ?? "#6366f1");
-    });
+    (allProjects ?? []).forEach((p) => map.set(p.id, p.color ?? "#6366f1"));
     return map;
   }, [allProjects]);
 
-  const employeeOptions = useMemo(
-    () => (employees ?? []).map((e) => ({ id: e.id, label: e.name })),
-    [employees]
-  );
-  const projectOptions = useMemo(
-    () => (projects ?? []).map((p) => ({ id: p.id, label: `${p.name} (${p.clientName ?? "—"})` })),
-    [projects]
-  );
-  const clientOptions = useMemo(
-    () => (clients ?? []).map((c) => ({ id: c.id, label: c.name })),
-    [clients]
-  );
+  const employeeOptions = useMemo(() => (employees ?? []).map((e) => ({ id: e.id, label: e.name })), [employees]);
+  const projectOptions  = useMemo(() => (projects ?? []).map((p) => ({ id: p.id, label: `${p.name} (${p.clientName ?? "—"})` })), [projects]);
+  const clientOptions   = useMemo(() => (clients ?? []).map((c) => ({ id: c.id, label: c.name })), [clients]);
 
-  const showBudgetColumns = rowDimension === "projects" || rowDimension === "clients";
-
-  // Build query params
   const params = useMemo(() => {
-    const p = new URLSearchParams({
-      startDate,
-      endDate,
-      rowDimension,
-      colDimension,
-      metric,
-    });
+    const p = new URLSearchParams({ startDate, endDate, rowDimension, colDimension });
+    metrics.forEach((m) => p.append("metrics", m));
     if (filterEmployees.length) p.set("employeeIds", filterEmployees.join(","));
     if (filterProjects.length)  p.set("projectIds",  filterProjects.join(","));
     if (filterClients.length)   p.set("clientIds",   filterClients.join(","));
     return p;
-  }, [startDate, endDate, rowDimension, colDimension, metric, filterEmployees, filterProjects, filterClients]);
+  }, [startDate, endDate, rowDimension, colDimension, metrics, filterEmployees, filterProjects, filterClients]);
 
-  const { data, isLoading, error } = useQuery<ReportData>({
+  const { data, isLoading, error } = useQuery<DrillResponse>({
     queryKey: ["reports-pivot", params.toString()],
     queryFn: () => fetchPivot(params),
-    enabled: !!startDate && !!endDate,
+    enabled: !!startDate && !!endDate && metrics.length > 0,
   });
 
   const handlePreset = (p: Preset) => {
     setPreset(p);
     if (p !== "custom") {
       const { startDate: s, endDate: e } = presetsFor(p);
-      setStartDate(s);
-      setEndDate(e);
+      setStartDate(s); setEndDate(e);
     }
   };
 
@@ -474,34 +581,50 @@ export default function Reports() {
     else setEndDate(value);
   };
 
-  const isUtilizationMetric =
-    metric === "billable_utilization_percent" || metric === "overall_utilization_percent";
+  const toggleMetric = (key: string) => {
+    setMetrics((prev) =>
+      prev.includes(key) ? prev.filter((m) => m !== key) : [...prev, key]
+    );
+  };
 
-  const showAvailableHours =
-    data?.type === "flat" && rowDimension === "employees";
+  // Sorted top-level rows
+  const sortedRows = useMemo(() => {
+    if (!data) return [];
+    return sortRows(data.rows, sortCol, sortDir, metrics[0] ?? "booked");
+  }, [data, sortCol, sortDir, metrics]);
 
-  // Flat table column count (for empty-state colSpan)
-  const flatColCount = rowDimension === "employees"
-    ? 7  // name + available + billable + non-billable + total + 2 util
-    : 8; // name + budget + booked + logged + remaining + budget% + billable + non-billable
+  // Visible rows (flatten with expand state)
+  const visibleRows = useMemo(
+    () => collectVisible(sortedRows, expandedIds),
+    [sortedRows, expandedIds]
+  );
+
+  // Budget values per column (for remaining color threshold)
+  const budgetedByCol = useMemo(() => {
+    if (!data) return {};
+    const map: Record<string, number> = {};
+    for (const col of data.columns) {
+      map[col] = data.totals[col]?.["budgeted"] ?? 0;
+    }
+    return map;
+  }, [data]);
+
+  const numDataCols = (data?.columns.length ?? 0) * (metrics.length || 1);
 
   return (
     <AdminLayout>
-      <div className="space-y-6 max-w-7xl mx-auto">
+      <div className="space-y-5 max-w-[1400px] mx-auto">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Reports</h1>
 
-        {/* ── Control bar ─────────────────────────────────────────────── */}
+        {/* ── Builder panel ──────────────────────────────────────────────── */}
         <div className="space-y-4 p-4 border rounded-lg bg-card shadow-sm">
 
-          {/* Row 1: Date range */}
+          {/* Row 1: Period + unit toggle */}
           <div className="flex flex-wrap items-end gap-3">
-            {/* Preset */}
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Period</Label>
               <Select value={preset} onValueChange={(v) => handlePreset(v as Preset)}>
-                <SelectTrigger className="w-[160px] h-9">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-[160px] h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(Object.keys(PRESET_LABELS) as Preset[]).map((p) => (
                     <SelectItem key={p} value={p}>{PRESET_LABELS[p]}</SelectItem>
@@ -509,40 +632,47 @@ export default function Reports() {
                 </SelectContent>
               </Select>
             </div>
-
-            {/* Custom dates */}
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">From</Label>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => handleDateChange("start", e.target.value)}
-                className="h-9 w-[150px]"
-              />
+              <Input type="date" value={startDate} onChange={(e) => handleDateChange("start", e.target.value)} className="h-9 w-[150px]" />
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">To</Label>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => handleDateChange("end", e.target.value)}
-                className="h-9 w-[150px]"
-              />
+              <Input type="date" value={endDate} onChange={(e) => handleDateChange("end", e.target.value)} className="h-9 w-[150px]" />
+            </div>
+
+            {/* Days / Hours toggle */}
+            <div className="space-y-1 ml-auto">
+              <Label className="text-xs text-muted-foreground">Display as</Label>
+              <div className="flex h-9 rounded-md border bg-background overflow-hidden">
+                {(["hours", "days"] as Unit[]).map((u) => (
+                  <button
+                    key={u}
+                    onClick={() => setUnit(u)}
+                    className={`px-4 text-sm font-medium transition-colors ${
+                      unit === u
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {u === "hours" ? "Hours" : "Days"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Row 2: Dimensions + metric */}
-          <div className="flex flex-wrap items-end gap-3">
+          {/* Row 2: Rows + Columns */}
+          <div className="flex flex-wrap items-start gap-4">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Rows</Label>
-              <Select value={rowDimension} onValueChange={(v) => setRowDimension(v as RowDimension)}>
-                <SelectTrigger className="w-[150px] h-9">
-                  <SelectValue />
-                </SelectTrigger>
+              <Select value={rowDimension} onValueChange={(v) => { setRowDimension(v as RowDimension); setExpandedIds(new Set()); }}>
+                <SelectTrigger className="w-[150px] h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="employees">Employees</SelectItem>
                   <SelectItem value="projects">Projects</SelectItem>
                   <SelectItem value="clients">Clients</SelectItem>
+                  <SelectItem value="roles">Roles</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -550,72 +680,52 @@ export default function Reports() {
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Columns</Label>
               <Select value={colDimension} onValueChange={(v) => setColDimension(v as ColDimension)}>
-                <SelectTrigger className="w-[150px] h-9">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="w-[160px] h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— None (summary)</SelectItem>
+                  <SelectItem value="none">Summary (none)</SelectItem>
+                  <SelectItem value="week">Week</SelectItem>
                   <SelectItem value="month">Month</SelectItem>
+                  <SelectItem value="quarter">Quarter</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            {colDimension === "month" && (
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Metric</Label>
-                <Select value={metric} onValueChange={(v) => setMetric(v as Metric)}>
-                  <SelectTrigger className="w-[240px] h-9">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="billable_hours">Billable Hours</SelectItem>
-                    <SelectItem value="total_hours">Total Hours</SelectItem>
-                    <SelectItem value="billable_utilization_percent">Billable Utilization %</SelectItem>
-                    <SelectItem value="overall_utilization_percent">Overall Utilization %</SelectItem>
-                    {showBudgetColumns && (
-                      <>
-                        <SelectItem value="booked_hours">Booked Hours</SelectItem>
-                        <SelectItem value="budget_hours">Budget Hours</SelectItem>
-                        <SelectItem value="remaining_hours">Remaining Hours</SelectItem>
-                        <SelectItem value="budget_used_pct">Budget Used %</SelectItem>
-                      </>
-                    )}
-                  </SelectContent>
-                </Select>
+            {/* Metrics checkboxes */}
+            <div className="flex-1 min-w-[360px] space-y-1">
+              <Label className="text-xs text-muted-foreground">Metrics</Label>
+              <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
+                {ALL_METRICS.map((m) => (
+                  <label key={m.key} className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <Checkbox
+                      checked={metrics.includes(m.key)}
+                      onCheckedChange={() => toggleMetric(m.key)}
+                      className="h-3.5 w-3.5"
+                    />
+                    <span className="text-xs text-foreground whitespace-nowrap">{m.label}</span>
+                  </label>
+                ))}
               </div>
-            )}
+              {metrics.length === 0 && (
+                <p className="text-xs text-amber-600">Select at least one metric.</p>
+              )}
+            </div>
           </div>
 
           {/* Row 3: Filters */}
           <div className="flex flex-wrap gap-4">
-            <div className="min-w-[220px] flex-1">
-              <MultiSelect
-                label="Filter Employees"
-                options={employeeOptions}
-                selected={filterEmployees}
-                onChange={setFilterEmployees}
-              />
+            <div className="min-w-[200px] flex-1">
+              <MultiSelect label="Filter Employees" options={employeeOptions} selected={filterEmployees} onChange={setFilterEmployees} />
             </div>
-            <div className="min-w-[220px] flex-1">
-              <MultiSelect
-                label="Filter Projects"
-                options={projectOptions}
-                selected={filterProjects}
-                onChange={setFilterProjects}
-              />
+            <div className="min-w-[200px] flex-1">
+              <MultiSelect label="Filter Projects" options={projectOptions} selected={filterProjects} onChange={setFilterProjects} />
             </div>
-            <div className="min-w-[220px] flex-1">
-              <MultiSelect
-                label="Filter Clients"
-                options={clientOptions}
-                selected={filterClients}
-                onChange={setFilterClients}
-              />
+            <div className="min-w-[200px] flex-1">
+              <MultiSelect label="Filter Clients" options={clientOptions} selected={filterClients} onChange={setFilterClients} />
             </div>
           </div>
         </div>
 
-        {/* ── Saved Reports list ──────────────────────────────────────── */}
+        {/* ── Saved reports ────────────────────────────────────────────── */}
         {savedReports.length > 0 && (
           <div className="border rounded-lg bg-card p-3 shadow-sm space-y-2">
             <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -625,29 +735,15 @@ export default function Reports() {
             <div className="divide-y divide-border">
               {savedReports.map((r) => {
                 let summary = "";
-                try {
-                  const cfg: ReportConfig = JSON.parse(r.config);
-                  const presetLabel = cfg.preset !== "custom" ? PRESET_LABELS[cfg.preset] : `${cfg.startDate} → ${cfg.endDate}`;
-                  summary = `${presetLabel} · ${cfg.rowDimension}`;
-                } catch { /* empty */ }
+                try { summary = configSummary(JSON.parse(r.config)); } catch { /* ok */ }
                 return (
-                  <div
-                    key={r.id}
-                    className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0"
-                  >
-                    <button
-                      className="flex-1 text-left hover:text-primary transition-colors min-w-0"
-                      onClick={() => handleLoadReport(r)}
-                    >
+                  <div key={r.id} className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
+                    <button className="flex-1 text-left hover:text-primary transition-colors min-w-0" onClick={() => handleLoadReport(r)}>
                       <span className="font-medium text-sm truncate block">{r.name}</span>
-                      {summary && (
-                        <span className="text-xs text-muted-foreground">{summary}</span>
-                      )}
+                      {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
                     </button>
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
+                      variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive shrink-0"
                       disabled={deleteReport.isPending}
                       onClick={() => deleteReport.mutate(r.id)}
                       title="Delete saved report"
@@ -661,25 +757,21 @@ export default function Reports() {
           </div>
         )}
 
-        {/* ── Table ───────────────────────────────────────────────────── */}
+        {/* ── Action row ────────────────────────────────────────────────── */}
         <div className="flex justify-end gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleOpenSaveDialog}
-          >
+          <Button variant="outline" size="sm" onClick={() => { setSaveName(""); setSaveError(""); setSaveDialogOpen(true); }}>
             <Save className="h-4 w-4 mr-2" /> Save Report
           </Button>
           <Button
-            variant="outline"
-            size="sm"
-            disabled={!data || (data.rows.length === 0)}
-            onClick={() => data && exportCSV(data, metric, startDate, endDate, rowDimension)}
+            variant="outline" size="sm"
+            disabled={!data || data.rows.length === 0}
+            onClick={() => data && exportCSV(data, unit, startDate, endDate)}
           >
             <Download className="h-4 w-4 mr-2" /> Export CSV
           </Button>
         </div>
 
+        {/* ── Loading / error ───────────────────────────────────────────── */}
         {isLoading && (
           <div className="space-y-2">
             <Skeleton className="h-10 w-full" />
@@ -687,196 +779,112 @@ export default function Reports() {
             <Skeleton className="h-10 w-full" />
           </div>
         )}
-
         {error && (
           <div className="border border-destructive/30 bg-destructive/10 text-destructive rounded-md p-4 text-sm">
             Failed to load report. Please check the date range and try again.
           </div>
         )}
 
-        {/* FLAT table */}
-        {!isLoading && data?.type === "flat" && (
+        {/* ── Drill-down table ──────────────────────────────────────────── */}
+        {!isLoading && data && (
           <div className="border rounded-md bg-card overflow-x-auto">
             <Table>
               <TableHeader className="bg-muted/30">
-                <TableRow>
-                  <TableHead className="min-w-[180px]">Name</TableHead>
-                  {rowDimension === "employees" ? (
-                    <>
-                      {showAvailableHours && (
-                        <TableHead className="text-right">Available Hrs</TableHead>
-                      )}
-                      <TableHead className="text-right">Billable Hrs</TableHead>
-                      <TableHead className="text-right">Non-Billable Hrs</TableHead>
-                      <TableHead className="text-right">Total Hrs</TableHead>
-                      <TableHead className="text-right">Billable Util</TableHead>
-                      <TableHead className="text-right">Overall Util</TableHead>
-                    </>
-                  ) : (
-                    <>
-                      <TableHead className="text-right">Budget Hrs</TableHead>
-                      <TableHead className="text-right">Booked Hrs</TableHead>
-                      <TableHead className="text-right">Logged Hrs</TableHead>
-                      <TableHead className="text-right">Remaining Hrs</TableHead>
-                      <TableHead className="text-right">Budget Used %</TableHead>
-                      <TableHead className="text-right">Billable Hrs</TableHead>
-                      <TableHead className="text-right">Non-Billable Hrs</TableHead>
-                    </>
-                  )}
+                {/* Period header row */}
+                <TableRow className="border-b">
+                  <TableHead
+                    className="sticky left-0 bg-muted/30 z-10 min-w-[200px]"
+                    rowSpan={metrics.length > 1 ? 2 : 1}
+                  >
+                    Name
+                  </TableHead>
+                  {data.columns.map((col) => {
+                    const label = data.columnLabels?.[data.columns.indexOf(col)] ?? fmtLabel(col);
+                    const isSorted = sortCol === col;
+                    const colSpan = metrics.length;
+                    return (
+                      <TableHead
+                        key={col}
+                        colSpan={colSpan}
+                        className={`text-center min-w-[${Math.max(90, colSpan * 90)}px] whitespace-nowrap border-l cursor-pointer select-none hover:bg-muted/50 transition-colors ${
+                          col === "Total" ? "bg-muted/40" : ""
+                        }`}
+                        onClick={() => handleSortCol(col)}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {label}
+                          {isSorted && sortDir === "asc"  && <ArrowUp className="h-3 w-3" />}
+                          {isSorted && sortDir === "desc" && <ArrowDown className="h-3 w-3" />}
+                          {!isSorted && <ArrowUpDown className="h-3 w-3 opacity-30" />}
+                        </span>
+                      </TableHead>
+                    );
+                  })}
                 </TableRow>
+
+                {/* Metric sub-header row (only when multiple metrics) */}
+                {metrics.length > 1 && (
+                  <TableRow className="border-b">
+                    {data.columns.map((col) =>
+                      metrics.map((m) => (
+                        <TableHead
+                          key={`${col}::${m}`}
+                          className={`text-right text-xs font-normal text-muted-foreground whitespace-nowrap px-3 border-l ${
+                            col === "Total" ? "bg-muted/40" : ""
+                          }`}
+                        >
+                          {METRIC_LABEL_MAP[m] ?? m}
+                        </TableHead>
+                      ))
+                    )}
+                  </TableRow>
+                )}
               </TableHeader>
+
               <TableBody>
-                {data.rows.length === 0 ? (
+                {visibleRows.length === 0 ? (
                   <TableRow>
-                    <TableCell
-                      colSpan={flatColCount}
-                      className="text-center py-12 text-muted-foreground"
-                    >
+                    <TableCell colSpan={1 + numDataCols} className="text-center py-12 text-muted-foreground">
                       No data for the selected period and filters.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  data.rows.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="font-medium">
-                        {rowDimension === "projects" ? (
-                          <div className="flex items-center gap-2">
-                            <span
-                              className="shrink-0 w-2.5 h-2.5 rounded-full"
-                              style={{ backgroundColor: projectColorMap.get(row.id) ?? "#6366f1" }}
-                            />
-                            {row.label}
-                          </div>
-                        ) : row.label}
-                      </TableCell>
-
-                      {rowDimension === "employees" ? (
-                        <>
-                          {showAvailableHours && (
-                            <TableCell className="text-right text-muted-foreground">
-                              {row.availableHours.toFixed(1)}
-                            </TableCell>
-                          )}
-                          <TableCell className="text-right text-primary font-medium">
-                            {row.billableHours.toFixed(1)}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {row.nonBillableHours.toFixed(1)}
-                          </TableCell>
-                          <TableCell className="text-right font-medium">
-                            {row.totalHours.toFixed(1)}
-                          </TableCell>
-                          <TableCell className={`text-right ${utilizationColor(row.billableUtilization)}`}>
-                            {Math.round(row.billableUtilization * 100)}%
-                          </TableCell>
-                          <TableCell className={`text-right ${utilizationColor(row.overallUtilization)}`}>
-                            {Math.round(row.overallUtilization * 100)}%
-                          </TableCell>
-                        </>
-                      ) : (
-                        <>
-                          <TableCell className="text-right text-muted-foreground">
-                            {row.budgetHours != null ? row.budgetHours.toFixed(1) : <span className="text-muted-foreground/40">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {(row.bookedHours ?? 0).toFixed(1)}
-                          </TableCell>
-                          <TableCell className="text-right font-medium">
-                            {row.totalHours.toFixed(1)}
-                          </TableCell>
-                          <TableCell className={`text-right font-medium ${
-                            row.remainingHours != null && row.remainingHours < 0
-                              ? "text-red-500"
-                              : row.remainingHours != null
-                              ? "text-emerald-600"
-                              : "text-muted-foreground/40"
-                          }`}>
-                            {row.remainingHours != null
-                              ? row.remainingHours.toFixed(1)
-                              : <span>—</span>}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {row.budgetUsedPct != null
-                              ? `${Math.round(row.budgetUsedPct * 100)}%`
-                              : <span className="text-muted-foreground/40">—</span>}
-                          </TableCell>
-                          <TableCell className="text-right text-primary">
-                            {row.billableHours.toFixed(1)}
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {row.nonBillableHours.toFixed(1)}
-                          </TableCell>
-                        </>
-                      )}
-                    </TableRow>
+                  visibleRows.map(({ row, depth }) => (
+                    <DrillTableRow
+                      key={row.id}
+                      row={row}
+                      depth={depth}
+                      metrics={metrics}
+                      columns={data.columns}
+                      unit={unit}
+                      expanded={expandedIds.has(row.id)}
+                      onToggle={toggleExpand}
+                      budgetedByCol={budgetedByCol}
+                    />
                   ))
                 )}
-              </TableBody>
-            </Table>
-          </div>
-        )}
 
-        {/* PIVOT table */}
-        {!isLoading && data?.type === "pivot" && (
-          <div className="border rounded-md bg-card overflow-x-auto">
-            <Table>
-              <TableHeader className="bg-muted/30">
-                <TableRow>
-                  <TableHead className="min-w-[180px] sticky left-0 bg-muted/30 z-10">Name</TableHead>
-                  {data.columns.map((col) => (
-                    <TableHead key={col} className="text-right min-w-[100px] whitespace-nowrap">
-                      {formatMonthLabel(col)}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.rows.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={data.columns.length + 1}
-                      className="text-center py-12 text-muted-foreground"
-                    >
-                      No data for the selected period and filters.
+                {/* Footer totals row */}
+                {data.rows.length > 0 && (
+                  <TableRow className="border-t-2 bg-muted/30 font-semibold">
+                    <TableCell className="sticky left-0 bg-muted/30 z-10 text-sm" style={{ paddingLeft: "8px" }}>
+                      Total
                     </TableCell>
-                  </TableRow>
-                ) : (
-                  data.rows.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell className="font-medium sticky left-0 bg-card z-10">
-                        {rowDimension === "projects" ? (
-                          <div className="flex items-center gap-2">
-                            <span
-                              className="shrink-0 w-2.5 h-2.5 rounded-full"
-                              style={{ backgroundColor: projectColorMap.get(row.id) ?? "#6366f1" }}
-                            />
-                            {row.label}
-                          </div>
-                        ) : row.label}
-                      </TableCell>
-                      {data.columns.map((col) => {
-                        const val = row.values[col] ?? 0;
-                        const isEmpty = val === 0;
-                        const isNegative = metric === "remaining_hours" && val < 0;
-                        const colorClass =
-                          isNegative
-                            ? "text-red-500 font-medium"
-                            : isUtilizationMetric && !isEmpty
-                            ? utilizationColor(val)
-                            : "";
+                    {data.columns.map((col) =>
+                      metrics.map((m) => {
+                        const val = data.totals[col]?.[m] ?? 0;
+                        const colorClass = metricCellClass(m, val, budgetedByCol[col]);
                         return (
                           <TableCell
-                            key={col}
-                            className={`text-right tabular-nums ${colorClass} ${isEmpty ? "text-muted-foreground/40" : ""}`}
+                            key={`total::${col}::${m}`}
+                            className={`text-right tabular-nums whitespace-nowrap px-3 text-sm ${colorClass}`}
                           >
-                            {isEmpty
-                              ? "—"
-                              : formatMetricValue(metric, val)}
+                            {fmtVal(val, m, unit)}
                           </TableCell>
                         );
-                      })}
-                    </TableRow>
-                  ))
+                      })
+                    )}
+                  </TableRow>
                 )}
               </TableBody>
             </Table>
@@ -884,12 +892,10 @@ export default function Reports() {
         )}
       </div>
 
-      {/* ── Save Report Dialog ─────────────────────────────────────────── */}
+      {/* ── Save Report Dialog ─────────────────────────────────────────────── */}
       <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
         <DialogContent className="sm:max-w-[400px]">
-          <DialogHeader>
-            <DialogTitle>Save Report Configuration</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Save Report Configuration</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1">
               <Label htmlFor="save-report-name">Report Name</Label>
@@ -898,24 +904,40 @@ export default function Reports() {
                 placeholder="e.g. Q1 Billable Utilization"
                 value={saveName}
                 onChange={(e) => { setSaveName(e.target.value); setSaveError(""); }}
-                onKeyDown={(e) => { if (e.key === "Enter") handleConfirmSave(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const trimmed = saveName.trim();
+                    if (!trimmed) { setSaveError("Please enter a name."); return; }
+                    const config: ReportConfig = {
+                      preset, startDate, endDate,
+                      rowDimension, colDimension, metrics, unit,
+                      filterEmployees, filterProjects, filterClients,
+                    };
+                    createReport.mutate({ name: trimmed, config });
+                  }
+                }}
                 autoFocus
               />
-              {saveError && (
-                <p className="text-xs text-destructive">{saveError}</p>
-              )}
+              {saveError && <p className="text-xs text-destructive">{saveError}</p>}
             </div>
             <p className="text-xs text-muted-foreground">
-              Saves the current date range, grouping, metric, and filters.
+              Saves the current period, grouping, metrics, unit, and filters.
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSaveDialogOpen(false)}>
-              Cancel
-            </Button>
+            <Button variant="outline" onClick={() => setSaveDialogOpen(false)}>Cancel</Button>
             <Button
-              onClick={handleConfirmSave}
               disabled={createReport.isPending}
+              onClick={() => {
+                const trimmed = saveName.trim();
+                if (!trimmed) { setSaveError("Please enter a name."); return; }
+                const config: ReportConfig = {
+                  preset, startDate, endDate,
+                  rowDimension, colDimension, metrics, unit,
+                  filterEmployees, filterProjects, filterClients,
+                };
+                createReport.mutate({ name: trimmed, config });
+              }}
             >
               {createReport.isPending ? "Saving…" : "Save"}
             </Button>

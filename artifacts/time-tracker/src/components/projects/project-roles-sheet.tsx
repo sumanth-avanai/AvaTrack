@@ -491,9 +491,10 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Role</TableHead>
-                          <TableHead className="text-right">Budget</TableHead>
+                          <TableHead className="text-right">Budgeted</TableHead>
+                          <TableHead className="text-right">Planned</TableHead>
                           <TableHead className="text-right">Booked</TableHead>
-                          <TableHead className="text-right">Remaining</TableHead>
+                          <TableHead className="text-right">Remaining (unbooked)</TableHead>
                           <TableHead className="min-w-[140px]">Utilization</TableHead>
                           <TableHead className="text-right">Booked Value</TableHead>
                         </TableRow>
@@ -509,6 +510,9 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                               {role.budgetValue != null && (
                                 <div className="text-xs text-muted-foreground/70">{fmt(role.budgetValue)}</div>
                               )}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-muted-foreground">
+                              {fmtDays(role.plannedDays)}
                             </TableCell>
                             <TableCell className="text-right text-sm">
                               {fmtDays(role.bookedDays)}
@@ -550,7 +554,7 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                         <div className="text-xs text-muted-foreground">{fmt(budget.totals.bookedValue)}</div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">Remaining</div>
+                        <div className="text-xs text-muted-foreground">Remaining (unbooked)</div>
                         <div className={`font-medium ${budget.totals.remainingDays < 0 ? "text-destructive" : ""}`}>
                           {budget.totals.remainingDays < 0 && <AlertTriangle className="inline h-3 w-3 mr-0.5" />}
                           {fmtDays(Math.abs(budget.totals.remainingDays))}
