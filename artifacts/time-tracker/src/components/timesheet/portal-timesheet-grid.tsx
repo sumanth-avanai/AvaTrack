@@ -20,6 +20,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   useListHolidayCalendars,
   getListHolidayCalendarsQueryKey,
   useListHolidays,
@@ -508,6 +515,31 @@ export function PortalTimesheetGrid({
     setIsDirty(true);
   };
 
+  const handleRoleChange = (oldRowKey: string, newRoleId: number, newRoleName: string) => {
+    setRows((prev) => {
+      const idx = prev.findIndex((r) => r.rowKey === oldRowKey);
+      if (idx === -1) return prev;
+      const row = prev[idx];
+      const newRowKey = makeRowKey(row.projectId, newRoleId);
+      if (prev.find((r) => r.rowKey === newRowKey)) return prev; // already exists
+      const updated = [...prev];
+      updated[idx] = { ...row, rowKey: newRowKey, roleId: newRoleId, roleName: newRoleName, isLegacy: false };
+      return updated;
+    });
+    setGridData((prev) => {
+      if (!prev[oldRowKey]) return prev;
+      const newRowKey = makeRowKey(
+        rows.find((r) => r.rowKey === oldRowKey)?.projectId ?? 0,
+        newRoleId
+      );
+      const next = { ...prev, [newRowKey]: { ...(prev[oldRowKey] ?? {}) } };
+      delete next[oldRowKey];
+      return next;
+    });
+    setIsDirty(true);
+    if (saveStatus === "saved" || saveStatus === "error") setSaveStatus("idle");
+  };
+
   // ── Derived ───────────────────────────────────────────────────────────────
   const projectGroups = useMemo(() => {
     const map = new Map<number, { projectId: number; projectName: string; clientName: string | null; rows: RowDef[] }>();
@@ -631,8 +663,7 @@ export function PortalTimesheetGrid({
       {/* Empty state */}
       {rows.length === 0 && availableProjects.length === 0 && (
         <div className="border rounded-md bg-card p-10 text-center text-muted-foreground space-y-2">
-          <p className="font-medium">No project assignments yet.</p>
-          <p className="text-xs">Your admin needs to assign you to project roles before you can log time.</p>
+          <p className="font-medium">No projects assigned. Contact your manager.</p>
         </div>
       )}
 
@@ -726,14 +757,49 @@ export function PortalTimesheetGrid({
                       return sum + (isNaN(v) ? 0 : v);
                     }, 0);
 
+                    // Roles available for this project
+                    const projectAvailable = tsData?.availableProjects.find(
+                      (p) => p.projectId === group.projectId
+                    );
+                    const assignedRoles: { roleId: number; roleName: string }[] =
+                      projectAvailable?.roles ?? [];
+
+                    // For legacy rows: show "Unspecified" + assigned roles;
+                    // for assigned rows: show only assigned roles.
+                    const selectValue =
+                      row.roleId !== null ? String(row.roleId) : "null";
+
                     return (
                       <TableRow key={row.rowKey} className="hover:bg-muted/10">
                         <TableCell className="py-1.5">
                           <div className="pl-5 flex items-center gap-1.5">
                             <span className="text-xs text-muted-foreground">└</span>
-                            <span className="text-sm text-foreground">
-                              {row.roleName ?? <span className="italic text-muted-foreground">No role</span>}
-                            </span>
+                            <Select
+                              value={selectValue}
+                              onValueChange={(val) => {
+                                if (val === "null" || val === selectValue) return;
+                                const newRoleId = parseInt(val, 10);
+                                const found = assignedRoles.find((r) => r.roleId === newRoleId);
+                                if (!found) return;
+                                handleRoleChange(row.rowKey, newRoleId, found.roleName);
+                              }}
+                            >
+                              <SelectTrigger className="h-7 text-xs border-transparent hover:border-input w-auto min-w-[120px] max-w-[200px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {row.isLegacy && (
+                                  <SelectItem value="null" className="text-xs italic text-muted-foreground">
+                                    Unspecified
+                                  </SelectItem>
+                                )}
+                                {assignedRoles.map((r) => (
+                                  <SelectItem key={r.roleId} value={String(r.roleId)} className="text-xs">
+                                    {r.roleName}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                             {row.isLegacy && (
                               <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 font-normal text-muted-foreground">
                                 legacy

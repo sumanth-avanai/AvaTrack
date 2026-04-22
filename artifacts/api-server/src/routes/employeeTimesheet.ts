@@ -56,6 +56,21 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
 
   const weekEnd = addDays(weekStart, 6);
 
+  // ── Fetch employee info ───────────────────────────────────────────────────
+  const [employeeRow] = await db
+    .select({
+      id: employeesTable.id,
+      name: employeesTable.name,
+      weeklyCapacityHours: employeesTable.weeklyCapacityHours,
+    })
+    .from(employeesTable)
+    .where(eq(employeesTable.id, employeeId));
+
+  if (!employeeRow) {
+    res.status(404).json({ error: "Employee not found" });
+    return;
+  }
+
   // ── Available projects + roles from ProjectRoleAssignment ─────────────────
   const assignments = await db
     .select({
@@ -208,6 +223,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
   );
 
   res.json({
+    employee: employeeRow,
     week: { start: weekStart, end: weekEnd },
     availableProjects,
     prefilled,
@@ -302,20 +318,45 @@ router.post("/employee-timesheet/:employeeId/week/:weekStart", async (req, res):
     .innerJoin(projectRolesTable, eq(projectRoleAssignmentsTable.projectRoleId, projectRolesTable.id))
     .where(eq(projectRoleAssignmentsTable.employeeId, employeeId));
 
-  const assignedRoleIds = new Set<number>(assignments.map((a) => a.projectRoleId));
+  // Build map: roleId → projectId for cross-validation
+  const assignedRoleToProject = new Map<number, number>(
+    assignments.map((a) => [a.projectRoleId, a.projectId])
+  );
 
   // ── Validate each new entry ───────────────────────────────────────────────
   for (const entry of entries) {
     if (entry.hours === 0) continue; // deletions always allowed
 
     const entryKey = `${entry.projectId}::${entry.projectRoleId ?? "null"}::${entry.entryDate}`;
-    if (existingKeys.has(entryKey)) continue; // grandfather: existing entry, allow
+    if (existingKeys.has(entryKey)) continue; // grandfather clause: already in DB, allow
 
-    // New entry — must have assignment
+    // New entry — must have a specific assigned role
     const roleId = entry.projectRoleId ?? null;
-    if (roleId !== null && !assignedRoleIds.has(roleId)) {
+
+    if (roleId === null) {
+      // New null-role entries are never allowed (only grandfathered legacy entries pass above)
+      res.status(403).json({
+        error: "New time entries must be logged against an assigned project role",
+        projectId: entry.projectId,
+        projectRoleId: null,
+      });
+      return;
+    }
+
+    if (!assignedRoleToProject.has(roleId)) {
       res.status(403).json({
         error: "Not assigned to this project role",
+        projectId: entry.projectId,
+        projectRoleId: roleId,
+      });
+      return;
+    }
+
+    // Verify role belongs to the correct project (prevents mismatched projectId/roleId combos)
+    const roleProjectId = assignedRoleToProject.get(roleId)!;
+    if (roleProjectId !== entry.projectId) {
+      res.status(403).json({
+        error: "Project role does not belong to the specified project",
         projectId: entry.projectId,
         projectRoleId: roleId,
       });
