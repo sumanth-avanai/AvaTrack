@@ -494,6 +494,7 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                           <TableHead className="text-right">Budgeted</TableHead>
                           <TableHead className="text-right">Planned</TableHead>
                           <TableHead className="text-right">Booked</TableHead>
+                          <TableHead className="text-right">Remaining (unplanned)</TableHead>
                           <TableHead className="text-right">Remaining (unbooked)</TableHead>
                           <TableHead className="min-w-[140px]">Utilization</TableHead>
                           <TableHead className="text-right">Booked Value</TableHead>
@@ -517,6 +518,18 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                             <TableCell className="text-right text-sm">
                               {fmtDays(role.bookedDays)}
                               <div className="text-xs text-muted-foreground/70">{fmt(role.bookedValue)}</div>
+                            </TableCell>
+                            <TableCell className="text-right text-sm">
+                              {role.budgetedDays != null ? (() => {
+                                const unplanned = role.budgetedDays - role.plannedDays;
+                                return (
+                                  <span className={unplanned < 0 ? "text-destructive font-semibold" : unplanned / role.budgetedDays < 0.2 ? "text-yellow-600" : ""}>
+                                    {unplanned < 0 && <AlertTriangle className="inline h-3 w-3 mr-0.5" />}
+                                    {fmtDays(Math.abs(unplanned))}
+                                    {unplanned < 0 ? " over" : ""}
+                                  </span>
+                                );
+                              })() : "—"}
                             </TableCell>
                             <TableCell className="text-right text-sm">
                               {role.remainingDays != null ? (

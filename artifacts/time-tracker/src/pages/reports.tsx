@@ -217,16 +217,18 @@ function fmtLabel(col: string): string {
 
 // ─── Color helpers ───────────────────────────────────────────────────────────
 
+// Spec: utilization ≥80% green, <80% orange, >100% red
+// Spec: remaining <0 red, <20% of budget orange
+// Spec: plan_completion >100% red
 function metricCellClass(
   metricKey: string,
   val: number,
-  budgetedVal?: number
+  rowBudgeted?: number
 ): string {
   if (metricKey === "utilization_pct" || metricKey === "billable_utilization_pct") {
     if (val > 100) return "text-red-500 font-semibold";
     if (val >= 80)  return "text-emerald-600 font-semibold";
-    if (val >= 60)  return "text-amber-500";
-    return "text-muted-foreground";
+    return "text-amber-500";
   }
   if (metricKey === "plan_completion_pct") {
     if (val > 100) return "text-red-500 font-semibold";
@@ -234,7 +236,7 @@ function metricCellClass(
   }
   if (metricKey === "remaining_unbooked" || metricKey === "remaining_unplanned") {
     if (val < 0) return "text-red-500 font-semibold";
-    if (budgetedVal != null && budgetedVal > 0 && val < budgetedVal * 0.2) return "text-amber-500 font-medium";
+    if (rowBudgeted != null && rowBudgeted > 0 && val < rowBudgeted * 0.2) return "text-amber-500 font-medium";
     return "";
   }
   return "";
@@ -350,6 +352,8 @@ function exportCSV(
 
 // ─── Drill-down row component ─────────────────────────────────────────────────
 
+const UTIL_METRICS = new Set(["utilization_pct", "billable_utilization_pct"]);
+
 interface DrillRowProps {
   row: DrillRow;
   depth: number;
@@ -358,10 +362,9 @@ interface DrillRowProps {
   unit: Unit;
   expanded: boolean;
   onToggle: (id: string) => void;
-  budgetedByCol: Record<string, number>;
 }
 
-function DrillTableRow({ row, depth, metrics, columns, unit, expanded, onToggle, budgetedByCol }: DrillRowProps) {
+function DrillTableRow({ row, depth, metrics, columns, unit, expanded, onToggle }: DrillRowProps) {
   const indentPx = depth * 20;
 
   const rowTypeClass = depth === 0
@@ -369,6 +372,9 @@ function DrillTableRow({ row, depth, metrics, columns, unit, expanded, onToggle,
     : depth === 1
     ? "font-medium"
     : "text-muted-foreground text-sm";
+
+  // Utilization metrics are only meaningful for employee-type rows
+  const isEmployee = row.type === "employee";
 
   return (
     <TableRow className={`${rowTypeClass} hover:bg-muted/30`}>
@@ -394,10 +400,13 @@ function DrillTableRow({ row, depth, metrics, columns, unit, expanded, onToggle,
 
       {columns.map((col) =>
         metrics.map((m) => {
-          const val = row.data[col]?.[m] ?? 0;
-          const isEmpty = val === 0 && !PCT_METRICS.has(m);
-          const budgeted = budgetedByCol[col];
-          const colorClass = metricCellClass(m, val, budgeted);
+          // Suppress utilization metrics for non-employee rows
+          const suppress = UTIL_METRICS.has(m) && !isEmployee;
+          const val = suppress ? 0 : (row.data[col]?.[m] ?? 0);
+          const isEmpty = suppress || (val === 0 && !PCT_METRICS.has(m));
+          // Use this row's own budgeted for remaining color thresholds
+          const rowBudgeted = row.data[col]?.["budgeted"];
+          const colorClass = suppress ? "" : metricCellClass(m, val, rowBudgeted);
           return (
             <TableCell
               key={`${col}::${m}`}
@@ -485,14 +494,17 @@ export default function Reports() {
     });
   }, []);
 
-  // sort
+  // sort — cycle: asc → desc → unsorted
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>(null);
   const handleSortCol = (col: string) => {
-    if (sortCol !== col) { setSortCol(col); setSortDir("desc"); }
-    else if (sortDir === "desc") setSortDir("asc");
+    if (sortCol !== col) { setSortCol(col); setSortDir("asc"); }
+    else if (sortDir === "asc")  setSortDir("desc");
     else { setSortCol(null); setSortDir(null); }
   };
+
+  // "Generate Report" button — applied state tracks what was last fetched
+  const [appliedParams, setAppliedParams] = useState<URLSearchParams | null>(null);
 
   // saved reports
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -522,18 +534,34 @@ export default function Reports() {
   const handleLoadReport = (row: SavedReportRow) => {
     try {
       const cfg: ReportConfig = JSON.parse(row.config);
+      const sd = cfg.startDate;
+      const ed = cfg.endDate;
+      const rd = (cfg.rowDimension ?? "employees") as RowDimension;
+      const cd = (cfg.colDimension ?? "none") as ColDimension;
+      const ms = cfg.metrics ?? (cfg.metric ? [cfg.metric] : DEFAULT_METRICS);
+      const fe = cfg.filterEmployees ?? [];
+      const fp = cfg.filterProjects ?? [];
+      const fc = cfg.filterClients ?? [];
       setPreset(cfg.preset ?? "custom");
-      setStartDate(cfg.startDate);
-      setEndDate(cfg.endDate);
-      setRowDimension((cfg.rowDimension ?? "employees") as RowDimension);
-      setColDimension((cfg.colDimension ?? "none") as ColDimension);
-      // Backward compat: old configs had single `metric` string
-      setMetrics(cfg.metrics ?? (cfg.metric ? [cfg.metric] : DEFAULT_METRICS));
+      setStartDate(sd);
+      setEndDate(ed);
+      setRowDimension(rd);
+      setColDimension(cd);
+      setMetrics(ms);
       setUnit(cfg.unit ?? "hours");
-      setFilterEmployees(cfg.filterEmployees ?? []);
-      setFilterProjects(cfg.filterProjects ?? []);
-      setFilterClients(cfg.filterClients ?? []);
+      setFilterEmployees(fe);
+      setFilterProjects(fp);
+      setFilterClients(fc);
       setExpandedIds(new Set());
+      setSortCol(null);
+      setSortDir(null);
+      // Build and apply params immediately (state updates are async)
+      const p = new URLSearchParams({ startDate: sd, endDate: ed, rowDimension: rd, colDimension: cd });
+      ms.forEach((m) => p.append("metrics", m));
+      if (fe.length) p.set("employeeIds", fe.join(","));
+      if (fp.length) p.set("projectIds",  fp.join(","));
+      if (fc.length) p.set("clientIds",   fc.join(","));
+      setAppliedParams(p);
     } catch { /* malformed config */ }
   };
 
@@ -552,7 +580,8 @@ export default function Reports() {
   const projectOptions  = useMemo(() => (projects ?? []).map((p) => ({ id: p.id, label: `${p.name} (${p.clientName ?? "—"})` })), [projects]);
   const clientOptions   = useMemo(() => (clients ?? []).map((c) => ({ id: c.id, label: c.name })), [clients]);
 
-  const params = useMemo(() => {
+  // Build pending params from current builder state (not yet applied)
+  const pendingParams = useMemo(() => {
     const p = new URLSearchParams({ startDate, endDate, rowDimension, colDimension });
     metrics.forEach((m) => p.append("metrics", m));
     if (filterEmployees.length) p.set("employeeIds", filterEmployees.join(","));
@@ -561,10 +590,19 @@ export default function Reports() {
     return p;
   }, [startDate, endDate, rowDimension, colDimension, metrics, filterEmployees, filterProjects, filterClients]);
 
+  const handleGenerate = () => {
+    setAppliedParams(pendingParams);
+    setExpandedIds(new Set());
+    setSortCol(null);
+    setSortDir(null);
+  };
+
+  const isDirty = appliedParams?.toString() !== pendingParams.toString();
+
   const { data, isLoading, error } = useQuery<DrillResponse>({
-    queryKey: ["reports-pivot", params.toString()],
-    queryFn: () => fetchPivot(params),
-    enabled: !!startDate && !!endDate && metrics.length > 0,
+    queryKey: ["reports-pivot", appliedParams?.toString() ?? ""],
+    queryFn: () => fetchPivot(appliedParams!),
+    enabled: !!appliedParams && metrics.length > 0,
   });
 
   const handlePreset = (p: Preset) => {
@@ -598,16 +636,6 @@ export default function Reports() {
     () => collectVisible(sortedRows, expandedIds),
     [sortedRows, expandedIds]
   );
-
-  // Budget values per column (for remaining color threshold)
-  const budgetedByCol = useMemo(() => {
-    if (!data) return {};
-    const map: Record<string, number> = {};
-    for (const col of data.columns) {
-      map[col] = data.totals[col]?.["budgeted"] ?? 0;
-    }
-    return map;
-  }, [data]);
 
   const numDataCols = (data?.columns.length ?? 0) * (metrics.length || 1);
 
@@ -711,8 +739,8 @@ export default function Reports() {
             </div>
           </div>
 
-          {/* Row 3: Filters */}
-          <div className="flex flex-wrap gap-4">
+          {/* Row 3: Filters + Generate button */}
+          <div className="flex flex-wrap items-end gap-4">
             <div className="min-w-[200px] flex-1">
               <MultiSelect label="Filter Employees" options={employeeOptions} selected={filterEmployees} onChange={setFilterEmployees} />
             </div>
@@ -721,6 +749,15 @@ export default function Reports() {
             </div>
             <div className="min-w-[200px] flex-1">
               <MultiSelect label="Filter Clients" options={clientOptions} selected={filterClients} onChange={setFilterClients} />
+            </div>
+            <div className="shrink-0">
+              <Button
+                onClick={handleGenerate}
+                disabled={metrics.length === 0}
+                className={isDirty ? "ring-2 ring-primary ring-offset-1" : ""}
+              >
+                Generate Report
+              </Button>
             </div>
           </div>
         </div>
@@ -859,7 +896,6 @@ export default function Reports() {
                       unit={unit}
                       expanded={expandedIds.has(row.id)}
                       onToggle={toggleExpand}
-                      budgetedByCol={budgetedByCol}
                     />
                   ))
                 )}
@@ -873,7 +909,8 @@ export default function Reports() {
                     {data.columns.map((col) =>
                       metrics.map((m) => {
                         const val = data.totals[col]?.[m] ?? 0;
-                        const colorClass = metricCellClass(m, val, budgetedByCol[col]);
+                        const totalBudgeted = data.totals[col]?.["budgeted"];
+                        const colorClass = metricCellClass(m, val, totalBudgeted);
                         return (
                           <TableCell
                             key={`total::${col}::${m}`}
