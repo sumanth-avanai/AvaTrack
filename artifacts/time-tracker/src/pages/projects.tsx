@@ -8,6 +8,7 @@ import {
   useDeleteProject,
   useListClients,
   getListClientsQueryKey,
+  useCreateClient,
   useUpdateClient,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { 
   Select,
   SelectContent,
@@ -222,6 +224,8 @@ export default function Projects() {
   const [editingClient, setEditingClient] = useState<{ id: number; name: string } | null>(null);
   const [editClientName, setEditClientName] = useState("");
 
+  const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
+
   const { data: projects, isLoading: projectsLoading } = useListProjects(
     { includeInactive: true },
     { query: { queryKey: getListProjectsQueryKey({ includeInactive: true }) } }
@@ -235,6 +239,7 @@ export default function Projects() {
   const createProject = useCreateProject();
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
+  const createClient = useCreateClient();
   const updateClient = useUpdateClient();
 
   const filtered = useMemo<Project[]>(() => {
@@ -250,6 +255,13 @@ export default function Projects() {
 
   const groups = useMemo<ClientGroup[]>(() => {
     const map = new Map<string, ClientGroup>();
+    // Only seed empty client groups when not actively searching
+    if (!search.trim()) {
+      for (const c of (clients ?? [])) {
+        const key = String(c.id);
+        map.set(key, { key, clientId: c.id, clientName: c.name, projects: [] });
+      }
+    }
     for (const p of filtered) {
       const key = p.clientId != null ? String(p.clientId) : "__unassigned__";
       if (!map.has(key)) {
@@ -262,7 +274,7 @@ export default function Projects() {
       if (b.key === "__unassigned__") return -1;
       return (a.clientName ?? "").localeCompare(b.clientName ?? "");
     });
-  }, [filtered]);
+  }, [filtered, clients, search]);
 
   useEffect(() => {
     if (search.trim()) {
@@ -386,6 +398,27 @@ export default function Projects() {
     );
   };
 
+  const handleCreateClient = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    createClient.mutate(
+      {
+        data: {
+          name: formData.get("name") as string,
+          notes: (formData.get("notes") as string) || undefined,
+          active: formData.get("active") === "on",
+        },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
+          queryClient.invalidateQueries({ queryKey: getListClientsQueryKey({ includeInactive: true }) });
+          setIsCreateClientOpen(false);
+        },
+      }
+    );
+  };
+
   function openEditProject(p: Project) {
     setSelectedProject(p);
     setEditColor(p.color ?? DEFAULT_COLOR);
@@ -479,13 +512,17 @@ export default function Projects() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Projects</h1>
-          <Dialog
-            open={isCreateOpen}
-            onOpenChange={(open) => {
-              setIsCreateOpen(open);
-              if (open) setCreateColor(DEFAULT_COLOR);
-            }}
-          >
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setIsCreateClientOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" /> Add Client
+            </Button>
+            <Dialog
+              open={isCreateOpen}
+              onOpenChange={(open) => {
+                setIsCreateOpen(open);
+                if (open) setCreateColor(DEFAULT_COLOR);
+              }}
+            >
             <DialogTrigger asChild>
               <Button>
                 <Plus className="h-4 w-4 mr-2" /> Add Project
@@ -547,7 +584,8 @@ export default function Projects() {
                 </DialogFooter>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         </div>
 
         {/* Toolbar: search + view toggle */}
@@ -813,6 +851,37 @@ export default function Projects() {
                 </DialogFooter>
               </form>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Add Client dialog */}
+        <Dialog open={isCreateClientOpen} onOpenChange={setIsCreateClientOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add New Client</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleCreateClient} className="space-y-4 pt-4">
+              <div className="space-y-2">
+                <Label htmlFor="client-name">Name</Label>
+                <Input id="client-name" name="name" required placeholder="Acme Corp" autoFocus />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="client-notes">Notes</Label>
+                <Textarea id="client-notes" name="notes" placeholder="Billing details, contacts, etc." />
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch id="client-active" name="active" defaultChecked />
+                <Label htmlFor="client-active">Active</Label>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setIsCreateClientOpen(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={createClient.isPending}>
+                  {createClient.isPending ? "Creating..." : "Create Client"}
+                </Button>
+              </DialogFooter>
+            </form>
           </DialogContent>
         </Dialog>
 
