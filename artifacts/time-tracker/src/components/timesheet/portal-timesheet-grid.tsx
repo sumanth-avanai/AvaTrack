@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save, CheckCircle2, Loader2, Plus, ChevronRight, ChevronDown, AlertCircle, MessageSquare } from "lucide-react";
+import { Save, CheckCircle2, Loader2, Plus, ChevronRight, ChevronDown, AlertCircle, MessageSquare, TrendingUp, Clock } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface PortalRole {
@@ -671,6 +671,113 @@ export function PortalTimesheetGrid({
           You have unsaved changes — click <strong>Save</strong> or press <kbd className="px-1 py-0.5 rounded border text-xs">Ctrl+S</kbd>
         </p>
       )}
+
+      {/* ── Weekly Summary Card ── */}
+      {rows.length > 0 && (() => {
+        const capacityPct = capacityHours > 0 ? Math.min(grandTotal / capacityHours, 1) : 0;
+        const overCapacity = grandTotal > capacityHours;
+
+        // Per-project summaries
+        const projectSummaries = projectGroups.map((group) => {
+          const roleSummaries = group.rows.map((row) => {
+            const logged = weekDays.reduce((sum, day) => {
+              const dateStr = format(day, "yyyy-MM-dd");
+              if (disabledDateReasons.has(dateStr)) return sum;
+              const v = parseFloat(gridData[row.rowKey]?.[dateStr] || "0");
+              return sum + (isNaN(v) ? 0 : v);
+            }, 0);
+            return { rowKey: row.rowKey, roleName: row.roleName, plannedHours: row.plannedHours, logged };
+          });
+          const totalLogged = roleSummaries.reduce((s, r) => s + r.logged, 0);
+          const totalPlanned = roleSummaries.reduce((s, r) => s + (r.plannedHours ?? 0), 0);
+          return { ...group, roleSummaries, totalLogged, totalPlanned };
+        });
+
+        return (
+          <div className="rounded-md border bg-card p-4 space-y-4">
+            {/* Header */}
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Weekly Summary</span>
+              <span className="text-xs text-muted-foreground ml-auto">
+                {format(weekDays[0], "MMM d")} – {format(weekDays[6], "MMM d")}
+              </span>
+            </div>
+
+            {/* Capacity bar */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground flex items-center gap-1">
+                  <Clock className="h-3 w-3" /> Total logged
+                </span>
+                <span className={`font-semibold tabular-nums ${overCapacity ? "text-destructive" : "text-foreground"}`}>
+                  {grandTotal.toFixed(1)} / {capacityHours} hrs
+                  {overCapacity && <span className="ml-1 text-destructive font-normal">(over by {(grandTotal - capacityHours).toFixed(1)}h)</span>}
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${overCapacity ? "bg-destructive" : "bg-primary"}`}
+                  style={{ width: `${capacityPct * 100}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Per-project breakdown */}
+            <div className="space-y-2">
+              {projectSummaries.map((ps) => {
+                const projPct = capacityHours > 0 ? Math.min(ps.totalLogged / capacityHours, 1) : 0;
+                return (
+                  <div key={ps.projectId} className="space-y-1">
+                    {/* Project row */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-xs font-medium truncate">{ps.projectName}</span>
+                        {ps.clientName && (
+                          <span className="text-[10px] text-muted-foreground shrink-0">· {ps.clientName}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        {ps.totalPlanned > 0 && (
+                          <span className="text-[10px] text-muted-foreground tabular-nums">
+                            plan {ps.totalPlanned}h
+                          </span>
+                        )}
+                        <span className="text-xs font-semibold tabular-nums">
+                          {ps.totalLogged > 0 ? ps.totalLogged.toFixed(1) : "0.0"} hrs
+                        </span>
+                      </div>
+                    </div>
+                    {/* Thin project bar */}
+                    <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-primary/50 transition-all duration-300"
+                        style={{ width: `${projPct * 100}%` }}
+                      />
+                    </div>
+                    {/* Role breakdown (only when multiple roles or planned data exists) */}
+                    {ps.roleSummaries.length > 1 || ps.roleSummaries.some((r) => r.plannedHours) ? (
+                      <div className="pl-3 space-y-0.5">
+                        {ps.roleSummaries.map((rs) => (
+                          <div key={rs.rowKey} className="flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span className="truncate">{rs.roleName ?? "Unspecified"}</span>
+                            <span className="tabular-nums ml-2 shrink-0">
+                              {rs.logged > 0 ? rs.logged.toFixed(1) : "0.0"}h
+                              {rs.plannedHours != null && rs.plannedHours > 0 && (
+                                <span className="ml-1">/ {rs.plannedHours}h planned</span>
+                              )}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Empty state */}
       {rows.length === 0 && availableProjects.length === 0 && (
