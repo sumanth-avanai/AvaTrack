@@ -144,6 +144,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
       projectRoleId: timeEntriesTable.projectRoleId,
       entryDate: timeEntriesTable.entryDate,
       hours: timeEntriesTable.hours,
+      note: timeEntriesTable.note,
       projectName: projectsTable.name,
       clientName: clientsTable.name,
       roleName: projectRolesTable.name,
@@ -170,6 +171,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
     roleName: string | null;
     plannedHours: number | null;
     entries: Record<string, number>;
+    notes: Record<string, string | null>;
     isLegacy: boolean; // not in ProjectRoleAssignment
   }>();
 
@@ -194,6 +196,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
         roleName: b.roleName ?? null,
         plannedHours: b.hoursPerWeek,
         entries: {},
+        notes: {},
         isLegacy: !assignedKeys.has(k),
       });
     } else {
@@ -215,11 +218,13 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
         roleName: e.roleName ?? null,
         plannedHours: null,
         entries: {},
+        notes: {},
         isLegacy: !assignedKeys.has(k),
       });
     }
     const dateStr = String(e.entryDate).slice(0, 10);
     prefilledMap.get(k)!.entries[dateStr] = Number(e.hours);
+    prefilledMap.get(k)!.notes[dateStr] = e.note ?? null;
   }
 
   const prefilled = Array.from(prefilledMap.values()).sort((a, b) =>
@@ -296,6 +301,7 @@ const SaveEntriesBody = z.object({
     projectRoleId: z.number().int().positive().nullable().optional(),
     entryDate: z.string().regex(DATE_RE),
     hours: z.number().min(0).max(24),
+    note: z.string().max(1000).nullable().optional(),
   })),
 });
 
@@ -451,7 +457,7 @@ router.post("/employee-timesheet/:employeeId/week/:weekStart", async (req, res):
       } else {
         const [updated] = await db
           .update(timeEntriesTable)
-          .set({ hours: item.hours })
+          .set({ hours: item.hours, note: item.note ?? null })
           .where(eq(timeEntriesTable.id, existing.id))
           .returning();
         results.push(updated);
@@ -465,6 +471,7 @@ router.post("/employee-timesheet/:employeeId/week/:weekStart", async (req, res):
           projectRoleId,
           entryDate: item.entryDate,
           hours: item.hours,
+          note: item.note ?? null,
         })
         .returning();
       results.push(created);

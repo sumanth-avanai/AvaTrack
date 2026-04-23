@@ -26,8 +26,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save, CheckCircle2, Loader2, Plus, ChevronRight, ChevronDown, AlertCircle } from "lucide-react";
+import { Save, CheckCircle2, Loader2, Plus, ChevronRight, ChevronDown, AlertCircle, MessageSquare } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface PortalRole {
@@ -50,6 +56,7 @@ interface PrefilledRow {
   roleName: string | null;
   plannedHours: number | null;
   entries: Record<string, number>;
+  notes: Record<string, string | null>;
   isLegacy: boolean;
 }
 
@@ -291,11 +298,14 @@ export function PortalTimesheetGrid({
   // ── Grid state: rows + cell data ──────────────────────────────────────────
   const [rows, setRows] = useState<RowDef[]>([]);
   const [gridData, setGridData] = useState<Record<string, Record<string, string>>>({});
+  const [noteData, setNoteData] = useState<Record<string, Record<string, string>>>({});
 
   const rowsRef = useRef<RowDef[]>([]);
   const gridDataRef = useRef<Record<string, Record<string, string>>>({});
+  const noteDataRef = useRef<Record<string, Record<string, string>>>({});
   rowsRef.current = rows;
   gridDataRef.current = gridData;
+  noteDataRef.current = noteData;
 
   const initializedForWeek = useRef<string | null>(null);
 
@@ -306,6 +316,7 @@ export function PortalTimesheetGrid({
     setSaveError(null);
     setRows([]);
     setGridData({});
+    setNoteData({});
     initializedForWeek.current = null;
   }, [startDateStr]);
 
@@ -326,16 +337,22 @@ export function PortalTimesheetGrid({
     }));
 
     const newGrid: Record<string, Record<string, string>> = {};
+    const newNotes: Record<string, Record<string, string>> = {};
     for (const p of tsData.prefilled) {
       const rk = makeRowKey(p.projectId, p.roleId);
       newGrid[rk] = {};
+      newNotes[rk] = {};
       for (const [date, hours] of Object.entries(p.entries)) {
         newGrid[rk][date] = hours.toString();
+      }
+      for (const [date, note] of Object.entries(p.notes ?? {})) {
+        if (note) newNotes[rk][date] = note;
       }
     }
 
     setRows(newRows);
     setGridData(newGrid);
+    setNoteData(newNotes);
     setIsDirty(false);
     setSaveStatus("idle");
   }, [tsData, startDateStr]);
@@ -371,10 +388,12 @@ export function PortalTimesheetGrid({
       projectRoleId?: number | null;
       entryDate: string;
       hours: number;
+      note?: string | null;
     }[] = [];
 
     for (const row of rowsRef.current) {
       const rowDates = gridDataRef.current[row.rowKey] ?? {};
+      const rowNotes = noteDataRef.current[row.rowKey] ?? {};
       for (const dateStr of Object.keys(rowDates)) {
         if (disabledDateReasons.has(dateStr)) continue;
         const hours = parseFloat(rowDates[dateStr]);
@@ -383,6 +402,7 @@ export function PortalTimesheetGrid({
           projectRoleId: row.roleId,
           entryDate: dateStr,
           hours: isNaN(hours) ? 0 : hours,
+          note: rowNotes[dateStr] ?? null,
         });
       }
       // Make sure each week day is present (zero out cleared cells that had entries before)
@@ -395,6 +415,7 @@ export function PortalTimesheetGrid({
             projectRoleId: row.roleId,
             entryDate: dateStr,
             hours: 0,
+            note: rowNotes[dateStr] ?? null,
           });
         }
       }
@@ -493,12 +514,23 @@ export function PortalTimesheetGrid({
     setIsDirty(true);
   };
 
+  const handleNoteChange = (rowKey: string, date: string, value: string) => {
+    setNoteData((prev) => ({
+      ...prev,
+      [rowKey]: { ...(prev[rowKey] ?? {}), [date]: value },
+    }));
+    setIsDirty(true);
+    if (saveStatus === "saved" || saveStatus === "error") setSaveStatus("idle");
+  };
+
   const handleRoleChange = (oldRowKey: string, newRoleId: number, newRoleName: string) => {
+    const projectId = rows.find((r) => r.rowKey === oldRowKey)?.projectId ?? 0;
+    const newRowKey = makeRowKey(projectId, newRoleId);
+
     setRows((prev) => {
       const idx = prev.findIndex((r) => r.rowKey === oldRowKey);
       if (idx === -1) return prev;
       const row = prev[idx];
-      const newRowKey = makeRowKey(row.projectId, newRoleId);
       if (prev.find((r) => r.rowKey === newRowKey)) return prev; // already exists
       const updated = [...prev];
       updated[idx] = { ...row, rowKey: newRowKey, roleId: newRoleId, roleName: newRoleName, isLegacy: false };
@@ -506,10 +538,12 @@ export function PortalTimesheetGrid({
     });
     setGridData((prev) => {
       if (!prev[oldRowKey]) return prev;
-      const newRowKey = makeRowKey(
-        rows.find((r) => r.rowKey === oldRowKey)?.projectId ?? 0,
-        newRoleId
-      );
+      const next = { ...prev, [newRowKey]: { ...(prev[oldRowKey] ?? {}) } };
+      delete next[oldRowKey];
+      return next;
+    });
+    setNoteData((prev) => {
+      if (!prev[oldRowKey]) return prev;
       const next = { ...prev, [newRowKey]: { ...(prev[oldRowKey] ?? {}) } };
       delete next[oldRowKey];
       return next;
@@ -797,19 +831,57 @@ export function PortalTimesheetGrid({
                             );
                           }
 
+                          const cellNote = noteData[row.rowKey]?.[dateStr] ?? "";
+                          const hasNote = cellNote.trim().length > 0;
+
                           return (
                             <TableCell key={dateStr} className="p-1">
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                className="h-9 w-full text-center border-transparent hover:border-input focus:border-ring rounded-sm bg-transparent"
-                                value={gridData[row.rowKey]?.[dateStr] ?? ""}
-                                onChange={(e) => handleCellChange(row.rowKey, dateStr, e.target.value)}
-                                onKeyDown={(e) => handleKeyDown(e, globalIdx, colIndex)}
-                                data-prow={globalIdx}
-                                data-pcol={colIndex}
-                                placeholder="-"
-                              />
+                              <div className="relative group/cell">
+                                <Input
+                                  type="text"
+                                  inputMode="decimal"
+                                  className="h-9 w-full text-center border-transparent hover:border-input focus:border-ring rounded-sm bg-transparent pr-5"
+                                  value={gridData[row.rowKey]?.[dateStr] ?? ""}
+                                  onChange={(e) => handleCellChange(row.rowKey, dateStr, e.target.value)}
+                                  onKeyDown={(e) => handleKeyDown(e, globalIdx, colIndex)}
+                                  data-prow={globalIdx}
+                                  data-pcol={colIndex}
+                                  placeholder="-"
+                                />
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className={`absolute top-0.5 right-0.5 p-0.5 rounded transition-opacity ${
+                                        hasNote
+                                          ? "opacity-100 text-primary"
+                                          : "opacity-0 group-hover/cell:opacity-60 text-muted-foreground hover:!opacity-100 hover:text-foreground"
+                                      }`}
+                                      title={hasNote ? cellNote : "Add note"}
+                                    >
+                                      <MessageSquare className="h-3 w-3" />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-64 p-3" side="top" align="center">
+                                    <div className="space-y-2">
+                                      <p className="text-xs font-medium text-muted-foreground">
+                                        Note for {format(day, "EEE, MMM d")}
+                                      </p>
+                                      <Textarea
+                                        className="text-xs resize-none"
+                                        rows={3}
+                                        placeholder="What did you work on?"
+                                        value={cellNote}
+                                        onChange={(e) => handleNoteChange(row.rowKey, dateStr, e.target.value)}
+                                        maxLength={1000}
+                                      />
+                                      {cellNote.length > 0 && (
+                                        <p className="text-[10px] text-muted-foreground text-right">{cellNote.length}/1000</p>
+                                      )}
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
+                              </div>
                             </TableCell>
                           );
                         })}
