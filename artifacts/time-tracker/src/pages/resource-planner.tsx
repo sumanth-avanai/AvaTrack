@@ -16,6 +16,7 @@ import {
   startOfWeek,
 } from "date-fns";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -82,6 +83,7 @@ interface ResourceBookingFull {
   startDate: string;
   endDate: string;
   hoursPerDay: number;
+  weekdayHours: Record<string, number> | null;
   notes: string | null;
   employeeName: string;
   weeklyCapacityHours: number;
@@ -341,6 +343,60 @@ function addBookableDays(
   return d;
 }
 
+// ── Weekday-hours helpers ─────────────────────────────────────────────────────
+const DAY_LABELS: Record<string, string> = { "1": "Mo", "2": "Di", "3": "Mi", "4": "Do", "5": "Fr" };
+
+const WEEKDAY_PRESETS = [
+  { label: "Mo–Fr 8h", hours: { "1": 8, "2": 8, "3": 8, "4": 8, "5": 8 } },
+  { label: "Mo–Do 8h", hours: { "1": 8, "2": 8, "3": 8, "4": 8, "5": 0 } },
+  { label: "Mo–Fr 4h", hours: { "1": 4, "2": 4, "3": 4, "4": 4, "5": 4 } },
+] as const;
+
+function matchesPreset(wh: Record<string, number>, preset: Record<string, number>): boolean {
+  return ["1","2","3","4","5"].every(k => (wh[k] ?? 0) === (preset[k as keyof typeof preset] ?? 0));
+}
+
+function formatWeekdayHours(wh: Record<string, number>): string {
+  const slots = ["1","2","3","4","5"].map(k => ({ label: DAY_LABELS[k], h: wh[k] ?? 0 }));
+  const groups: { start: string; end: string; h: number }[] = [];
+  let cur: { start: string; end: string; h: number } | null = null;
+  for (const { label, h } of slots) {
+    if (cur == null || cur.h !== h) { if (cur) groups.push(cur); cur = { start: label, end: label, h }; }
+    else { cur.end = label; }
+  }
+  if (cur) groups.push(cur);
+  return groups.map(g => `${g.start === g.end ? g.start : `${g.start}–${g.end}`} ${g.h % 1 === 0 ? g.h : g.h.toFixed(1)}h`).join(", ");
+}
+
+/** Client-side mirror of the backend calcBookingHours helper. */
+function calcBookingHoursClient(
+  startStr: string,
+  endStr: string,
+  hoursPerDay: number,
+  weekdayHours: Record<string, number> | null,
+  mask: number[],
+  holidayDates: Set<string>,
+  vacations: VacationRange[],
+): { totalHours: number; budgetDays: number } {
+  if (!startStr || !endStr || endStr < startStr) return { totalHours: 0, budgetDays: 0 };
+  const start = parseISO(startStr);
+  const end = parseISO(endStr);
+  let total = 0;
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
+    const ds = format(d, "yyyy-MM-dd");
+    const isoIdx = getISODay(d) - 1; // 0=Mon…6=Sun
+    if (!mask[isoIdx]) continue;
+    if (holidayDates.has(ds)) continue;
+    if (vacations.some(v => v.startDate <= ds && ds <= v.endDate)) continue;
+    if (weekdayHours != null) {
+      total += weekdayHours[String(d.getDay())] ?? 0; // getDay(): 0=Sun,1=Mon…5=Fri
+    } else {
+      total += hoursPerDay;
+    }
+  }
+  return { totalHours: total, budgetDays: Math.round(total / 8 * 100) / 100 };
+}
+
 // ── Booking Modal ──────────────────────────────────────────────────────────────
 interface ModalState {
   mode: "create";
@@ -393,6 +449,16 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     isEdit ? String(state.booking.hoursPerDay) : "8"
   );
   const [notes, setNotes] = useState(isEdit ? (state.booking.notes ?? "") : "");
+
+  // Weekday mode state
+  const [weekdayMode, setWeekdayMode] = useState(
+    isEdit && state.booking.weekdayHours != null
+  );
+  const [weekdayHours, setWeekdayHours] = useState<Record<string, number>>(
+    isEdit && state.booking.weekdayHours != null
+      ? state.booking.weekdayHours
+      : { "1": 8, "2": 8, "3": 8, "4": 8, "5": 8 }
+  );
 
   // Fetch roles for the selected project
   const { data: projectRoles, isLoading: rolesLoading } = useQuery<ProjectRole[]>({
@@ -512,20 +578,36 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     return counts;
   }, [startDate, endDate, workingDaysMask, holidayDates, vacations]);
 
+  // Precise hours/budget calculation (weekday-mode aware)
+  const calcResult = useMemo(() => {
+    if (!startDate || !endDate || endDate < startDate) return null;
+    return calcBookingHoursClient(
+      startDate, endDate,
+      hoursPerDay, weekdayMode ? weekdayHours : null,
+      workingDaysMask, holidayDates, vacations,
+    );
+  }, [startDate, endDate, hoursPerDay, weekdayMode, weekdayHours, workingDaysMask, holidayDates, vacations]);
+
   // How many bookable days this booking consumes
   const thisBookingDays = bookingSummary ? bookingSummary.bookableDays : null;
-  // Budget is always in 8h-day equivalents: bookable days × hoursPerDay / 8
-  // Keep full 2dp precision so values like 8.75d and 19.25d are preserved
-  const thisBookingBudgetDays = thisBookingDays != null && hoursPerDay > 0
-    ? Math.round(thisBookingDays * (hoursPerDay / 8) * 100) / 100
+  // Budget is always in 8h-day equivalents
+  const thisBookingBudgetDays = calcResult && calcResult.totalHours > 0
+    ? calcResult.budgetDays
     : null;
-  // Total hours = bookable days × hours/day
-  const totalHours = thisBookingDays != null && hoursPerDay > 0
-    ? thisBookingDays * hoursPerDay
+  // Total hours
+  const totalHours = calcResult && calcResult.totalHours > 0
+    ? calcResult.totalHours
     : null;
 
+  // Weekday-mode derived values
+  const weeklyTotal = weekdayMode
+    ? Object.values(weekdayHours).reduce((s, h) => s + h, 0)
+    : null;
+  const allWeekdayZero = weekdayMode && weeklyTotal === 0;
+
   const isOverbooked = useMemo(() => {
-    if (!startDate || !endDate || hoursPerDay <= 0) return false;
+    if (!startDate || !endDate) return false;
+    if (!weekdayMode && hoursPerDay <= 0) return false;
     const excludeId = isEdit ? state.booking.id : undefined;
     const empBookings = allBookings.filter(
       (b) => b.employeeId === employeeId && b.id !== excludeId
@@ -542,11 +624,20 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
       const newOverlapEnd = e < weSunday ? e : weSunday;
       if (newOverlapStart > newOverlapEnd) continue;
 
-      const thisWeekdays = countWeekdaysBetween(
-        format(newOverlapStart, "yyyy-MM-dd"),
-        format(newOverlapEnd, "yyyy-MM-dd")
-      );
-      const thisHours = thisWeekdays * hoursPerDay;
+      let thisHours = 0;
+      if (weekdayMode) {
+        for (let d = new Date(newOverlapStart); d <= newOverlapEnd; d = addDays(d, 1)) {
+          const dow = d.getDay();
+          if (dow === 0 || dow === 6) continue;
+          thisHours += weekdayHours[String(dow)] ?? 0;
+        }
+      } else {
+        const thisWeekdays = countWeekdaysBetween(
+          format(newOverlapStart, "yyyy-MM-dd"),
+          format(newOverlapEnd, "yyyy-MM-dd")
+        );
+        thisHours = thisWeekdays * hoursPerDay;
+      }
       if (thisHours === 0) continue;
 
       const used = empBookings.reduce((sum, b) => {
@@ -562,10 +653,14 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
         return sum + bWeekdays * b.hoursPerDay;
       }, 0);
 
-      if (used + thisHours > thisWeekdays * dailyCapacity) return true;
+      const thisWeekdayCount = countWeekdaysBetween(
+        format(newOverlapStart, "yyyy-MM-dd"),
+        format(newOverlapEnd, "yyyy-MM-dd")
+      );
+      if (used + thisHours > thisWeekdayCount * dailyCapacity) return true;
     }
     return false;
-  }, [startDate, endDate, hoursPerDay, allBookings, employeeId, capacity, isEdit, state]);
+  }, [startDate, endDate, hoursPerDay, weekdayMode, weekdayHours, allBookings, employeeId, capacity, isEdit, state]);
 
   // A role must be selected if the project has roles
   const rolesAvailable = projectRoles !== undefined;
@@ -578,7 +673,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     startDate &&
     endDate &&
     startDate <= endDate &&
-    hoursPerDay > 0 &&
+    (weekdayMode ? !allWeekdayZero : hoursPerDay > 0) &&
     !createMut.isPending &&
     !updateMut.isPending;
 
@@ -590,7 +685,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
       endDate,
-      hoursPerDay,
+      ...(weekdayMode
+        ? { weekdayHours }
+        : { hoursPerDay, weekdayHours: null }),
       notes: notes.trim() || null,
     };
     try {
@@ -725,38 +822,118 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
             </div>
           </div>
 
-          {/* Hours per day */}
-          <div className="space-y-1.5">
-            <Label>Hours per day</Label>
-            <div className="flex gap-2">
-              {[2, 4, 6, 8].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => { setHoursPerDay(preset); setHoursPerDayInput(String(preset)); }}
-                  className={`flex-1 py-1.5 rounded-md border text-sm font-medium transition-colors ${
-                    hoursPerDay === preset
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
-                  }`}
-                >
-                  {preset}h
-                </button>
-              ))}
-              <Input
-                type="number"
-                min={0.5}
-                max={24}
-                step={0.5}
-                className="w-20 text-center"
-                value={hoursPerDayInput}
-                onChange={(e) => {
-                  setHoursPerDayInput(e.target.value);
-                  const v = parseFloat(e.target.value);
-                  if (!isNaN(v) && v > 0) setHoursPerDay(v);
-                }}
-              />
+          {/* Hours per day / weekday mode */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Hours per day</Label>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none text-muted-foreground hover:text-foreground transition-colors">
+                <Checkbox
+                  checked={weekdayMode}
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      setWeekdayHours({ "1": hoursPerDay, "2": hoursPerDay, "3": hoursPerDay, "4": hoursPerDay, "5": hoursPerDay });
+                      setWeekdayMode(true);
+                    } else {
+                      const avg = Math.round(Object.values(weekdayHours).reduce((s, h) => s + h, 0) / 5 * 10) / 10;
+                      const newHpd = avg > 0 ? avg : 8;
+                      setHoursPerDay(newHpd);
+                      setHoursPerDayInput(String(newHpd));
+                      setWeekdayMode(false);
+                    }
+                  }}
+                />
+                Set per weekday
+              </label>
             </div>
+
+            {!weekdayMode ? (
+              <div className="flex gap-2">
+                {[2, 4, 6, 8].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => { setHoursPerDay(preset); setHoursPerDayInput(String(preset)); }}
+                    className={`flex-1 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                      hoursPerDay === preset
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                    }`}
+                  >
+                    {preset}h
+                  </button>
+                ))}
+                <Input
+                  type="number"
+                  min={0.5}
+                  max={24}
+                  step={0.5}
+                  className="w-20 text-center"
+                  value={hoursPerDayInput}
+                  onChange={(e) => {
+                    setHoursPerDayInput(e.target.value);
+                    const v = parseFloat(e.target.value);
+                    if (!isNaN(v) && v > 0) setHoursPerDay(v);
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {/* Preset buttons */}
+                <div className="flex gap-1.5 flex-wrap">
+                  {WEEKDAY_PRESETS.map((p) => {
+                    const active = matchesPreset(weekdayHours, p.hours as Record<string, number>);
+                    return (
+                      <button
+                        key={p.label}
+                        type="button"
+                        onClick={() => setWeekdayHours({ ...p.hours })}
+                        className={`px-2.5 py-1 rounded-md border text-xs font-medium transition-colors ${
+                          active
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                        }`}
+                      >
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                  {!WEEKDAY_PRESETS.some((p) => matchesPreset(weekdayHours, p.hours as Record<string, number>)) && (
+                    <span className="px-2.5 py-1 rounded-md border border-primary bg-primary/10 text-primary text-xs font-medium">
+                      Custom
+                    </span>
+                  )}
+                </div>
+
+                {/* Per-weekday inputs */}
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(["1","2","3","4","5"] as const).map((key) => (
+                    <div key={key} className="space-y-0.5">
+                      <Label className="text-xs text-center block text-muted-foreground">{DAY_LABELS[key]}</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={24}
+                        step={0.5}
+                        className="text-center px-1"
+                        value={weekdayHours[key] ?? 0}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          setWeekdayHours((prev) => ({ ...prev, [key]: isNaN(v) ? 0 : Math.max(0, Math.min(24, v)) }));
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* All-zero warning */}
+                {allWeekdayZero && (
+                  <div className="flex items-center gap-1.5 text-xs text-destructive">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    All days are set to 0h — booking has no hours.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Notes */}
@@ -794,9 +971,12 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                 <span>Bookable days</span>
                 <span className="text-foreground">{bookingSummary.bookableDays}d</span>
               </div>
-              {hoursPerDay > 0 && totalHours != null && (
+              {totalHours != null && totalHours > 0 && (
                 <div className="border-t border-border/60 pt-1 font-medium text-foreground text-xs">
-                  {bookingSummary.bookableDays}d × {hoursPerDay % 1 === 0 ? hoursPerDay : hoursPerDay.toFixed(1)}h = {totalHours % 1 === 0 ? totalHours : totalHours.toFixed(1)}h total
+                  {weekdayMode && weeklyTotal != null
+                    ? <>{formatWeekdayHours(weekdayHours)} ({weeklyTotal % 1 === 0 ? weeklyTotal : weeklyTotal.toFixed(1)}h/week) → {totalHours % 1 === 0 ? totalHours : totalHours.toFixed(1)}h total</>
+                    : <>{bookingSummary.bookableDays}d × {hoursPerDay % 1 === 0 ? hoursPerDay : hoursPerDay.toFixed(1)}h = {totalHours % 1 === 0 ? totalHours : totalHours.toFixed(1)}h total</>
+                  }
                 </div>
               )}
             </div>
