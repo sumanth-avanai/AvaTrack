@@ -1,0 +1,188 @@
+Hier der Prompt für Replit:
+
+---
+
+```
+BUGFIX + UX REDESIGN: Resource Planner Booking Dialog
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== CURRENT PROBLEM ===
+
+The booking calculation is broken:
+- User enters Start: 01.04.2026, End: 13.05.2026
+- System shows: "Working days: 31, Holidays: -2, Bookable days: 29"
+- But "This booking" shows 35 days (calculated from full weeks × allocation)
+- This is inconsistent and confusing
+
+=== NEW APPROACH: Daily-based allocation (like Moco) ===
+
+Instead of "hours per week", use "hours per day" as the base unit.
+This eliminates week-boundary calculation errors entirely.
+
+=== NEW DIALOG STRUCTURE ===
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Forward Deployed Engineer — €805/day               │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ Start date          End date                        │
+│ [01.04.2026]        [13.05.2026]                   │
+│                                                     │
+│ Working days in period:    31d                      │
+│ Public holidays:           -2d                      │
+│ Bookable days:             29d                      │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ Hours per day:  [8    ]    ○2  ○4  ○6  ●8          │
+│                                                     │
+│ Notes (optional)                                    │
+│ [                                                 ] │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│ BOOKING SUMMARY                                     │
+│                                                     │
+│ This booking:     29d × 8h = 232h                  │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│ ROLE BUDGET                                         │
+│                                                     │
+│ Budgeted:              28d                          │
+│ Already planned:       -0d                          │
+│ Available:             28d                          │
+│                                                     │
+│ This booking:          29d                          │
+│ ⚠️ Over budget by:      1d                          │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+=== CALCULATION LOGIC ===
+
+```javascript
+// Step 1: Count actual working days (Mo-Fr) in date range
+function countWorkingDays(startDate, endDate) {
+  let count = 0;
+  let current = new Date(startDate);
+  while (current <= endDate) {
+    const dayOfWeek = current.getDay();
+    if (dayOfWeek >= 1 && dayOfWeek <= 5) { // Mo=1 to Fr=5
+      count++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  return count;
+}
+
+// Step 2: Subtract holidays in period
+const workingDays = countWorkingDays(start, end);
+const holidaysInPeriod = getHolidaysInPeriod(employeeId, start, end);
+const bookableDays = workingDays - holidaysInPeriod.length;
+
+// Step 3: Calculate booking (simple multiplication)
+const hoursPerDay = 8; // user input
+const bookingDays = bookableDays; // 1:1 when full day
+const bookingHours = bookableDays * hoursPerDay;
+
+// Step 4: For part-time (e.g., 4h/day = half days)
+const bookingDaysEquivalent = bookableDays * (hoursPerDay / 8);
+// Example: 29 bookable days × 4h/day = 14.5 full-day equivalents
+```
+
+=== KEY CHANGES ===
+
+| Old | New |
+|-----|-----|
+| "Allocation: 40 hours/week" | "Hours per day: 8h" with presets |
+| "7 weeks × 40h = 280h" | "29 days × 8h = 232h" |
+| Week-based calculation | Day-based calculation |
+| Confusing discrepancy | Consistent: bookable days = booking days (at 8h) |
+
+=== REMOVE ===
+
+- Remove "hours/week" dropdown
+- Remove week count display ("7 weeks")
+- Remove "Calculate by" toggle (always use start+end dates)
+
+=== ADD ===
+
+- Hours per day input with radio presets: 2, 4, 6, 8
+- Clear calculation display: "29d × 8h = 232h"
+- Live update on date/hours change
+
+=== EDGE CASES ===
+
+1. Part-time (4h/day):
+   - Display: "29d × 4h = 116h (14.5 full-day equivalents)"
+   - Budget comparison uses full-day equivalents
+
+2. Single day booking:
+   - Start = End = same date
+   - If weekday: 1 bookable day
+   - If weekend: 0 bookable days, show warning
+
+3. Weekend dates selected:
+   - Start on Saturday → auto-adjust to next Monday? Or show warning?
+   - Recommendation: Show warning, don't auto-adjust
+
+4. Holidays:
+   - Show which holidays are in the period (tooltip or expandable)
+
+=== DATA MODEL CHANGES ===
+
+```javascript
+// Old ResourceBooking
+{
+  startDate: Date,
+  endDate: Date,
+  allocationHoursPerWeek: 40,
+  // ... derived values were inconsistent
+}
+
+// New ResourceBooking
+{
+  startDate: Date,
+  endDate: Date,
+  hoursPerDay: 8,           // NEW: replaces allocationHoursPerWeek
+  // Computed (not stored):
+  // - bookableDays: calculated from date range - holidays
+  // - totalHours: bookableDays × hoursPerDay
+}
+```
+
+=== MIGRATION ===
+
+Convert existing bookings:
+```javascript
+// Old: 40h/week = 8h/day (full time)
+// Old: 20h/week = 4h/day (half time)
+const hoursPerDay = Math.round(allocationHoursPerWeek / 5);
+```
+
+=== TEST CASES ===
+
+| Start | End | h/day | Holidays | Expected |
+|-------|-----|-------|----------|----------|
+| Mon Apr 6 | Fri Apr 10 | 8 | 0 | 5d × 8h = 40h |
+| Wed Apr 1 | Wed Apr 1 | 8 | 0 | 1d × 8h = 8h |
+| Mon Apr 6 | Fri Apr 10 | 4 | 0 | 5d × 4h = 20h (2.5d equiv) |
+| Mon Apr 6 | Fri Apr 17 | 8 | 1 | 9d × 8h = 72h |
+| Sat Apr 4 | Sun Apr 5 | 8 | 0 | 0d, show warning |
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Requirement |
+|---|-------------|
+| 1 | Booking days always equals bookable days when 8h/day selected |
+| 2 | Part-time shows full-day equivalents for budget comparison |
+| 3 | No more week-based calculation anywhere |
+| 4 | Live calculation updates on any input change |
+| 5 | Existing bookings migrated correctly |
+| 6 | Budget warning shows when booking exceeds available |
+```
+
+---
+
+Soll ich noch etwas ergänzen oder anpassen?
