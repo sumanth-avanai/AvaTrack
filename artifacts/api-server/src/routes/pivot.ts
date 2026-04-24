@@ -203,10 +203,10 @@ function getBucketLabel(key: string, colDim: string): string {
   return key;
 }
 
-// ─── Resource booking → bucket hours (day-by-day) ─────────────────────────────
+// ─── Resource booking → bucket hours (weekday-by-weekday) ─────────────────────
 
 function assignBookingToBuckets(
-  booking: { startDate: string; endDate: string; hoursPerWeek: number },
+  booking: { startDate: string; endDate: string; hoursPerDay: number },
   rangeStart: string,
   rangeEnd: string,
   colDim: string,
@@ -215,18 +215,15 @@ function assignBookingToBuckets(
   const oEnd   = booking.endDate   < rangeEnd   ? booking.endDate   : rangeEnd;
   if (oStart > oEnd) return {};
 
-  if (colDim === "none") {
-    const days = (new Date(oEnd + "T12:00:00Z").getTime() - new Date(oStart + "T12:00:00Z").getTime()) / 86400000 + 1;
-    return { Total: (days / 7) * booking.hoursPerWeek };
-  }
-
   const res: Record<string, number> = {};
-  const hpd = booking.hoursPerWeek / 7;
-  const d   = new Date(oStart + "T12:00:00Z");
-  const e   = new Date(oEnd   + "T12:00:00Z");
+  const d = new Date(oStart + "T12:00:00Z");
+  const e = new Date(oEnd   + "T12:00:00Z");
   while (d <= e) {
-    const b = dateToBucket(d.toISOString().slice(0, 10), colDim);
-    res[b] = (res[b] ?? 0) + hpd;
+    const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+    if (dow !== 0 && dow !== 6) {
+      const b = colDim === "none" ? "Total" : dateToBucket(d.toISOString().slice(0, 10), colDim);
+      res[b] = (res[b] ?? 0) + booking.hoursPerDay;
+    }
     d.setUTCDate(d.getUTCDate() + 1);
   }
   return res;
