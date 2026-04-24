@@ -70,7 +70,16 @@ router.get("/resource-bookings", async (req, res): Promise<void> => {
 });
 
 // ── Validation schema ─────────────────────────────────────────────────────────
-const WeekdayHoursSchema = z.record(z.string(), z.number().min(0).max(24)).nullable().optional();
+const WEEKDAY_KEYS = ["1", "2", "3", "4", "5"] as const;
+
+const WeekdayHoursSchema = z
+  .record(z.string(), z.number().min(0).max(24))
+  .refine(
+    (obj) => obj != null && Object.keys(obj).every((k) => WEEKDAY_KEYS.includes(k as typeof WEEKDAY_KEYS[number])),
+    { message: "weekdayHours keys must be ISO weekday strings '1' (Mon) through '5' (Fri)" },
+  )
+  .nullable()
+  .optional();
 
 const BookingBodySchema = z.object({
   employeeId: z.number().int().positive(),
@@ -106,7 +115,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
   const { employeeId, projectId, projectRoleId, startDate, endDate, notes } = parsed.data;
   const weekdayHours = parsed.data.weekdayHours ?? null;
 
-  if (weekdayHours == null && !parsed.data.hoursPerDay) {
+  if (weekdayHours == null && parsed.data.hoursPerDay == null) {
     res.status(400).json({ error: "Either hoursPerDay or weekdayHours must be provided" });
     return;
   }
@@ -151,7 +160,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
   const { employeeId, projectId, projectRoleId, startDate, endDate, notes } = parsed.data;
   const weekdayHours = parsed.data.weekdayHours ?? null;
 
-  if (weekdayHours == null && !parsed.data.hoursPerDay) {
+  if (weekdayHours == null && parsed.data.hoursPerDay == null) {
     res.status(400).json({ error: "Either hoursPerDay or weekdayHours must be provided" });
     return;
   }
