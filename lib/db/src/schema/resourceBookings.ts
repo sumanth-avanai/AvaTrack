@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, real, date, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, real, date, integer, index, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { employeesTable } from "./employees";
@@ -13,6 +13,7 @@ export const resourceBookingsTable = pgTable("resource_bookings", {
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
   hoursPerDay: real("hours_per_day").notNull(),
+  weekdayHours: jsonb("weekday_hours").$type<Record<string, number>>(),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

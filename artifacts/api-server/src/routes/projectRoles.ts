@@ -10,35 +10,9 @@ import {
   employeesTable,
 } from "@workspace/db";
 import { fetchEmpAvailabilityMap, type EmpAvailability } from "../lib/employee-availability";
+import { calcBookingHours } from "../lib/booking-hours";
 
 const router: IRouter = Router();
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Count Mon-Fri weekdays in [startStr, endStr] (inclusive), deducting
- * public holidays and employee vacation days.
- */
-function countBookableDays(
-  startStr: string,
-  endStr: string,
-  holidayDates: string[] = [],
-  vacationDateSet: Set<string> = new Set(),
-): number {
-  const holidaySet = new Set(holidayDates);
-  let count = 0;
-  const d = new Date(startStr + "T00:00:00Z");
-  const e = new Date(endStr   + "T00:00:00Z");
-  while (d <= e) {
-    const dow     = d.getUTCDay();
-    const dateStr = d.toISOString().slice(0, 10);
-    if (dow !== 0 && dow !== 6 && !holidaySet.has(dateStr) && !vacationDateSet.has(dateStr)) {
-      count++;
-    }
-    d.setUTCDate(d.getUTCDate() + 1);
-  }
-  return count;
-}
 
 /**
  * Fetch holiday + vacation availability for all employees referenced by a
@@ -228,6 +202,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
       hoursPerDay: resourceBookingsTable.hoursPerDay,
+      weekdayHours: resourceBookingsTable.weekdayHours,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
@@ -242,9 +217,12 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
 
   for (const b of roleBookings) {
     if (excludeBookingId != null && b.id === excludeBookingId) continue;
-    const avail    = availMap.get(b.employeeId);
-    const bookable = countBookableDays(b.startDate, b.endDate, avail?.holidayDates, avail?.vacationDateSet);
-    const days = bookable * (b.hoursPerDay / 8);
+    const avail = availMap.get(b.employeeId);
+    const { budgetDays: days } = calcBookingHours(
+      b.startDate, b.endDate, b.hoursPerDay,
+      b.weekdayHours as Record<string, number> | null,
+      avail?.holidayDates, avail?.vacationDateSet,
+    );
 
     totalPlannedDays += days;
 
@@ -309,6 +287,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
       startDate:     resourceBookingsTable.startDate,
       endDate:       resourceBookingsTable.endDate,
       hoursPerDay:   resourceBookingsTable.hoursPerDay,
+      weekdayHours:  resourceBookingsTable.weekdayHours,
     })
     .from(resourceBookingsTable)
     .where(
@@ -322,13 +301,16 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
 
   const plannedAvailMap = await getAvailMapForBookings(plannedBookings);
 
-  // Compute planned hours per role using bookable-day count (holidays + vacations deducted)
+  // Compute planned hours per role (supports both flat and weekday-mode bookings)
   const plannedMap = new Map<number, number>();
   for (const b of plannedBookings) {
     if (b.projectRoleId == null) continue;
-    const avail    = plannedAvailMap.get(b.employeeId);
-    const bookable = countBookableDays(b.startDate, b.endDate, avail?.holidayDates, avail?.vacationDateSet);
-    const hours = bookable * b.hoursPerDay;
+    const avail = plannedAvailMap.get(b.employeeId);
+    const { totalHours: hours } = calcBookingHours(
+      b.startDate, b.endDate, b.hoursPerDay,
+      b.weekdayHours as Record<string, number> | null,
+      avail?.holidayDates, avail?.vacationDateSet,
+    );
     plannedMap.set(b.projectRoleId, (plannedMap.get(b.projectRoleId) ?? 0) + hours);
   }
 
@@ -407,6 +389,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
       hoursPerDay: resourceBookingsTable.hoursPerDay,
+      weekdayHours: resourceBookingsTable.weekdayHours,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
@@ -449,10 +432,13 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
 
   for (const b of bookingRows) {
     if (b.projectRoleId == null) continue;
-    const key      = `${b.projectRoleId}:${b.employeeId}`;
-    const avail    = allocAvailMap.get(b.employeeId);
-    const bookable = countBookableDays(b.startDate, b.endDate, avail?.holidayDates, avail?.vacationDateSet);
-    const days = bookable * (b.hoursPerDay / 8);
+    const key   = `${b.projectRoleId}:${b.employeeId}`;
+    const avail = allocAvailMap.get(b.employeeId);
+    const { budgetDays: days } = calcBookingHours(
+      b.startDate, b.endDate, b.hoursPerDay,
+      b.weekdayHours as Record<string, number> | null,
+      avail?.holidayDates, avail?.vacationDateSet,
+    );
 
     const existing = allocMap.get(key);
     if (existing) {

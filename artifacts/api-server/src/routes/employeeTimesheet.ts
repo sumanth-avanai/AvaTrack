@@ -145,6 +145,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
       projectId: resourceBookingsTable.projectId,
       projectRoleId: resourceBookingsTable.projectRoleId,
       hoursPerDay: resourceBookingsTable.hoursPerDay,
+      weekdayHours: resourceBookingsTable.weekdayHours,
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
       projectName: projectsTable.name,
@@ -271,11 +272,31 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
   // Add bookings
   for (const b of bookings) {
     const k = rowKey(b.projectId, b.projectRoleId ?? null);
-    // Planned hours = hoursPerDay × working days (minus holidays + vacations) in the overlap with this week
+    // Planned hours for the overlap of this booking with the current week
     const overlapStart = b.startDate > weekStart ? String(b.startDate).slice(0, 10) : weekStart;
     const overlapEnd   = b.endDate   < weekEnd   ? String(b.endDate).slice(0, 10)   : weekEnd;
-    const workingDaysInWeek = countWorkingDaysInRange(overlapStart, overlapEnd, weekHolidaySet, weekVacationSet);
-    const plannedForWeek = workingDaysInWeek * b.hoursPerDay;
+    let plannedForWeek: number;
+    if (b.weekdayHours != null) {
+      // Weekday mode: sum per-weekday hours for each bookable day in the overlap
+      const wh = b.weekdayHours as Record<string, number>;
+      let sum = 0;
+      const cur = new Date(overlapStart + "T00:00:00Z");
+      const end = new Date(overlapEnd   + "T00:00:00Z");
+      while (cur <= end) {
+        const dow     = cur.getUTCDay(); // 0=Sun, 1=Mon … 6=Sat
+        const dateStr = cur.toISOString().slice(0, 10);
+        const isoIdx  = dow === 0 ? 6 : dow - 1; // 0=Mon…6=Sun index into workMask
+        if (workMask[isoIdx] && !weekHolidaySet.has(dateStr) && !weekVacationSet.has(dateStr)) {
+          sum += wh[String(dow)] ?? 0;
+        }
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      plannedForWeek = sum;
+    } else {
+      // Flat mode: working days × hoursPerDay
+      const workingDaysInWeek = countWorkingDaysInRange(overlapStart, overlapEnd, weekHolidaySet, weekVacationSet);
+      plannedForWeek = workingDaysInWeek * b.hoursPerDay;
+    }
     if (!prefilledMap.has(k)) {
       prefilledMap.set(k, {
         projectId: b.projectId,

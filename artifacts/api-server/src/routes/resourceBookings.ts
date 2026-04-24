@@ -24,6 +24,7 @@ function buildSelect() {
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
       hoursPerDay: resourceBookingsTable.hoursPerDay,
+      weekdayHours: resourceBookingsTable.weekdayHours,
       notes: resourceBookingsTable.notes,
       createdAt: resourceBookingsTable.createdAt,
       updatedAt: resourceBookingsTable.updatedAt,
@@ -69,15 +70,30 @@ router.get("/resource-bookings", async (req, res): Promise<void> => {
 });
 
 // ── Validation schema ─────────────────────────────────────────────────────────
+const WeekdayHoursSchema = z.record(z.string(), z.number().min(0).max(24)).nullable().optional();
+
 const BookingBodySchema = z.object({
   employeeId: z.number().int().positive(),
   projectId: z.number().int().positive(),
   projectRoleId: z.number().int().positive().nullable().optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  hoursPerDay: z.number().positive(),
+  hoursPerDay: z.number().min(0).optional(),
+  weekdayHours: WeekdayHoursSchema,
   notes: z.string().optional().nullable(),
 });
+
+/** Resolve effective hoursPerDay from input: weekday sum÷5 or flat value. */
+function resolveHoursPerDay(
+  hoursPerDay: number | undefined,
+  weekdayHours: Record<string, number> | null | undefined,
+): number {
+  if (weekdayHours != null) {
+    const sum = Object.values(weekdayHours).reduce((a, b) => a + b, 0);
+    return sum / 5;
+  }
+  return hoursPerDay ?? 0;
+}
 
 // ── POST /resource-bookings ───────────────────────────────────────────────────
 router.post("/resource-bookings", async (req, res): Promise<void> => {
@@ -87,12 +103,20 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerDay, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, notes } = parsed.data;
+  const weekdayHours = parsed.data.weekdayHours ?? null;
+
+  if (weekdayHours == null && !parsed.data.hoursPerDay) {
+    res.status(400).json({ error: "Either hoursPerDay or weekdayHours must be provided" });
+    return;
+  }
 
   if (startDate > endDate) {
     res.status(400).json({ error: "startDate must be on or before endDate" });
     return;
   }
+
+  const hoursPerDay = resolveHoursPerDay(parsed.data.hoursPerDay, weekdayHours);
 
   const [inserted] = await db
     .insert(resourceBookingsTable)
@@ -103,6 +127,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
       startDate,
       endDate,
       hoursPerDay,
+      weekdayHours: weekdayHours ?? undefined,
       notes: notes ?? null,
     })
     .returning({ id: resourceBookingsTable.id });
@@ -123,12 +148,20 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerDay, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, notes } = parsed.data;
+  const weekdayHours = parsed.data.weekdayHours ?? null;
+
+  if (weekdayHours == null && !parsed.data.hoursPerDay) {
+    res.status(400).json({ error: "Either hoursPerDay or weekdayHours must be provided" });
+    return;
+  }
 
   if (startDate > endDate) {
     res.status(400).json({ error: "startDate must be on or before endDate" });
     return;
   }
+
+  const hoursPerDay = resolveHoursPerDay(parsed.data.hoursPerDay, weekdayHours);
 
   const result = await db
     .update(resourceBookingsTable)
@@ -139,6 +172,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
       startDate,
       endDate,
       hoursPerDay,
+      weekdayHours: weekdayHours ?? null,
       notes: notes ?? null,
     })
     .where(eq(resourceBookingsTable.id, id))
