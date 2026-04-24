@@ -12,7 +12,7 @@ export const resourceBookingsTable = pgTable("resource_bookings", {
   projectRoleId: integer("project_role_id").references(() => projectRolesTable.id, { onDelete: "set null" }),
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
-  hoursPerWeek: real("hours_per_week").notNull(),
+  hoursPerDay: real("hours_per_day").notNull(),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

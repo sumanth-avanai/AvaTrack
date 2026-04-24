@@ -23,7 +23,7 @@ function buildSelect() {
       projectRoleId: resourceBookingsTable.projectRoleId,
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
-      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      hoursPerDay: resourceBookingsTable.hoursPerDay,
       notes: resourceBookingsTable.notes,
       createdAt: resourceBookingsTable.createdAt,
       updatedAt: resourceBookingsTable.updatedAt,
@@ -75,7 +75,7 @@ const BookingBodySchema = z.object({
   projectRoleId: z.number().int().positive().nullable().optional(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  hoursPerWeek: z.number().positive(),
+  hoursPerDay: z.number().positive(),
   notes: z.string().optional().nullable(),
 });
 
@@ -87,7 +87,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerWeek, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerDay, notes } = parsed.data;
 
   if (startDate > endDate) {
     res.status(400).json({ error: "startDate must be on or before endDate" });
@@ -102,7 +102,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
       projectRoleId: projectRoleId ?? null,
       startDate,
       endDate,
-      hoursPerWeek,
+      hoursPerDay,
       notes: notes ?? null,
     })
     .returning({ id: resourceBookingsTable.id });
@@ -123,7 +123,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerWeek, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, hoursPerDay, notes } = parsed.data;
 
   if (startDate > endDate) {
     res.status(400).json({ error: "startDate must be on or before endDate" });
@@ -138,7 +138,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
       projectRoleId: projectRoleId ?? null,
       startDate,
       endDate,
-      hoursPerWeek,
+      hoursPerDay,
       notes: notes ?? null,
     })
     .where(eq(resourceBookingsTable.id, id))

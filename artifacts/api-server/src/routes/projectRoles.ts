@@ -12,6 +12,22 @@ import {
 
 const router: IRouter = Router();
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function countWeekdays(startStr: string, endStr: string): number {
+  const start = new Date(startStr + "T00:00:00Z");
+  const end = new Date(endStr + "T00:00:00Z");
+  const totalDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+  const fullWeeks = Math.floor(totalDays / 7);
+  const remaining = totalDays % 7;
+  let weekdays = fullWeeks * 5;
+  const startDow = start.getUTCDay();
+  for (let i = 0; i < remaining; i++) {
+    const dow = (startDow + i) % 7;
+    if (dow !== 0 && dow !== 6) weekdays++;
+  }
+  return weekdays;
+}
+
 // ── Validation schemas ────────────────────────────────────────────────────────
 const RoleBodySchema = z.object({
   name: z.string().min(1),
@@ -183,7 +199,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
       employeeName: employeesTable.name,
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
-      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      hoursPerDay: resourceBookingsTable.hoursPerDay,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
@@ -194,12 +210,8 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
 
   for (const b of roleBookings) {
     if (excludeBookingId != null && b.id === excludeBookingId) continue;
-    // Use same whole-week ceiling formula as the frontend totalWeeks() function:
-    //   weeks = Math.ceil((inclusiveDays) / 7), then days = weeks * hoursPerWeek / 8
-    const inclusiveDays =
-      (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
-    const weeks = Math.ceil(inclusiveDays / 7);
-    const days = weeks * (b.hoursPerWeek / 8);
+    const weekdays = countWeekdays(b.startDate, b.endDate);
+    const days = weekdays * (b.hoursPerDay / 8);
 
     totalPlannedDays += days;
 
@@ -255,14 +267,14 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
     )
     .groupBy(timeEntriesTable.projectRoleId);
 
-  // Fetch individual bookings to compute planned days using duration-weighted formula:
-  // plannedDays = sum over bookings of (ceil(inclusiveDays/7) * hoursPerWeek / 8)
+  // Fetch individual bookings to compute planned days using weekday-count formula:
+  // plannedDays = sum over bookings of (weekdays * hoursPerDay / 8)
   const plannedBookings = await db
     .select({
       projectRoleId: resourceBookingsTable.projectRoleId,
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
-      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      hoursPerDay: resourceBookingsTable.hoursPerDay,
     })
     .from(resourceBookingsTable)
     .where(
@@ -274,14 +286,12 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
 
   const bookedMap = new Map<number, number>(bookedRows.map((r) => [r.projectRoleId!, r.totalHours]));
 
-  // Compute planned hours per role using the same whole-week ceiling formula as budget-status
+  // Compute planned hours per role using weekday count formula
   const plannedMap = new Map<number, number>();
   for (const b of plannedBookings) {
     if (b.projectRoleId == null) continue;
-    const inclusiveDays =
-      (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
-    const weeks = Math.ceil(inclusiveDays / 7);
-    const hours = weeks * b.hoursPerWeek;
+    const weekdays = countWeekdays(b.startDate, b.endDate);
+    const hours = weekdays * b.hoursPerDay;
     plannedMap.set(b.projectRoleId, (plannedMap.get(b.projectRoleId) ?? 0) + hours);
   }
 
@@ -359,7 +369,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
       employeeName: employeesTable.name,
       startDate: resourceBookingsTable.startDate,
       endDate: resourceBookingsTable.endDate,
-      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      hoursPerDay: resourceBookingsTable.hoursPerDay,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
@@ -401,10 +411,8 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
   for (const b of bookingRows) {
     if (b.projectRoleId == null) continue;
     const key = `${b.projectRoleId}:${b.employeeId}`;
-    const inclusiveDays =
-      (new Date(b.endDate).getTime() - new Date(b.startDate).getTime()) / (1000 * 60 * 60 * 24) + 1;
-    const weeks = Math.ceil(inclusiveDays / 7);
-    const days = weeks * (b.hoursPerWeek / 8);
+    const weekdays = countWeekdays(b.startDate, b.endDate);
+    const days = weekdays * (b.hoursPerDay / 8);
 
     const existing = allocMap.get(key);
     if (existing) {

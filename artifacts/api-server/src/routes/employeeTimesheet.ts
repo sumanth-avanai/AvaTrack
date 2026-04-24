@@ -66,6 +66,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
       name: employeesTable.name,
       weeklyCapacityHours: employeesTable.weeklyCapacityHours,
       holidayCalendarCode: employeesTable.holidayCalendarCode,
+      workingDaysMask: employeesTable.workingDaysMask,
     })
     .from(employeesTable)
     .where(eq(employeesTable.id, employeeId));
@@ -114,13 +115,32 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
 
   const availableProjects = Array.from(projectMap.values());
 
+  // ── Compute working-days mask for this employee (for plannedHours calculation) ─
+  const workMask: number[] = employeeRow.workingDaysMask
+    ? employeeRow.workingDaysMask.split(",").map(Number)
+    : [1, 1, 1, 1, 1, 0, 0];
+
+  // Count working days (per employee mask) in [overlapStart, overlapEnd]
+  function countWorkingDaysInRange(rangeStart: string, rangeEnd: string): number {
+    let count = 0;
+    const start = new Date(rangeStart + "T00:00:00Z");
+    const end = new Date(rangeEnd + "T00:00:00Z");
+    for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      const isoDay = d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1;
+      if (workMask[isoDay]) count++;
+    }
+    return count;
+  }
+
   // ── Active ResourceBookings for this week ──────────────────────────────────
   const bookings = await db
     .select({
       id: resourceBookingsTable.id,
       projectId: resourceBookingsTable.projectId,
       projectRoleId: resourceBookingsTable.projectRoleId,
-      hoursPerWeek: resourceBookingsTable.hoursPerWeek,
+      hoursPerDay: resourceBookingsTable.hoursPerDay,
+      startDate: resourceBookingsTable.startDate,
+      endDate: resourceBookingsTable.endDate,
       projectName: projectsTable.name,
       clientName: clientsTable.name,
       roleName: projectRolesTable.name,
@@ -187,6 +207,11 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
   // Add bookings
   for (const b of bookings) {
     const k = rowKey(b.projectId, b.projectRoleId ?? null);
+    // Planned hours = hoursPerDay × working days in the overlap of this booking and the current week
+    const overlapStart = b.startDate > weekStart ? String(b.startDate).slice(0, 10) : weekStart;
+    const overlapEnd = b.endDate < weekEnd ? String(b.endDate).slice(0, 10) : weekEnd;
+    const workingDaysInWeek = countWorkingDaysInRange(overlapStart, overlapEnd);
+    const plannedForWeek = workingDaysInWeek * b.hoursPerDay;
     if (!prefilledMap.has(k)) {
       prefilledMap.set(k, {
         projectId: b.projectId,
@@ -194,7 +219,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
         clientName: b.clientName ?? null,
         roleId: b.projectRoleId ?? null,
         roleName: b.roleName ?? null,
-        plannedHours: b.hoursPerWeek,
+        plannedHours: plannedForWeek,
         entries: {},
         notes: {},
         isLegacy: !assignedKeys.has(k),
@@ -202,7 +227,7 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
     } else {
       // Accumulate planned hours if multiple bookings for same project/role this week
       const existing = prefilledMap.get(k)!;
-      existing.plannedHours = (existing.plannedHours ?? 0) + b.hoursPerWeek;
+      existing.plannedHours = (existing.plannedHours ?? 0) + plannedForWeek;
     }
   }
 

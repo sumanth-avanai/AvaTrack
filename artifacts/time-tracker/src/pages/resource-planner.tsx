@@ -81,7 +81,7 @@ interface ResourceBookingFull {
   dayRate: number | null;
   startDate: string;
   endDate: string;
-  hoursPerWeek: number;
+  hoursPerDay: number;
   notes: string | null;
   employeeName: string;
   weeklyCapacityHours: number;
@@ -89,8 +89,6 @@ interface ResourceBookingFull {
   clientName: string | null;
   projectColor: string;
 }
-
-type AllocUnit = "hours" | "days" | "percent";
 type ZoomLevel = "month" | "quarter" | "year";
 type SortMode = "alpha-asc" | "alpha-desc" | "alloc-desc" | "alloc-asc";
 
@@ -259,18 +257,20 @@ function getMonthGroups(weeks: Date[]): { label: string; count: number }[] {
   return groups;
 }
 
-function computeHoursPerWeek(value: number, unit: AllocUnit, capacity: number): number {
-  if (unit === "hours") return value;
-  if (unit === "days") return value * 8;
-  return (value / 100) * capacity;
-}
-
-function totalWeeks(start: string, end: string): number {
-  if (!start || !end) return 0;
+function countWeekdaysBetween(start: string, end: string): number {
+  if (!start || !end || end < start) return 0;
   const s = parseISO(start);
   const e = parseISO(end);
-  if (e < s) return 0;
-  return Math.ceil((differenceInDays(e, s) + 1) / 7);
+  const totalDays = differenceInDays(e, s) + 1;
+  const fullWeeks = Math.floor(totalDays / 7);
+  const remaining = totalDays % 7;
+  let weekdays = fullWeeks * 5;
+  const startDow = s.getDay();
+  for (let i = 0; i < remaining; i++) {
+    const dow = (startDow + i) % 7;
+    if (dow !== 0 && dow !== 6) weekdays++;
+  }
+  return weekdays;
 }
 
 // ── Working-day utilities ──────────────────────────────────────────────────────
@@ -380,30 +380,19 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   const defaultStart = isEdit ? state.booking.startDate : "";
   const defaultEnd = isEdit ? state.booking.endDate : "";
 
-  function parseAllocFromHours(h: number, unit: AllocUnit, cap: number) {
-    if (unit === "hours") return String(h);
-    if (unit === "days") return String(h / 8);
-    return String(cap > 0 ? Math.round((h / cap) * 100) : 0);
-  }
-
   const [projectId, setProjectId] = useState(defaultProject);
   const [roleId, setRoleId] = useState<string>(
     isEdit && state.booking.projectRoleId ? String(state.booking.projectRoleId) : ""
   );
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
-  const [allocUnit, setAllocUnit] = useState<AllocUnit>("hours");
-  const [allocValue, setAllocValue] = useState(
-    isEdit ? parseAllocFromHours(state.booking.hoursPerWeek, "hours", state.capacity) : ""
+  const [hoursPerDay, setHoursPerDay] = useState<number>(
+    isEdit ? state.booking.hoursPerDay : 8
+  );
+  const [hoursPerDayInput, setHoursPerDayInput] = useState<string>(
+    isEdit ? String(state.booking.hoursPerDay) : "8"
   );
   const [notes, setNotes] = useState(isEdit ? (state.booking.notes ?? "") : "");
-  const [calcMode, setCalcMode] = useState<"endDate" | "totalDays">("endDate");
-  const [totalDaysValue, setTotalDaysValue] = useState("");
-
-  // Reset totalDaysValue when switching modes
-  useEffect(() => {
-    setTotalDaysValue("");
-  }, [calcMode]);
 
   // Fetch roles for the selected project
   const { data: projectRoles, isLoading: rolesLoading } = useQuery<ProjectRole[]>({
@@ -513,77 +502,45 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     enabled: !!roleId,
   });
 
-  // ── Total Days mode: compute end date ───────────────────────────────────────
-  const computedEndDate = useMemo(() => {
-    if (calcMode !== "totalDays" || !startDate || !totalDaysValue) return null;
-    const target = parseFloat(totalDaysValue);
-    if (isNaN(target) || target <= 0) return null;
-
-    // Derive hours-per-week from current allocation inputs (hoursPerWeek is declared later)
-    const allocVal = parseFloat(allocValue);
-    if (isNaN(allocVal) || allocVal <= 0) return null;
-    const hpw = computeHoursPerWeek(allocVal, allocUnit, capacity);
-    if (hpw <= 0) return null;
-
-    // Convert project days → calendar working days
-    // daysPerWeek = hpw / 8  (1 day = 8 h)
-    // normalWorkingDays = number of working days in the employee's week mask
-    // calendarWorkingDays = target * normalWorkingDays / daysPerWeek
-    //   e.g. 50 project days at 1 day/week (5-day mask) → 50 * 5 / 1 = 250 working days ≈ 50 weeks
-    const daysPerWeek = hpw / 8;
-    const normalWorkingDays = workingDaysMask.reduce((a: number, b: number) => a + b, 0) || 5;
-    const calendarWorkingDays = Math.ceil(target * normalWorkingDays / daysPerWeek);
-
-    return addBookableDays(parseISO(startDate), calendarWorkingDays, workingDaysMask, holidayDates, vacations);
-  }, [calcMode, startDate, totalDaysValue, allocValue, allocUnit, capacity, workingDaysMask, holidayDates, vacations]);
-
-  const effectiveEndDate = calcMode === "totalDays"
-    ? (computedEndDate ? format(computedEndDate, "yyyy-MM-dd") : "")
-    : endDate;
-
   // ── Booking summary ─────────────────────────────────────────────────────────
   const bookingSummary = useMemo(() => {
-    if (!startDate || !effectiveEndDate || effectiveEndDate < startDate) return null;
+    if (!startDate || !endDate || endDate < startDate) return null;
     const counts = countBookableDays(
-      parseISO(startDate), parseISO(effectiveEndDate),
+      parseISO(startDate), parseISO(endDate),
       workingDaysMask, holidayDates, vacations
     );
     return counts;
-  }, [startDate, effectiveEndDate, workingDaysMask, holidayDates, vacations]);
+  }, [startDate, endDate, workingDaysMask, holidayDates, vacations]);
 
-  // ── Allocation computation ──────────────────────────────────────────────────
-  const hoursPerWeek = useMemo(() => {
-    const v = parseFloat(allocValue);
-    if (isNaN(v) || v <= 0) return 0;
-    return computeHoursPerWeek(v, allocUnit, capacity);
-  }, [allocValue, allocUnit, capacity]);
-
-  const weeks = totalWeeks(startDate, effectiveEndDate);
-  const totalHours = weeks * hoursPerWeek;
-  // How many "project days" this booking consumes (at 8h = 1 day)
-  const thisBookingDays = weeks > 0 && hoursPerWeek > 0 ? Math.round((weeks * hoursPerWeek / 8) * 10) / 10 : null;
+  // How many bookable days this booking consumes
+  const thisBookingDays = bookingSummary ? bookingSummary.bookableDays : null;
+  // Total hours = bookable days × hours/day
+  const totalHours = thisBookingDays != null && hoursPerDay > 0
+    ? thisBookingDays * hoursPerDay
+    : null;
 
   const isOverbooked = useMemo(() => {
-    if (!startDate || !effectiveEndDate || hoursPerWeek <= 0) return false;
+    if (!startDate || !endDate || hoursPerDay <= 0) return false;
     const excludeId = isEdit ? state.booking.id : undefined;
     const empBookings = allBookings.filter(
       (b) => b.employeeId === employeeId && b.id !== excludeId
     );
     const s = parseISO(startDate);
-    const e = parseISO(effectiveEndDate);
+    const e = parseISO(endDate);
     const nw = Math.ceil((differenceInDays(e, s) + 1) / 7);
+    const thisHpw = hoursPerDay * 5;
     for (let i = 0; i < nw; i++) {
       const ws = addWeeks(getMondayOfWeek(s), i);
       const we = addDays(ws, 7);
       const used = empBookings.reduce((sum, b) => {
         const bs = parseISO(b.startDate);
         const be = addDays(parseISO(b.endDate), 1);
-        return bs < we && be > ws ? sum + b.hoursPerWeek : sum;
+        return bs < we && be > ws ? sum + b.hoursPerDay * 5 : sum;
       }, 0);
-      if (used + hoursPerWeek > capacity) return true;
+      if (used + thisHpw > capacity) return true;
     }
     return false;
-  }, [startDate, effectiveEndDate, hoursPerWeek, allBookings, employeeId, capacity, isEdit, state]);
+  }, [startDate, endDate, hoursPerDay, allBookings, employeeId, capacity, isEdit, state]);
 
   // A role must be selected if the project has roles
   const rolesAvailable = projectRoles !== undefined;
@@ -594,9 +551,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     projectId &&
     (!roleRequired || roleId) &&
     startDate &&
-    effectiveEndDate &&
-    startDate <= effectiveEndDate &&
-    hoursPerWeek > 0 &&
+    endDate &&
+    startDate <= endDate &&
+    hoursPerDay > 0 &&
     !createMut.isPending &&
     !updateMut.isPending;
 
@@ -607,8 +564,8 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
       projectId: parseInt(projectId, 10),
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
-      endDate: effectiveEndDate,
-      hoursPerWeek,
+      endDate,
+      hoursPerDay,
       notes: notes.trim() || null,
     };
     try {
@@ -731,96 +688,49 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
             </div>
           )}
 
-          {/* Calculate-by toggle */}
-          <div className="space-y-1.5">
-            <Label>Calculate by</Label>
-            <div className="flex rounded-md border border-border overflow-hidden">
-              {(["endDate", "totalDays"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setCalcMode(mode)}
-                  className={`flex-1 py-1.5 text-sm font-medium transition-colors ${
-                    calcMode === mode
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {mode === "endDate" ? "End date" : "Total days"}
-                </button>
-              ))}
+          {/* Date range */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Start date</Label>
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>End date</Label>
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </div>
 
-          {/* Date / Total days section */}
-          {calcMode === "endDate" ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Start date</Label>
-                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>End date</Label>
-                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label>Start date</Label>
-                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Total days</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  placeholder="e.g. 50"
-                  value={totalDaysValue}
-                  onChange={(e) => setTotalDaysValue(e.target.value)}
-                />
-              </div>
-              {totalDaysValue && parseFloat(totalDaysValue) > 0 && (
-                computedEndDate ? (
-                  <p className="text-sm text-muted-foreground">
-                    Estimated end date:{" "}
-                    <span className="font-medium text-foreground">
-                      {format(computedEndDate, "d. MMM yyyy")}
-                    </span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Set the allocation below to compute the end date.
-                  </p>
-                )
-              )}
-            </div>
-          )}
-
-          {/* Allocation */}
+          {/* Hours per day */}
           <div className="space-y-1.5">
-            <Label>Allocation</Label>
+            <Label>Hours per day</Label>
             <div className="flex gap-2">
+              {[2, 4, 6, 8].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => { setHoursPerDay(preset); setHoursPerDayInput(String(preset)); }}
+                  className={`flex-1 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                    hoursPerDay === preset
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                  }`}
+                >
+                  {preset}h
+                </button>
+              ))}
               <Input
                 type="number"
-                min={0}
-                step={allocUnit === "hours" ? 0.5 : allocUnit === "days" ? 0.5 : 5}
-                className="flex-1"
-                placeholder={allocUnit === "percent" ? "e.g. 50" : allocUnit === "days" ? "e.g. 2" : "e.g. 8"}
-                value={allocValue}
-                onChange={(e) => setAllocValue(e.target.value)}
+                min={0.5}
+                max={24}
+                step={0.5}
+                className="w-20 text-center"
+                value={hoursPerDayInput}
+                onChange={(e) => {
+                  setHoursPerDayInput(e.target.value);
+                  const v = parseFloat(e.target.value);
+                  if (!isNaN(v) && v > 0) setHoursPerDay(v);
+                }}
               />
-              <Select value={allocUnit} onValueChange={(v) => setAllocUnit(v as AllocUnit)}>
-                <SelectTrigger className="w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="hours">hours/week</SelectItem>
-                  <SelectItem value="days">days/week</SelectItem>
-                  <SelectItem value="percent">%</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
           </div>
 
@@ -859,10 +769,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                 <span>Bookable days</span>
                 <span className="text-foreground">{bookingSummary.bookableDays}d</span>
               </div>
-              {/* Role budget line in booking summary removed; full budget box rendered below */}
-              {hoursPerWeek > 0 && (
-                <div className="border-t border-border/60 pt-1 text-muted-foreground text-xs">
-                  {hoursPerWeek.toFixed(1)}h/week · {weeks} week{weeks !== 1 ? "s" : ""} · {totalHours.toFixed(0)}h total
+              {hoursPerDay > 0 && totalHours != null && (
+                <div className="border-t border-border/60 pt-1 font-medium text-foreground text-xs">
+                  {bookingSummary.bookableDays}d × {hoursPerDay % 1 === 0 ? hoursPerDay : hoursPerDay.toFixed(1)}h = {totalHours % 1 === 0 ? totalHours : totalHours.toFixed(1)}h total
                 </div>
               )}
             </div>
@@ -1355,8 +1264,8 @@ export default function ResourcePlannerPage() {
     return [...list].sort((a: any, b: any) => {
       if (sortMode === "alpha-asc") return a.name.localeCompare(b.name);
       if (sortMode === "alpha-desc") return b.name.localeCompare(a.name);
-      const aTotal = (bookings as ResourceBookingFull[]).filter((bk) => bk.employeeId === a.id).reduce((s, bk) => s + bk.hoursPerWeek, 0);
-      const bTotal = (bookings as ResourceBookingFull[]).filter((bk) => bk.employeeId === b.id).reduce((s, bk) => s + bk.hoursPerWeek, 0);
+      const aTotal = (bookings as ResourceBookingFull[]).filter((bk) => bk.employeeId === a.id).reduce((s, bk) => s + bk.hoursPerDay, 0);
+      const bTotal = (bookings as ResourceBookingFull[]).filter((bk) => bk.employeeId === b.id).reduce((s, bk) => s + bk.hoursPerDay, 0);
       return sortMode === "alloc-desc" ? bTotal - aTotal : aTotal - bTotal;
     });
   }, [allActiveEmployees, bookings, filterClients, filterProjects, activeFilters, sortMode]);
@@ -1869,7 +1778,7 @@ export default function ResourcePlannerPage() {
                       ? `${b.clientName} – ${b.projectName}`
                       : b.projectName;
                     const line2 = b.projectRoleName
-                      ? `${b.projectRoleName} | ${b.hoursPerWeek % 1 === 0 ? b.hoursPerWeek : b.hoursPerWeek.toFixed(1)}h/w`
+                      ? `${b.projectRoleName} | ${b.hoursPerDay % 1 === 0 ? b.hoursPerDay : b.hoursPerDay.toFixed(1)}h/d`
                       : null;
                     const showLine2 = bounds.width >= 90 && line2 !== null;
                     const charBudget = Math.max(1, Math.floor(bounds.width / 7) - 1);
@@ -1921,13 +1830,13 @@ export default function ResourcePlannerPage() {
                                 {b.dayRate ? ` — €${b.dayRate.toLocaleString("de-DE")}/day` : ""}
                               </div>
                             )}
-                            <div className="text-gray-700">{b.hoursPerWeek.toFixed(1)}h/week</div>
+                            <div className="text-gray-700">{b.hoursPerDay % 1 === 0 ? b.hoursPerDay : b.hoursPerDay.toFixed(1)}h/day</div>
                             <div className="text-gray-700">
                               {format(parseISO(b.startDate), "MMM d")} –{" "}
                               {format(parseISO(b.endDate), "MMM d, yyyy")}
                             </div>
                             <div className="text-gray-700">
-                              Total: {(totalWeeks(b.startDate, b.endDate) * b.hoursPerWeek).toFixed(0)}h
+                              Total: {(countWeekdaysBetween(b.startDate, b.endDate) * b.hoursPerDay).toFixed(0)}h
                             </div>
                             {b.notes && (
                               <div className="text-gray-500 italic">{b.notes}</div>

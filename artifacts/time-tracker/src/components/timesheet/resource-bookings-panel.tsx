@@ -10,7 +10,7 @@ interface ResourceBooking {
   projectId: number;
   startDate: string;
   endDate: string;
-  hoursPerWeek: number;
+  hoursPerDay: number;
   notes: string | null;
   projectName: string;
   projectColor: string;
@@ -93,9 +93,13 @@ function BookingChip({ booking }: { booking: ResourceBooking }) {
       ? format(new Date(booking.startDate + "T00:00:00"), "MMM d")
       : `${format(new Date(booking.startDate + "T00:00:00"), "MMM d")} – ${format(new Date(booking.endDate + "T00:00:00"), "MMM d")}`;
 
+  const hpdLabel = booking.hoursPerDay % 1 === 0
+    ? `${booking.hoursPerDay} h/day`
+    : `${booking.hoursPerDay.toFixed(1)} h/day`;
+
   const tooltipLines = [
     label,
-    `${booking.hoursPerWeek} h/week`,
+    hpdLabel,
     dateRange,
     ...(booking.notes ? [booking.notes] : []),
   ].join("\n");
@@ -111,7 +115,7 @@ function BookingChip({ booking }: { booking: ResourceBooking }) {
       />
       <span className="truncate max-w-[18ch]">{booking.projectName}</span>
       <span className="text-muted-foreground shrink-0">
-        {booking.hoursPerWeek}h/wk
+        {booking.hoursPerDay % 1 === 0 ? booking.hoursPerDay : booking.hoursPerDay.toFixed(1)}h/d
       </span>
     </div>
   );
