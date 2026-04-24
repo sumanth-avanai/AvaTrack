@@ -8,9 +8,54 @@ import { PROJECT_COLORS } from "@workspace/api-zod";
 import { logger } from "./logger";
 
 export async function runStartupMigrations(): Promise<void> {
+  await migrateHoursPerWeekToHoursPerDay();
   await fixWorkingDaysMasks();
   await deleteZeroHourEntries();
   await backfillProjectColors();
+}
+
+/**
+ * Task #74: hoursPerWeek → hoursPerDay column migration.
+ *
+ * If `hours_per_week` still exists (environment not yet schema-pushed),
+ * add `hours_per_day`, backfill from `hours_per_week` using ÷5 rounding,
+ * then drop the old column.  If `hours_per_week` is already gone this is a
+ * complete no-op — safe to run on every boot.
+ */
+async function migrateHoursPerWeekToHoursPerDay(): Promise<void> {
+  try {
+    const result = await db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'resource_bookings'
+          AND column_name  = 'hours_per_week'
+      ) AS exists
+    `);
+
+    const rows = Array.isArray(result) ? result : (result as { rows: { exists: boolean }[] }).rows;
+    if (!rows[0]?.exists) return;
+
+    logger.info("startup-migration: backfilling hours_per_day from hours_per_week");
+
+    await db.execute(sql`
+      ALTER TABLE resource_bookings
+        ADD COLUMN IF NOT EXISTS hours_per_day REAL;
+
+      UPDATE resource_bookings
+        SET hours_per_day = ROUND(CAST(hours_per_week / 5.0 AS NUMERIC), 2)
+        WHERE hours_per_day IS NULL;
+
+      ALTER TABLE resource_bookings
+        ALTER COLUMN hours_per_day SET NOT NULL;
+
+      ALTER TABLE resource_bookings
+        DROP COLUMN IF EXISTS hours_per_week;
+    `);
+
+    logger.info("startup-migration: hours_per_day backfill complete");
+  } catch (err) {
+    logger.error({ err }, "startup-migration: migrateHoursPerWeekToHoursPerDay failed");
+  }
 }
 
 /**
