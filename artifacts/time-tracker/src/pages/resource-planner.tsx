@@ -514,6 +514,10 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
 
   // How many bookable days this booking consumes
   const thisBookingDays = bookingSummary ? bookingSummary.bookableDays : null;
+  // Budget is always in 8h-day equivalents: bookable days × hoursPerDay / 8
+  const thisBookingBudgetDays = thisBookingDays != null && hoursPerDay > 0
+    ? Math.round(thisBookingDays * (hoursPerDay / 8) * 10) / 10
+    : null;
   // Total hours = bookable days × hours/day
   const totalHours = thisBookingDays != null && hoursPerDay > 0
     ? thisBookingDays * hoursPerDay
@@ -800,7 +804,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
           {/* Role budget status box */}
           {roleId && roleBudgetStatus && (() => {
             const { budgetedDays, plannedDays, availableDays, bookings: roleBookings } = roleBudgetStatus;
-            const thisDays = thisBookingDays ?? 0;
+            const thisDays = thisBookingBudgetDays ?? 0;
 
             if (budgetedDays == null) {
               return (
