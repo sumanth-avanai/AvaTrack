@@ -834,10 +834,10 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                       setWeekdayHours({ "1": hoursPerDay, "2": hoursPerDay, "3": hoursPerDay, "4": hoursPerDay, "5": hoursPerDay });
                       setWeekdayMode(true);
                     } else {
-                      const avg = Math.round(Object.values(weekdayHours).reduce((s, h) => s + h, 0) / 5 * 10) / 10;
-                      const newHpd = avg > 0 ? avg : 8;
-                      setHoursPerDay(newHpd);
-                      setHoursPerDayInput(String(newHpd));
+                      // Exact average — no fallback; if 0, canSubmit stays false until user sets a value
+                      const avg = Object.values(weekdayHours).reduce((s, h) => s + h, 0) / 5;
+                      setHoursPerDay(avg);
+                      setHoursPerDayInput(String(avg));
                       setWeekdayMode(false);
                     }
                   }}
