@@ -515,8 +515,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   // How many bookable days this booking consumes
   const thisBookingDays = bookingSummary ? bookingSummary.bookableDays : null;
   // Budget is always in 8h-day equivalents: bookable days × hoursPerDay / 8
+  // Keep full 2dp precision so values like 8.75d and 19.25d are preserved
   const thisBookingBudgetDays = thisBookingDays != null && hoursPerDay > 0
-    ? Math.round(thisBookingDays * (hoursPerDay / 8) * 10) / 10
+    ? Math.round(thisBookingDays * (hoursPerDay / 8) * 100) / 100
     : null;
   // Total hours = bookable days × hours/day
   const totalHours = thisBookingDays != null && hoursPerDay > 0
@@ -815,7 +816,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
               );
             }
 
-            const afterDays = availableDays != null ? Math.round((availableDays - thisDays) * 10) / 10 : null;
+            const afterDays = availableDays != null ? Math.round((availableDays - thisDays) * 100) / 100 : null;
             const isOver = availableDays != null && thisDays > availableDays;
 
             return (
@@ -871,7 +872,7 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
                     {afterDays != null && (
                       <div className={`flex justify-between font-medium ${isOver ? "text-destructive" : "text-green-700 dark:text-green-400"}`}>
                         {isOver
-                          ? <><span>Over budget by</span><span>{Math.round(Math.abs(afterDays) * 10) / 10}d</span></>
+                          ? <><span>Over budget by</span><span>{Math.abs(afterDays)}d</span></>
                           : <><span>Remaining after</span><span>{afterDays}d</span></>
                         }
                       </div>
