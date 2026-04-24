@@ -646,6 +646,15 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
         const bOverlapStart = bs > ws ? bs : ws;
         const bOverlapEnd = be < weSunday ? be : weSunday;
         if (bOverlapStart > bOverlapEnd) return sum;
+        if (b.weekdayHours != null) {
+          let bHours = 0;
+          for (let d = new Date(bOverlapStart); d <= bOverlapEnd; d = addDays(d, 1)) {
+            const dow = d.getDay();
+            if (dow === 0 || dow === 6) continue;
+            bHours += b.weekdayHours[String(dow)] ?? 0;
+          }
+          return sum + bHours;
+        }
         const bWeekdays = countWeekdaysBetween(
           format(bOverlapStart, "yyyy-MM-dd"),
           format(bOverlapEnd, "yyyy-MM-dd")
