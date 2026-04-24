@@ -527,17 +527,37 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
     );
     const s = parseISO(startDate);
     const e = parseISO(endDate);
-    const nw = Math.ceil((differenceInDays(e, s) + 1) / 7);
-    const thisHpw = hoursPerDay * 5;
+    const dailyCapacity = capacity / 5;
+    const nw = Math.ceil((differenceInDays(e, s) + 1) / 7) + 1;
     for (let i = 0; i < nw; i++) {
       const ws = addWeeks(getMondayOfWeek(s), i);
-      const we = addDays(ws, 7);
+      const weSunday = addDays(ws, 6);
+
+      const newOverlapStart = s > ws ? s : ws;
+      const newOverlapEnd = e < weSunday ? e : weSunday;
+      if (newOverlapStart > newOverlapEnd) continue;
+
+      const thisWeekdays = countWeekdaysBetween(
+        format(newOverlapStart, "yyyy-MM-dd"),
+        format(newOverlapEnd, "yyyy-MM-dd")
+      );
+      const thisHours = thisWeekdays * hoursPerDay;
+      if (thisHours === 0) continue;
+
       const used = empBookings.reduce((sum, b) => {
         const bs = parseISO(b.startDate);
-        const be = addDays(parseISO(b.endDate), 1);
-        return bs < we && be > ws ? sum + b.hoursPerDay * 5 : sum;
+        const be = parseISO(b.endDate);
+        const bOverlapStart = bs > ws ? bs : ws;
+        const bOverlapEnd = be < weSunday ? be : weSunday;
+        if (bOverlapStart > bOverlapEnd) return sum;
+        const bWeekdays = countWeekdaysBetween(
+          format(bOverlapStart, "yyyy-MM-dd"),
+          format(bOverlapEnd, "yyyy-MM-dd")
+        );
+        return sum + bWeekdays * b.hoursPerDay;
       }, 0);
-      if (used + thisHpw > capacity) return true;
+
+      if (used + thisHours > thisWeekdays * dailyCapacity) return true;
     }
     return false;
   }, [startDate, endDate, hoursPerDay, allBookings, employeeId, capacity, isEdit, state]);
