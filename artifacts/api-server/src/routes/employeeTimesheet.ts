@@ -120,14 +120,20 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
     ? employeeRow.workingDaysMask.split(",").map(Number)
     : [1, 1, 1, 1, 1, 0, 0];
 
-  // Count working days (per employee mask) in [overlapStart, overlapEnd]
-  function countWorkingDaysInRange(rangeStart: string, rangeEnd: string): number {
+  // Count working days (per employee mask, deducting holidays and vacations) in [rangeStart, rangeEnd]
+  function countWorkingDaysInRange(
+    rangeStart: string,
+    rangeEnd: string,
+    holidaySet: Set<string> = new Set(),
+    vacationSet: Set<string> = new Set(),
+  ): number {
     let count = 0;
     const start = new Date(rangeStart + "T00:00:00Z");
-    const end = new Date(rangeEnd + "T00:00:00Z");
+    const end   = new Date(rangeEnd   + "T00:00:00Z");
     for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
-      const isoDay = d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1;
-      if (workMask[isoDay]) count++;
+      const isoDay  = d.getUTCDay() === 0 ? 6 : d.getUTCDay() - 1;
+      const dateStr = d.toISOString().slice(0, 10);
+      if (workMask[isoDay] && !holidaySet.has(dateStr) && !vacationSet.has(dateStr)) count++;
     }
     return count;
   }
@@ -181,6 +187,64 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
       )
     );
 
+  // ── Fetch vacations overlapping this week (needed for plannedHours + response) ──
+  const vacations = await db
+    .select({
+      id: employeeVacationsTable.id,
+      startDate: employeeVacationsTable.startDate,
+      endDate: employeeVacationsTable.endDate,
+      vacationType: employeeVacationsTable.vacationType,
+      note: employeeVacationsTable.note,
+    })
+    .from(employeeVacationsTable)
+    .where(
+      and(
+        eq(employeeVacationsTable.employeeId, employeeId),
+        lte(employeeVacationsTable.startDate, weekEnd),
+        gte(employeeVacationsTable.endDate, weekStart)
+      )
+    );
+
+  // ── Fetch public holidays for this week (needed for plannedHours + response) ──
+  let holidays: { id: number; calendarId: number; date: string; name: string }[] = [];
+  if (employeeRow.holidayCalendarCode) {
+    const [cal] = await db
+      .select({ id: holidayCalendarsTable.id })
+      .from(holidayCalendarsTable)
+      .where(eq(holidayCalendarsTable.code, employeeRow.holidayCalendarCode));
+
+    if (cal) {
+      const weekHolidays = await db
+        .select()
+        .from(holidaysTable)
+        .where(
+          and(
+            eq(holidaysTable.calendarId, cal.id),
+            gte(holidaysTable.date, weekStart),
+            lte(holidaysTable.date, weekEnd)
+          )
+        );
+      holidays = weekHolidays.map((h) => ({
+        id: h.id,
+        calendarId: h.calendarId,
+        date: String(h.date).slice(0, 10),
+        name: h.name,
+      }));
+    }
+  }
+
+  // Build sets for fast O(1) lookup in countWorkingDaysInRange
+  const weekHolidaySet  = new Set(holidays.map((h) => h.date));
+  const weekVacationSet = new Set<string>();
+  for (const v of vacations) {
+    const cur = new Date(String(v.startDate).slice(0, 10) + "T00:00:00Z");
+    const end = new Date(String(v.endDate).slice(0, 10)   + "T00:00:00Z");
+    while (cur <= end) {
+      weekVacationSet.add(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+  }
+
   // Build prefilled set: one entry per (project, role) — from bookings first, then existing entries
   // key: "projectId::roleId|null"
   const prefilledMap = new Map<string, {
@@ -207,10 +271,10 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
   // Add bookings
   for (const b of bookings) {
     const k = rowKey(b.projectId, b.projectRoleId ?? null);
-    // Planned hours = hoursPerDay × working days in the overlap of this booking and the current week
+    // Planned hours = hoursPerDay × working days (minus holidays + vacations) in the overlap with this week
     const overlapStart = b.startDate > weekStart ? String(b.startDate).slice(0, 10) : weekStart;
-    const overlapEnd = b.endDate < weekEnd ? String(b.endDate).slice(0, 10) : weekEnd;
-    const workingDaysInWeek = countWorkingDaysInRange(overlapStart, overlapEnd);
+    const overlapEnd   = b.endDate   < weekEnd   ? String(b.endDate).slice(0, 10)   : weekEnd;
+    const workingDaysInWeek = countWorkingDaysInRange(overlapStart, overlapEnd, weekHolidaySet, weekVacationSet);
     const plannedForWeek = workingDaysInWeek * b.hoursPerDay;
     if (!prefilledMap.has(k)) {
       prefilledMap.set(k, {
@@ -255,52 +319,6 @@ router.get("/employee-timesheet/:employeeId/week/:weekStart", async (req, res): 
   const prefilled = Array.from(prefilledMap.values()).sort((a, b) =>
     a.projectName.localeCompare(b.projectName) || (a.roleName ?? "").localeCompare(b.roleName ?? "")
   );
-
-  // ── Fetch vacations overlapping this week ─────────────────────────────────
-  const vacations = await db
-    .select({
-      id: employeeVacationsTable.id,
-      startDate: employeeVacationsTable.startDate,
-      endDate: employeeVacationsTable.endDate,
-      vacationType: employeeVacationsTable.vacationType,
-      note: employeeVacationsTable.note,
-    })
-    .from(employeeVacationsTable)
-    .where(
-      and(
-        eq(employeeVacationsTable.employeeId, employeeId),
-        lte(employeeVacationsTable.startDate, weekEnd),
-        gte(employeeVacationsTable.endDate, weekStart)
-      )
-    );
-
-  // ── Fetch public holidays for this week (if employee has a calendar) ───────
-  let holidays: { id: number; calendarId: number; date: string; name: string }[] = [];
-  if (employeeRow.holidayCalendarCode) {
-    const [cal] = await db
-      .select({ id: holidayCalendarsTable.id })
-      .from(holidayCalendarsTable)
-      .where(eq(holidayCalendarsTable.code, employeeRow.holidayCalendarCode));
-
-    if (cal) {
-      const weekHolidays = await db
-        .select()
-        .from(holidaysTable)
-        .where(
-          and(
-            eq(holidaysTable.calendarId, cal.id),
-            gte(holidaysTable.date, weekStart),
-            lte(holidaysTable.date, weekEnd)
-          )
-        );
-      holidays = weekHolidays.map((h) => ({
-        id: h.id,
-        calendarId: h.calendarId,
-        date: String(h.date).slice(0, 10),
-        name: h.name,
-      }));
-    }
-  }
 
   res.json({
     employee: employeeRow,

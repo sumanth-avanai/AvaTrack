@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
@@ -9,23 +9,51 @@ import {
   resourceBookingsTable,
   employeesTable,
 } from "@workspace/db";
+import { fetchEmpAvailabilityMap, type EmpAvailability } from "../lib/employee-availability";
 
 const router: IRouter = Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function countWeekdays(startStr: string, endStr: string): number {
-  const start = new Date(startStr + "T00:00:00Z");
-  const end = new Date(endStr + "T00:00:00Z");
-  const totalDays = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
-  const fullWeeks = Math.floor(totalDays / 7);
-  const remaining = totalDays % 7;
-  let weekdays = fullWeeks * 5;
-  const startDow = start.getUTCDay();
-  for (let i = 0; i < remaining; i++) {
-    const dow = (startDow + i) % 7;
-    if (dow !== 0 && dow !== 6) weekdays++;
+
+/**
+ * Count Mon-Fri weekdays in [startStr, endStr] (inclusive), deducting
+ * public holidays and employee vacation days.
+ */
+function countBookableDays(
+  startStr: string,
+  endStr: string,
+  holidayDates: string[] = [],
+  vacationDateSet: Set<string> = new Set(),
+): number {
+  const holidaySet = new Set(holidayDates);
+  let count = 0;
+  const d = new Date(startStr + "T00:00:00Z");
+  const e = new Date(endStr   + "T00:00:00Z");
+  while (d <= e) {
+    const dow     = d.getUTCDay();
+    const dateStr = d.toISOString().slice(0, 10);
+    if (dow !== 0 && dow !== 6 && !holidaySet.has(dateStr) && !vacationDateSet.has(dateStr)) {
+      count++;
+    }
+    d.setUTCDate(d.getUTCDate() + 1);
   }
-  return weekdays;
+  return count;
+}
+
+/**
+ * Fetch holiday + vacation availability for all employees referenced by a
+ * list of bookings, covering the union of their date ranges.
+ * Returns a Map<employeeId, EmpAvailability> (same shape as fetchEmpAvailabilityMap).
+ */
+async function getAvailMapForBookings(
+  bookings: Array<{ employeeId: number; startDate: string; endDate: string }>,
+): Promise<Map<number, EmpAvailability>> {
+  if (bookings.length === 0) return new Map();
+  const uniqueIds   = [...new Set(bookings.map((b) => b.employeeId))];
+  const periodStart = bookings.reduce((m, b) => (b.startDate < m ? b.startDate : m), bookings[0].startDate);
+  const periodEnd   = bookings.reduce((m, b) => (b.endDate   > m ? b.endDate   : m), bookings[0].endDate);
+  const employees   = await db.select().from(employeesTable).where(inArray(employeesTable.id, uniqueIds));
+  return fetchEmpAvailabilityMap(employees, periodStart, periodEnd);
 }
 
 // ── Validation schemas ────────────────────────────────────────────────────────
@@ -208,10 +236,15 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
   const employeeMap = new Map<number, { employeeName: string; days: number }>();
   let totalPlannedDays = 0;
 
+  const availMap = await getAvailMapForBookings(
+    roleBookings.filter((b) => excludeBookingId == null || b.id !== excludeBookingId)
+  );
+
   for (const b of roleBookings) {
     if (excludeBookingId != null && b.id === excludeBookingId) continue;
-    const weekdays = countWeekdays(b.startDate, b.endDate);
-    const days = weekdays * (b.hoursPerDay / 8);
+    const avail    = availMap.get(b.employeeId);
+    const bookable = countBookableDays(b.startDate, b.endDate, avail?.holidayDates, avail?.vacationDateSet);
+    const days = bookable * (b.hoursPerDay / 8);
 
     totalPlannedDays += days;
 
@@ -267,14 +300,15 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
     )
     .groupBy(timeEntriesTable.projectRoleId);
 
-  // Fetch individual bookings to compute planned days using weekday-count formula:
-  // plannedDays = sum over bookings of (weekdays * hoursPerDay / 8)
+  // Fetch individual bookings to compute planned days using bookable-day formula:
+  // plannedDays = sum over bookings of (bookableDays(minus holidays+vacations) * hoursPerDay / 8)
   const plannedBookings = await db
     .select({
       projectRoleId: resourceBookingsTable.projectRoleId,
-      startDate: resourceBookingsTable.startDate,
-      endDate: resourceBookingsTable.endDate,
-      hoursPerDay: resourceBookingsTable.hoursPerDay,
+      employeeId:    resourceBookingsTable.employeeId,
+      startDate:     resourceBookingsTable.startDate,
+      endDate:       resourceBookingsTable.endDate,
+      hoursPerDay:   resourceBookingsTable.hoursPerDay,
     })
     .from(resourceBookingsTable)
     .where(
@@ -286,12 +320,15 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
 
   const bookedMap = new Map<number, number>(bookedRows.map((r) => [r.projectRoleId!, r.totalHours]));
 
-  // Compute planned hours per role using weekday count formula
+  const plannedAvailMap = await getAvailMapForBookings(plannedBookings);
+
+  // Compute planned hours per role using bookable-day count (holidays + vacations deducted)
   const plannedMap = new Map<number, number>();
   for (const b of plannedBookings) {
     if (b.projectRoleId == null) continue;
-    const weekdays = countWeekdays(b.startDate, b.endDate);
-    const hours = weekdays * b.hoursPerDay;
+    const avail    = plannedAvailMap.get(b.employeeId);
+    const bookable = countBookableDays(b.startDate, b.endDate, avail?.holidayDates, avail?.vacationDateSet);
+    const hours = bookable * b.hoursPerDay;
     plannedMap.set(b.projectRoleId, (plannedMap.get(b.projectRoleId) ?? 0) + hours);
   }
 
@@ -408,11 +445,14 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
   }
   const allocMap = new Map<string, AllocationAccum>();
 
+  const allocAvailMap = await getAvailMapForBookings(bookingRows.filter((b) => b.projectRoleId != null));
+
   for (const b of bookingRows) {
     if (b.projectRoleId == null) continue;
-    const key = `${b.projectRoleId}:${b.employeeId}`;
-    const weekdays = countWeekdays(b.startDate, b.endDate);
-    const days = weekdays * (b.hoursPerDay / 8);
+    const key      = `${b.projectRoleId}:${b.employeeId}`;
+    const avail    = allocAvailMap.get(b.employeeId);
+    const bookable = countBookableDays(b.startDate, b.endDate, avail?.holidayDates, avail?.vacationDateSet);
+    const days = bookable * (b.hoursPerDay / 8);
 
     const existing = allocMap.get(key);
     if (existing) {
