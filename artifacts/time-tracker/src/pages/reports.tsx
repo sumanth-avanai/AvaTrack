@@ -673,7 +673,7 @@ export default function Reports() {
             onClick={() => exportCSV(employeeRows, teamTotals, metricsVisible, startDate, endDate)}
           >
             <Download className="h-4 w-4" />
-            Export
+            Export CSV
           </Button>
         </div>
 
