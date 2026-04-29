@@ -1881,14 +1881,14 @@ export default function ResourcePlannerPage() {
           {activeEmployees.map((emp: any) => {
             const empBookings = bookingsByEmployee[emp.id] ?? [];
             const cap: number = emp.weeklyCapacityHours ?? 40;
-            const laned = assignLanes(empBookings);
+            const visibleBookings = empBookings.filter(
+              (b) => getBarBounds(b.startDate, b.endDate, windowStart, numWeeks, cellWidth) !== null
+            );
+            const laned = assignLanes(visibleBookings);
             const laneCount = laned.length > 0 ? Math.max(...laned.map((b) => b.lane)) + 1 : 0;
             const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
             const rowHeight = calcRowHeight(laneCount);
-            const hiddenCount = laned.filter((b) => {
-              if (b.lane < MAX_VISIBLE_LANES) return false;
-              return getBarBounds(b.startDate, b.endDate, windowStart, numWeeks, cellWidth) !== null;
-            }).length;
+            const hiddenCount = laned.filter((b) => b.lane >= MAX_VISIBLE_LANES).length;
 
             return (
               <div
