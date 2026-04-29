@@ -100,6 +100,43 @@ const NAV_WEEKS: Record<ZoomLevel, number> = { month: 4, quarter: 13, year: 26 }
 const EMPLOYEE_COL = 200;
 const ROW_HEIGHT = 40;
 
+// ── Bar stacking helpers ────────────────────────────────────────────────────────
+const BAR_H_SINGLE = 22;
+const BAR_H_STACKED = 16;
+const BAR_GAP = 2;
+const BAR_PAD_TOP = 4;
+const MAX_VISIBLE_LANES = 3;
+
+function assignLanes(bookings: ResourceBookingFull[]): (ResourceBookingFull & { lane: number })[] {
+  const sorted = [...bookings].sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const laneEnds: string[] = [];
+  return sorted.map((b) => {
+    let laneIdx = laneEnds.findIndex((endDate) => b.startDate >= endDate);
+    if (laneIdx === -1) { laneIdx = laneEnds.length; }
+    laneEnds[laneIdx] = b.endDate;
+    return { ...b, lane: laneIdx };
+  });
+}
+
+function calcRowHeight(laneCount: number): number {
+  if (laneCount <= 1) return ROW_HEIGHT;
+  const visible = Math.min(laneCount, MAX_VISIBLE_LANES);
+  const hasMore = laneCount > MAX_VISIBLE_LANES;
+  return Math.max(
+    ROW_HEIGHT,
+    BAR_PAD_TOP + visible * BAR_H_STACKED + (visible - 1) * BAR_GAP + BAR_PAD_TOP + (hasMore ? 16 : 0)
+  );
+}
+
+function darkenColor(hex: string): string {
+  const c = hex.replace("#", "");
+  if (c.length !== 6) return hex;
+  const [r, g, b] = [0, 2, 4].map((i) =>
+    Math.max(0, parseInt(c.slice(i, i + 2), 16) - 50)
+  );
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 // ── API hooks ──────────────────────────────────────────────────────────────────
 function useResourceBookings() {
   return useQuery<ResourceBookingFull[]>({
@@ -1844,17 +1881,22 @@ export default function ResourcePlannerPage() {
           {activeEmployees.map((emp: any) => {
             const empBookings = bookingsByEmployee[emp.id] ?? [];
             const cap: number = emp.weeklyCapacityHours ?? 40;
+            const laned = assignLanes(empBookings);
+            const laneCount = laned.length > 0 ? Math.max(...laned.map((b) => b.lane)) + 1 : 0;
+            const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
+            const rowHeight = calcRowHeight(laneCount);
+            const hiddenCount = Math.max(0, laneCount - MAX_VISIBLE_LANES);
 
             return (
               <div
                 key={emp.id}
                 className="flex border-b border-border group"
-                style={{ minHeight: ROW_HEIGHT }}
+                style={{ minHeight: rowHeight }}
               >
                 {/* Employee info — sticky left */}
                 <div
                   className="sticky left-0 z-10 bg-card border-r border-border shrink-0 flex items-center gap-1 px-3"
-                  style={{ width: EMPLOYEE_COL, height: ROW_HEIGHT }}
+                  style={{ width: EMPLOYEE_COL, height: rowHeight }}
                 >
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1881,7 +1923,7 @@ export default function ResourcePlannerPage() {
                 {/* Timeline area */}
                 <div
                   className="relative flex-1"
-                  style={{ width: contentWidth, minHeight: ROW_HEIGHT }}
+                  style={{ width: contentWidth, minHeight: rowHeight }}
                   onClick={(e) => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const offsetX = e.clientX - rect.left;
@@ -1976,8 +2018,9 @@ export default function ResourcePlannerPage() {
                     );
                   })}
 
-                  {/* Booking bars */}
-                  {empBookings.map((b) => {
+                  {/* Booking bars — stacked by lane */}
+                  {laned.map((b) => {
+                    if (b.lane >= MAX_VISIBLE_LANES) return null;
                     const bounds = getBarBounds(
                       b.startDate,
                       b.endDate,
@@ -1987,39 +2030,35 @@ export default function ResourcePlannerPage() {
                     );
                     if (!bounds) return null;
                     const color = resolveProjectColor(b.projectId, b.projectColor);
-
-                    const line1 = b.clientName
-                      ? `${b.clientName} – ${b.projectName}`
-                      : b.projectName;
-                    const line2 = b.projectRoleName
-                      ? `${b.projectRoleName} | ${b.hoursPerDay % 1 === 0 ? b.hoursPerDay : b.hoursPerDay.toFixed(1)}h/d`
-                      : null;
-                    const showLine2 = bounds.width >= 90 && line2 !== null;
+                    const barTop = BAR_PAD_TOP + b.lane * (barH + BAR_GAP);
+                    const hpd = b.hoursPerDay % 1 === 0 ? String(b.hoursPerDay) : b.hoursPerDay.toFixed(1);
+                    const label = [
+                      b.clientName ? `${b.clientName} – ${b.projectName}` : b.projectName,
+                      b.projectRoleName,
+                      `${hpd}h/d`,
+                    ].filter(Boolean).join(" | ");
                     const charBudget = Math.max(1, Math.floor(bounds.width / 7) - 1);
 
                     return (
                       <Tooltip key={b.id}>
                         <TooltipTrigger asChild>
                           <div
-                            className="absolute cursor-pointer rounded-md flex flex-col justify-center px-2 overflow-hidden shadow-sm hover:brightness-90 transition-all"
+                            className="absolute cursor-pointer rounded-sm flex items-center px-2 overflow-hidden shadow-sm hover:brightness-90 transition-all"
                             style={{
-                              top: 4,
-                              height: 32,
+                              top: barTop,
+                              height: barH,
                               left: bounds.left,
                               width: bounds.width,
                               backgroundColor: color,
+                              borderLeft: `3px solid ${darkenColor(color)}`,
+                              opacity: 0.9,
                               zIndex: 4,
                             }}
                             onClick={(e) => { e.stopPropagation(); openEditModal(b); }}
                           >
-                            {bounds.width > 12 && (
-                              <div className="text-white text-xs font-semibold leading-tight truncate">
-                                {line1.length <= charBudget ? line1 : line1.slice(0, charBudget) + "…"}
-                              </div>
-                            )}
-                            {showLine2 && (
-                              <div className="text-white/75 text-[10px] leading-tight truncate">
-                                {line2}
+                            {bounds.width > 16 && (
+                              <div className="text-white text-[10px] font-semibold leading-none truncate">
+                                {label.length <= charBudget ? label : label.slice(0, charBudget) + "…"}
                               </div>
                             )}
                           </div>
@@ -2044,7 +2083,7 @@ export default function ResourcePlannerPage() {
                                 {b.dayRate ? ` — €${b.dayRate.toLocaleString("de-DE")}/day` : ""}
                               </div>
                             )}
-                            <div className="text-gray-700">{b.hoursPerDay % 1 === 0 ? b.hoursPerDay : b.hoursPerDay.toFixed(1)}h/day</div>
+                            <div className="text-gray-700">{hpd}h/day</div>
                             <div className="text-gray-700">
                               {format(parseISO(b.startDate), "MMM d")} –{" "}
                               {format(parseISO(b.endDate), "MMM d, yyyy")}
@@ -2077,6 +2116,20 @@ export default function ResourcePlannerPage() {
                       </Tooltip>
                     );
                   })}
+
+                  {/* "+N more" indicator for overflowing lanes */}
+                  {hiddenCount > 0 && (
+                    <div
+                      className="absolute text-[10px] text-muted-foreground select-none pointer-events-none px-1"
+                      style={{
+                        top: BAR_PAD_TOP + MAX_VISIBLE_LANES * (BAR_H_STACKED + BAR_GAP),
+                        left: 4,
+                        zIndex: 4,
+                      }}
+                    >
+                      +{hiddenCount} more
+                    </div>
+                  )}
 
                   {/* Today line in row */}
                   {todayOffset !== null && (
