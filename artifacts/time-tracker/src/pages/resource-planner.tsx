@@ -111,7 +111,7 @@ function assignLanes(bookings: ResourceBookingFull[]): (ResourceBookingFull & { 
   const sorted = [...bookings].sort((a, b) => a.startDate.localeCompare(b.startDate));
   const laneEnds: string[] = [];
   return sorted.map((b) => {
-    let laneIdx = laneEnds.findIndex((endDate) => b.startDate >= endDate);
+    let laneIdx = laneEnds.findIndex((endDate) => b.startDate > endDate);
     if (laneIdx === -1) { laneIdx = laneEnds.length; }
     laneEnds[laneIdx] = b.endDate;
     return { ...b, lane: laneIdx };
