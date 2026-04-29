@@ -1,0 +1,162 @@
+Ich sehe das Problem – bei Sascha und Willi z.B. überlappen sich die Balken horizontal, aber sie werden nebeneinander gequetscht statt übereinander gestapelt.
+
+---
+
+```
+UI IMPROVEMENT: Resource Planner - Thinner bars with stacking
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== PROBLEM ===
+
+Current: Bars are too thick, overlapping bookings get squeezed side-by-side
+Example: Sascha Seegebarth has 2 projects but they're cut off
+
+=== SOLUTION: Stacked thin bars ===
+
+```
+CURRENT (thick, side-by-side):
+┌─────────────────────────────────────┐
+│ Sascha │████████████│██████████████│  <- squeezed, text cut off
+└─────────────────────────────────────┘
+
+NEW (thin, stacked):
+┌─────────────────────────────────────┐
+│ Sascha │▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄│  <- Project 1 (full width)
+│        │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄│  <- Project 2 (below)
+└─────────────────────────────────────┘
+```
+
+=== BAR HEIGHT ===
+
+- Single booking: 24px height
+- Multiple bookings: 16px each, stacked vertically
+- Max visible: 3 bars, then "+2 more" indicator
+- Row height expands to fit (min 40px, max 80px)
+
+=== BAR STYLING ===
+
+```css
+.booking-bar {
+  height: 20px;           /* thinner */
+  border-radius: 4px;
+  margin-bottom: 2px;     /* gap between stacked bars */
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.booking-bar-stacked {
+  height: 16px;           /* even thinner when stacked */
+  font-size: 10px;
+}
+```
+
+=== HOVER BEHAVIOR ===
+
+On hover, show full details in tooltip:
+```
+┌─────────────────────────────────┐
+│ Bayer – FOSM - Future of ...   │
+│ Senior Forward Deployed Eng.   │
+│ 01.04.2026 – 30.06.2026        │
+│ 4.8h/d                         │
+└─────────────────────────────────┘
+```
+
+=== BAR CONTENT (condensed) ===
+
+Single line format:
+```
+[Project] Role | h/d
+```
+
+Example:
+```
+Bayer – n8n ext. | Eng. Manager | 3.2h/d
+```
+
+If too long, truncate with ellipsis.
+
+=== STACKING LOGIC ===
+
+```javascript
+function stackBookings(bookings, rowWidth) {
+  // Sort by start date
+  const sorted = bookings.sort((a, b) => a.startDate - b.startDate);
+  
+  // Assign vertical lanes
+  const lanes = [];
+  sorted.forEach(booking => {
+    // Find first lane where booking fits (no overlap)
+    let laneIndex = lanes.findIndex(lane => 
+      lane.every(b => booking.startDate >= b.endDate || booking.endDate <= b.startDate)
+    );
+    
+    if (laneIndex === -1) {
+      laneIndex = lanes.length;
+      lanes.push([]);
+    }
+    
+    lanes[laneIndex].push(booking);
+    booking.lane = laneIndex;
+  });
+  
+  return lanes;
+}
+```
+
+=== OVERFLOW INDICATOR ===
+
+If more than 3 overlapping bookings:
+```
+│ ▄▄▄▄▄▄▄▄▄▄ Project 1       │
+│ ▄▄▄▄▄▄▄▄▄▄ Project 2       │
+│ ▄▄▄▄▄▄▄▄▄▄ Project 3       │
+│ +2 more                    │  <- clickable, expands row
+```
+
+=== COLOR CODING ===
+
+Keep project colors, but add:
+- Border left: 3px solid (darker shade) for visual anchor
+- Opacity: 90% for better overlap visibility
+
+```css
+.booking-bar {
+  background: var(--project-color);
+  border-left: 3px solid var(--project-color-dark);
+  opacity: 0.9;
+}
+```
+
+=== ROW HEIGHT ADJUSTMENT ===
+
+```javascript
+function calculateRowHeight(bookings) {
+  const maxOverlap = getMaxOverlappingBookings(bookings);
+  const barHeight = maxOverlap > 1 ? 16 : 24;
+  const gap = 2;
+  const padding = 8;
+  
+  const visibleBars = Math.min(maxOverlap, 3);
+  return padding + (visibleBars * barHeight) + ((visibleBars - 1) * gap) + padding;
+}
+```
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Check |
+|---|-------|
+| 1 | Overlapping bookings stack vertically, not side-by-side |
+| 2 | Bars are thinner (16-24px instead of 40px+) |
+| 3 | Max 3 visible bars, then "+N more" indicator |
+| 4 | Hover shows full booking details |
+| 5 | Row height adjusts dynamically |
+| 6 | Text truncates with ellipsis, no overflow |
+```
+
+---
+
+Soll ich noch andere UI-Punkte mit aufnehmen?

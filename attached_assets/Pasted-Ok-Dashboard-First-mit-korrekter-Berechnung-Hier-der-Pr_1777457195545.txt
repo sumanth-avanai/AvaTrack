@@ -1,0 +1,181 @@
+Ok, Dashboard-First mit korrekter Berechnung. Hier der Prompt:
+
+---
+
+```
+REDESIGN: Reports View - Dashboard First with correct calculations
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== NEW LAYOUT ===
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Team Overview              [This Week ▼]  [Saved ▼]  [Export]  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌────────────┐    ┌────────────┐    ┌────────────┐            │
+│   │    72%     │    │    65%     │    │   480h     │            │
+│   │ Allocation │    │Utilization │    │ Available  │            │
+│   └────────────┘    └────────────┘    └────────────┘            │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│ Filters: All employees ✕  All projects ✕  [+ Add]              │
+│ Metrics: Available ✕  Allocation % ✕  Utilization % ✕  [+ Add] │
+├─────────────────────────────────────────────────────────────────┤
+│ NAME           │ AVAILABLE │ PLANNED │ ALLOC % │ LOGGED │ UTIL %│
+│────────────────│───────────│─────────│─────────│────────│───────│
+│ Regina Strobl  │    16h    │    8h   │   50%   │   8h   │  50%  │
+│ Keshav Reddy   │    32h    │   24h   │   75%   │    —   │   0%  │
+│ Midhun Jose    │    16h    │     —   │    0%   │    —   │   0%  │
+│────────────────│───────────│─────────│─────────│────────│───────│
+│ TOTAL          │    64h    │   32h   │   50%   │   8h   │ 12.5% │
+└─────────────────────────────────────────────────────────────────┘
+
+=== KPI CARDS CALCULATION (CRITICAL!) ===
+
+The top KPI cards must show TEAM AVERAGES, not sums!
+
+```javascript
+// WRONG ❌
+const allocationPercent = employees.reduce((sum, e) => sum + e.allocationPercent, 0);
+// This sums percentages (50% + 75% + 0% = 125%) - WRONG!
+
+// CORRECT ✓
+const totalAvailable = employees.reduce((sum, e) => sum + e.available, 0);
+const totalPlanned = employees.reduce((sum, e) => sum + e.planned, 0);
+const totalLogged = employees.reduce((sum, e) => sum + e.logged, 0);
+
+const teamAllocationPercent = totalAvailable > 0 
+  ? (totalPlanned / totalAvailable) * 100 
+  : 0;
+
+const teamUtilizationPercent = totalAvailable > 0 
+  ? (totalLogged / totalAvailable) * 100 
+  : 0;
+```
+
+Example:
+| Employee | Available | Planned | Logged |
+|----------|-----------|---------|--------|
+| Regina   | 16h       | 8h      | 8h     |
+| Keshav   | 32h       | 24h     | 0h     |
+| Midhun   | 16h       | 0h      | 0h     |
+| **TOTAL**| **64h**   | **32h** | **8h** |
+
+Team Allocation % = 32h / 64h = **50%** ✓
+Team Utilization % = 8h / 64h = **12.5%** ✓
+
+=== KPI CARDS ===
+
+Show 3 cards:
+
+1. **Allocation** (Planned ÷ Available)
+   - Color: Green 70-100%, Yellow <70%, Red >100%
+   
+2. **Utilization** (Logged ÷ Available)
+   - Color: Green 70-100%, Yellow <70%, Red >100%
+   
+3. **Available** (Total hours in period)
+   - Always neutral color
+
+=== LIVE UPDATE ===
+
+- Remove "Generate Report" button
+- All changes update immediately:
+  - Period change → recalculate
+  - Filter change → recalculate
+  - Metric toggle → update columns
+
+=== PERIOD SELECTOR ===
+
+Dropdown with presets + custom:
+- This Week
+- Last Week
+- This Month
+- Last Month
+- This Quarter
+- Last Quarter
+- Custom: [From] – [To]
+
+=== FILTERS (as chips) ===
+
+```
+Filters: All employees ✕  All projects ✕  [+ Add]
+```
+
+Click "+ Add" shows dropdown:
+- Employee: [multi-select]
+- Project: [multi-select]
+- Client: [multi-select]
+
+=== METRICS (as chips) ===
+
+```
+Metrics: Available ✕  Allocation % ✕  [+ Add]
+```
+
+Available metrics:
+- Available
+- Planned
+- Logged
+- Allocation %
+- Utilization %
+
+Default selection: Available, Planned, Allocation %, Logged, Utilization %
+
+=== SAVED REPORTS ===
+
+Move to header dropdown:
+```
+[Saved ▼]
+  ├─ Uti Last Quarter
+  ├─ Team Overview Q1
+  └─ + Save current view
+```
+
+=== TABLE FOOTER (TOTALS) ===
+
+Always show totals row at bottom:
+
+```javascript
+const totals = {
+  available: sum(employees.map(e => e.available)),
+  planned: sum(employees.map(e => e.planned)),
+  logged: sum(employees.map(e => e.logged)),
+  allocationPercent: totals.planned / totals.available * 100,
+  utilizationPercent: totals.logged / totals.available * 100
+};
+```
+
+=== EMPTY STATES ===
+
+- No data: Show "—" not "0h" or "0%"
+- 0% utilization with available hours: Show "0%" (this is valid data)
+- No available hours: Show "—" for percentages (avoid divide by zero)
+
+=== COLOR CODING ===
+
+| Value | Color |
+|-------|-------|
+| — | Grey |
+| 0% | Grey |
+| 1-69% | Yellow/Orange |
+| 70-100% | Green |
+| >100% | Red |
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Check |
+|---|-------|
+| 1 | KPI cards show correct team percentages (not sum of individual %) |
+| 2 | Total row calculates % from totals, not average of % |
+| 3 | Live update on any filter/period change |
+| 4 | No "Generate Report" button |
+| 5 | Saved reports in header dropdown |
+| 6 | Filters and metrics as removable chips |
+| 7 | Period dropdown with presets |
+```
+
+---
+
+Soll ich noch was ergänzen?
