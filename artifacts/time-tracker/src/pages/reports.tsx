@@ -141,6 +141,8 @@ const ALL_METRICS: MetricDef[] = [
 
 const DEFAULT_METRICS = ["target", "planned", "allocation_pct", "logged", "utilization_pct"];
 
+const VALID_PRESETS = new Set<string>(Object.keys(PRESET_LABELS));
+
 const PCT_METRICS = new Set(["allocation_pct", "utilization_pct"]);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -255,8 +257,7 @@ function exportCSV(
   const fmtRow = (row: EmployeeRow) => {
     const cells: string[] = [`"${row.name}"`];
     for (const m of activeMetrics) {
-      const v = row[m.key as keyof EmployeeRow] as number | null;
-      cells.push(fmtMetric(m.key, v));
+      cells.push(fmtMetric(m.key, getCellValue(row, m.key)));
     }
     return cells.join(",");
   };
@@ -391,6 +392,19 @@ function MetricChips({ active, onChange }: MetricChipsProps) {
   );
 }
 
+// ─── Cell value helper (standalone so exportCSV can also use it) ──────────────
+
+function getCellValue(row: EmployeeRow, key: string): number | null {
+  switch (key) {
+    case "target":          return row.target;
+    case "planned":         return row.planned > 0 ? row.planned : null;
+    case "logged":          return row.logged  > 0 ? row.logged  : null;
+    case "allocation_pct":  return row.allocationPct;
+    case "utilization_pct": return row.utilizationPct;
+    default: return null;
+  }
+}
+
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 
 interface KpiCardProps {
@@ -420,7 +434,6 @@ export default function Reports() {
   const [filterEmployees, setFilterEmployees] = useState<number[]>([]);
   const [filterProjects, setFilterProjects]   = useState<number[]>([]);
   const [filterClients, setFilterClients]     = useState<number[]>([]);
-  const [customOpen, setCustomOpen] = useState(false);
 
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveName, setSaveName]             = useState("");
@@ -477,7 +490,8 @@ export default function Reports() {
   const handleLoadReport = (row: SavedReportRow) => {
     try {
       const cfg: ReportConfig = JSON.parse(row.config);
-      const p = (cfg.preset ?? "this_month") as Preset;
+      const rawPreset = cfg.preset ?? "this_month";
+      const p: Preset = VALID_PRESETS.has(rawPreset) ? (rawPreset as Preset) : "this_month";
       const ms = cfg.metrics ?? (cfg.metric ? [cfg.metric] : DEFAULT_METRICS);
       const validMs = ms.filter((k) => ALL_METRICS.some((m) => m.key === k));
       setPreset(p);
@@ -547,17 +561,6 @@ export default function Reports() {
     () => ALL_METRICS.filter((m) => activeMetrics.includes(m.key)),
     [activeMetrics],
   );
-
-  function getCellValue(row: EmployeeRow, key: string): number | null {
-    switch (key) {
-      case "target":          return row.target;
-      case "planned":         return row.planned > 0 ? row.planned : null;
-      case "logged":          return row.logged  > 0 ? row.logged  : null;
-      case "allocation_pct":  return row.allocationPct;
-      case "utilization_pct": return row.utilizationPct;
-      default: return null;
-    }
-  }
 
   const periodLabel = preset !== "custom"
     ? PRESET_LABELS[preset]
