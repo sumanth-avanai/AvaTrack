@@ -632,20 +632,25 @@ export default function Reports() {
                 </div>
               ) : (
                 savedReports.map((r) => (
-                  <DropdownMenuItem
+                  <div
                     key={r.id}
-                    className="flex items-center justify-between gap-2 group pr-1"
-                    onSelect={() => handleLoadReport(r)}
+                    className="flex items-center gap-1 group mx-1 my-0.5 rounded-sm hover:bg-accent"
                   >
-                    <span className="truncate text-sm">{r.name}</span>
                     <button
-                      className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all p-0.5 rounded"
-                      onClick={(e) => { e.stopPropagation(); deleteReport.mutate(r.id); }}
+                      className="flex-1 text-left truncate text-sm px-2 py-1.5"
+                      onClick={() => handleLoadReport(r)}
+                    >
+                      {r.name}
+                    </button>
+                    <button
+                      className="shrink-0 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all p-1 rounded"
+                      onClick={() => deleteReport.mutate(r.id)}
                       disabled={deleteReport.isPending}
+                      title="Delete saved report"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
-                  </DropdownMenuItem>
+                  </div>
                 ))
               )}
               {savedReports.length > 0 && <DropdownMenuSeparator />}
