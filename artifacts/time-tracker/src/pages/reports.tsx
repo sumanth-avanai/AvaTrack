@@ -223,7 +223,7 @@ function fmtHours(h: number): string {
 }
 
 function fmtPct(p: number): string {
-  return `${p.toFixed(1)}%`;
+  return p === 0 ? "0%" : `${p.toFixed(1)}%`;
 }
 
 function fmtMetric(key: string, value: number | null): string {
