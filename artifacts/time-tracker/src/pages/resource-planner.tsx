@@ -1885,7 +1885,10 @@ export default function ResourcePlannerPage() {
             const laneCount = laned.length > 0 ? Math.max(...laned.map((b) => b.lane)) + 1 : 0;
             const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
             const rowHeight = calcRowHeight(laneCount);
-            const hiddenCount = laned.filter((b) => b.lane >= MAX_VISIBLE_LANES).length;
+            const hiddenCount = laned.filter((b) => {
+              if (b.lane < MAX_VISIBLE_LANES) return false;
+              return getBarBounds(b.startDate, b.endDate, windowStart, numWeeks, cellWidth) !== null;
+            }).length;
 
             return (
               <div
