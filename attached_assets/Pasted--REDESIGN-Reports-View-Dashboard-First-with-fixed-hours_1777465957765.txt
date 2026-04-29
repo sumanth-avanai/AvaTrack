@@ -1,0 +1,187 @@
+```
+REDESIGN: Reports View - Dashboard First with fixed hours basis
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== CALCULATION BASIS (CRITICAL!) ===
+
+Use FIXED hours, ignore holidays/vacation/training:
+
+260 working days / year ÷ 12 months = 21.67 days/month
+21.67 days × 8h = 173.33 hours/month
+
+```javascript
+const FIXED_HOURS = {
+  day: 8,
+  week: 40,
+  month: 173.33,
+  quarter: 520,
+  year: 2080
+};
+
+function getAvailableHours(periodType, customDays = null) {
+  if (customDays) {
+    // Custom date range: prorate using 260/365 ratio
+    const workingDayRatio = 260 / 365;
+    return customDays * workingDayRatio * 8;
+  }
+  return FIXED_HOURS[periodType];
+}
+```
+
+=== METRICS ===
+
+| Metric | Meaning | Formula |
+|--------|---------|---------|
+| Available | Target hours (fixed) | Period × fixed rate |
+| Planned | Allocated hours (ResourceBookings) | SUM(ResourceBooking.hours) |
+| Logged | Tracked time (TimeEntries) | SUM(TimeEntry.hours) |
+| Allocation % | Forecast/Planning rate | Planned ÷ Available × 100 |
+| Utilization % | Actual rate | Logged ÷ Available × 100 |
+
+=== NEW LAYOUT ===
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Team Overview              [This Month ▼]  [Saved ▼]  [Export] │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌────────────┐    ┌────────────┐    ┌────────────┐            │
+│   │    72%     │    │    65%     │    │  1386.6h   │            │
+│   │ Allocation │    │Utilization │    │  Target    │            │
+│   └────────────┘    └────────────┘    └────────────┘            │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│ Filters: All employees ✕  All projects ✕  [+ Add]              │
+│ Metrics: Available ✕  Allocation % ✕  Utilization % ✕  [+ Add] │
+├─────────────────────────────────────────────────────────────────┤
+│ NAME           │ TARGET  │ PLANNED │ ALLOC % │ LOGGED │ UTIL % │
+│────────────────│─────────│─────────│─────────│────────│────────│
+│ Regina Strobl  │ 173.3h  │   140h  │   81%   │  140h  │   81%  │
+│ Keshav Reddy   │ 173.3h  │   160h  │   92%   │   80h  │   46%  │
+│ Midhun Jose    │ 173.3h  │     —   │    0%   │    —   │    0%  │
+│────────────────│─────────│─────────│─────────│────────│────────│
+│ TOTAL          │ 520.0h  │   300h  │   58%   │  220h  │   42%  │
+└─────────────────────────────────────────────────────────────────┘
+
+=== TEAM TOTALS CALCULATION (CRITICAL!) ===
+
+```javascript
+// CORRECT: Calculate % from totals, not average of %
+const totalTarget = employees.length * FIXED_HOURS[period];
+const totalPlanned = employees.reduce((sum, e) => sum + e.planned, 0);
+const totalLogged = employees.reduce((sum, e) => sum + e.logged, 0);
+
+const teamAllocationPercent = (totalPlanned / totalTarget) * 100;
+const teamUtilizationPercent = (totalLogged / totalTarget) * 100;
+```
+
+=== PERIOD SELECTOR ===
+
+```
+[This Week ▼]
+├─ This Week        (40h per employee)
+├─ Last Week        (40h per employee)
+├─ This Month       (173.33h per employee)
+├─ Last Month       (173.33h per employee)
+├─ This Quarter     (520h per employee)
+├─ Last Quarter     (520h per employee)
+├─ This Year        (2080h per employee)
+├─ Last Year        (2080h per employee)
+└─ Custom range...  (prorated)
+```
+
+=== CUSTOM DATE RANGE ===
+
+```javascript
+function getAvailableHoursForRange(startDate, endDate) {
+  const calendarDays = daysBetween(startDate, endDate) + 1;
+  const workingDayRatio = 260 / 365; // 0.712
+  return calendarDays * workingDayRatio * 8;
+}
+
+// Example: Apr 1 - Apr 15 (15 calendar days)
+// 15 × 0.712 × 8 = 85.4h target
+```
+
+=== LIVE UPDATE ===
+
+- NO "Generate Report" button
+- All changes update immediately
+
+=== SAVED REPORTS ===
+
+Move to header dropdown:
+```
+[Saved ▼]
+  ├─ Uti Last Quarter
+  ├─ Team Overview Q1
+  └─ + Save current view
+```
+
+=== FILTERS (as chips) ===
+
+```
+Filters: All employees ✕  All projects ✕  [+ Add]
+```
+
+Click "+ Add":
+- Employee (multi-select)
+- Project (multi-select)
+- Client (multi-select)
+
+=== METRICS (as chips) ===
+
+```
+Metrics: Target ✕  Allocation % ✕  [+ Add]
+```
+
+Available:
+- Target (was "Available")
+- Planned
+- Logged
+- Allocation %
+- Utilization %
+
+Default: Target, Planned, Allocation %, Logged, Utilization %
+
+=== EMPTY STATES ===
+
+- No data: "—" not "0h"
+- 0% with target hours: Show "0%"
+- Divide by zero: Show "—"
+
+=== COLOR CODING ===
+
+| Value | Color |
+|-------|-------|
+| — | Grey |
+| 0% | Grey |
+| 1-69% | Yellow/Orange |
+| 70-100% | Green |
+| >100% | Red |
+
+=== REMOVED ===
+
+- ~~Working days in period~~
+- ~~Public holidays~~
+- ~~Vacation days~~
+- ~~Billable/Non-billable~~ (for now)
+- ~~Budgeted~~
+- ~~Remaining~~
+- ~~Generate Report button~~
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Check |
+|---|-------|
+| 1 | Target = 173.33h per employee per month (fixed) |
+| 2 | No holidays/vacation subtracted |
+| 3 | Allocation % = Planned ÷ Target |
+| 4 | Utilization % = Logged ÷ Target |
+| 5 | Team totals: % calculated from sums, not averaged |
+| 6 | Week=40h, Month=173.33h, Quarter=520h, Year=2080h |
+| 7 | Custom ranges prorated with 260/365 ratio |
+| 8 | Live update, no Generate button |
+| 9 | Saved reports in dropdown |
+| 10 | Filters/metrics as chips |
+```
