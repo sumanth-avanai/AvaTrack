@@ -1885,7 +1885,7 @@ export default function ResourcePlannerPage() {
             const laneCount = laned.length > 0 ? Math.max(...laned.map((b) => b.lane)) + 1 : 0;
             const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
             const rowHeight = calcRowHeight(laneCount);
-            const hiddenCount = Math.max(0, laneCount - MAX_VISIBLE_LANES);
+            const hiddenCount = laned.filter((b) => b.lane >= MAX_VISIBLE_LANES).length;
 
             return (
               <div
