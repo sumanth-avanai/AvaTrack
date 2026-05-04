@@ -210,6 +210,7 @@ function assignBookingToBuckets(
   rangeStart: string,
   rangeEnd: string,
   colDim: string,
+  holidayDateSet: Set<string> = new Set(),
 ): Record<string, number> {
   const oStart = booking.startDate > rangeStart ? booking.startDate : rangeStart;
   const oEnd   = booking.endDate   < rangeEnd   ? booking.endDate   : rangeEnd;
@@ -219,9 +220,10 @@ function assignBookingToBuckets(
   const d = new Date(oStart + "T12:00:00Z");
   const e = new Date(oEnd   + "T12:00:00Z");
   while (d <= e) {
-    const dow = d.getUTCDay(); // 0=Sun, 6=Sat
-    if (dow !== 0 && dow !== 6) {
-      const b = colDim === "none" ? "Total" : dateToBucket(d.toISOString().slice(0, 10), colDim);
+    const dow     = d.getUTCDay(); // 0=Sun, 6=Sat
+    const dateStr = d.toISOString().slice(0, 10);
+    if (dow !== 0 && dow !== 6 && !holidayDateSet.has(dateStr)) {
+      const b = colDim === "none" ? "Total" : dateToBucket(dateStr, colDim);
       res[b] = (res[b] ?? 0) + booking.hoursPerDay;
     }
     d.setUTCDate(d.getUTCDate() + 1);
@@ -389,8 +391,10 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
   const plannedAgg = new Map<number, Map<number, Map<string, Map<string, number>>>>();
 
   for (const b of rawBookings) {
-    const roleStr   = b.projectRoleId != null ? String(b.projectRoleId) : "null";
-    const bucketHrs = assignBookingToBuckets(b, startDate, endDate, colDimension);
+    const roleStr      = b.projectRoleId != null ? String(b.projectRoleId) : "null";
+    const empAvail     = availMap.get(b.employeeId);
+    const holidaySet   = empAvail ? new Set(empAvail.holidayDates) : new Set<string>();
+    const bucketHrs    = assignBookingToBuckets(b, startDate, endDate, colDimension, holidaySet);
 
     for (const [timeBucket, hours] of Object.entries(bucketHrs)) {
       const buckets = timeBucket === "Total" ? ["Total"] : [timeBucket, "Total"];

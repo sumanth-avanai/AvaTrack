@@ -519,17 +519,24 @@ export default function Reports() {
     }
   };
 
-  const targetPerEmployee = useMemo(
+  const baseTarget = useMemo(
     () => getTargetHours(preset, startDate, endDate),
     [preset, startDate, endDate],
   );
 
+  const employeeCapacityMap = useMemo<Map<number, number>>(() => {
+    const m = new Map<number, number>();
+    for (const e of employees ?? []) m.set(e.id, e.weeklyCapacityHours ?? 40);
+    return m;
+  }, [employees]);
+
   const employeeRows = useMemo<EmployeeRow[]>(() => {
     if (!pivotData?.rows) return [];
     return pivotData.rows.map((row) => {
-      const planned = row.data?.["Total"]?.["planned"] ?? 0;
-      const logged  = row.data?.["Total"]?.["booked"]  ?? 0;
-      const target  = targetPerEmployee;
+      const planned   = row.data?.["Total"]?.["planned"] ?? 0;
+      const logged    = row.data?.["Total"]?.["booked"]  ?? 0;
+      const capacity  = employeeCapacityMap.get(parseInt(row.id, 10)) ?? 40;
+      const target    = Math.round(baseTarget * (capacity / 40) * 100) / 100;
       return {
         id:             row.id,
         name:           row.name,
@@ -540,7 +547,7 @@ export default function Reports() {
         utilizationPct: target > 0 ? Math.round((logged  / target) * 1000) / 10 : null,
       };
     });
-  }, [pivotData, targetPerEmployee]);
+  }, [pivotData, baseTarget, employeeCapacityMap]);
 
   const teamTotals = useMemo<EmployeeRow>(() => {
     const totalTarget  = employeeRows.reduce((s, r) => s + r.target,  0);
@@ -704,7 +711,7 @@ export default function Reports() {
           <KpiCard
             label="Target"
             value={hasData ? fmtHours(kpiTargetHrs) : "—"}
-            sub={`${fmtHours(targetPerEmployee)} × ${employeeRows.length} employee${employeeRows.length !== 1 ? "s" : ""}`}
+            sub={`${fmtHours(baseTarget)} base × ${employeeRows.length} employee${employeeRows.length !== 1 ? "s" : ""}`}
             valueClass="text-foreground"
           />
         </div>
