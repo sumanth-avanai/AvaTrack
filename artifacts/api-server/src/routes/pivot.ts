@@ -34,7 +34,7 @@ import {
 } from "@workspace/db";
 import { calculateAvailableHours } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
-import { calcDayHours } from "../lib/booking-hours";
+import { dateToBucket, assignBookingToBuckets } from "../lib/pivot-buckets";
 
 const router: IRouter = Router();
 
@@ -97,17 +97,6 @@ function normalizeMetric(m: string): string {
 
 // ─── Column dimension helpers ─────────────────────────────────────────────────
 
-function getISOWeekInfo(dateStr: string): { year: number; week: number } {
-  const d = new Date(dateStr + "T12:00:00Z");
-  const day = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - day);
-  const y0 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return {
-    year: d.getUTCFullYear(),
-    week: Math.ceil(((d.getTime() - y0.getTime()) / 86400000 + 1) / 7),
-  };
-}
-
 function getISOWeekMonday(year: number, week: number): Date {
   const jan4 = new Date(Date.UTC(year, 0, 4));
   const dow = jan4.getUTCDay() || 7;
@@ -116,20 +105,6 @@ function getISOWeekMonday(year: number, week: number): Date {
     w1mon.getUTCFullYear(), w1mon.getUTCMonth(),
     w1mon.getUTCDate() + (week - 1) * 7
   ));
-}
-
-function dateToBucket(dateStr: string, colDim: string): string {
-  if (colDim === "none")    return "Total";
-  if (colDim === "month")   return dateStr.slice(0, 7);
-  if (colDim === "quarter") {
-    const mon = parseInt(dateStr.slice(5, 7));
-    return `${dateStr.slice(0, 4)}-Q${Math.ceil(mon / 3)}`;
-  }
-  if (colDim === "week") {
-    const { year, week } = getISOWeekInfo(dateStr);
-    return `${year}-W${String(week).padStart(2, "0")}`;
-  }
-  return "Total";
 }
 
 function getColumnsInRange(startDate: string, endDate: string, colDim: string): string[] {
@@ -202,36 +177,6 @@ function getBucketLabel(key: string, colDim: string): string {
     return `${w.replace(/^W0*/, "W")} ${y}`;
   }
   return key;
-}
-
-// ─── Resource booking → bucket hours (weekday-by-weekday) ─────────────────────
-
-export function assignBookingToBuckets(
-  booking: { startDate: string; endDate: string; hoursPerDay: number; weekdayHours: Record<string, number> | null },
-  rangeStart: string,
-  rangeEnd: string,
-  colDim: string,
-  holidayDateSet: Set<string> = new Set(),
-  vacationDateSet: Set<string> = new Set(),
-): Record<string, number> {
-  const oStart = booking.startDate > rangeStart ? booking.startDate : rangeStart;
-  const oEnd   = booking.endDate   < rangeEnd   ? booking.endDate   : rangeEnd;
-  if (oStart > oEnd) return {};
-
-  const res: Record<string, number> = {};
-  const d = new Date(oStart + "T00:00:00Z");
-  const e = new Date(oEnd   + "T00:00:00Z");
-  while (d <= e) {
-    const dow     = d.getUTCDay();
-    const dateStr = d.toISOString().slice(0, 10);
-    const hours   = calcDayHours(dow, dateStr, booking.hoursPerDay, booking.weekdayHours, holidayDateSet, vacationDateSet);
-    if (hours > 0) {
-      const b = colDim === "none" ? "Total" : dateToBucket(dateStr, colDim);
-      res[b] = (res[b] ?? 0) + hours;
-    }
-    d.setUTCDate(d.getUTCDate() + 1);
-  }
-  return res;
 }
 
 // ─── Metric computation ───────────────────────────────────────────────────────

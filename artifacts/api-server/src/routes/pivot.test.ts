@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { assignBookingToBuckets } from "./pivot";
+import { assignBookingToBuckets } from "../lib/pivot-buckets";
 
 // Helper to create a flat-rate booking shape
 function flatBooking(startDate: string, endDate: string, hoursPerDay: number) {
