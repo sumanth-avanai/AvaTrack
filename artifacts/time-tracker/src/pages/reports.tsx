@@ -535,7 +535,8 @@ export default function Reports() {
     return pivotData.rows.map((row) => {
       const planned   = row.data?.["Total"]?.["planned"] ?? 0;
       const logged    = row.data?.["Total"]?.["booked"]  ?? 0;
-      const capacity  = employeeCapacityMap.get(parseInt(row.id, 10)) ?? 40;
+      const empId     = parseInt(row.id.replace(/^emp-/, ""), 10);
+      const capacity  = employeeCapacityMap.get(empId) ?? 40;
       const target    = Math.round(baseTarget * (capacity / 40) * 100) / 100;
       return {
         id:             row.id,
