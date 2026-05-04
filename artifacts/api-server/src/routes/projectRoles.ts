@@ -221,7 +221,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     const { budgetDays: days } = calcBookingHours(
       b.startDate, b.endDate, b.hoursPerDay,
       b.weekdayHours as Record<string, number> | null,
-      avail?.holidayDates, avail?.vacationDateSet,
+      avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
     );
 
     totalPlannedDays += days;
@@ -309,7 +309,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
     const { totalHours: hours } = calcBookingHours(
       b.startDate, b.endDate, b.hoursPerDay,
       b.weekdayHours as Record<string, number> | null,
-      avail?.holidayDates, avail?.vacationDateSet,
+      avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
     );
     plannedMap.set(b.projectRoleId, (plannedMap.get(b.projectRoleId) ?? 0) + hours);
   }
@@ -437,7 +437,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
     const { budgetDays: days } = calcBookingHours(
       b.startDate, b.endDate, b.hoursPerDay,
       b.weekdayHours as Record<string, number> | null,
-      avail?.holidayDates, avail?.vacationDateSet,
+      avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
     );
 
     const existing = allocMap.get(key);

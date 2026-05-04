@@ -343,7 +343,8 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
     const empAvail      = availMap.get(b.employeeId);
     const holidaySet    = empAvail ? new Set(empAvail.holidayDates) : new Set<string>();
     const vacationSet   = empAvail ? empAvail.vacationDateSet : new Set<string>();
-    const bucketHrs     = assignBookingToBuckets(b, startDate, endDate, colDimension, holidaySet, vacationSet);
+    const compDaySet    = empAvail ? empAvail.compDayDateSet  : new Set<string>();
+    const bucketHrs     = assignBookingToBuckets(b, startDate, endDate, colDimension, holidaySet, vacationSet, compDaySet);
 
     for (const [timeBucket, hours] of Object.entries(bucketHrs)) {
       const buckets = timeBucket === "Total" ? ["Total"] : [timeBucket, "Total"];

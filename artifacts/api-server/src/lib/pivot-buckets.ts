@@ -52,6 +52,7 @@ export function assignBookingToBuckets(
   colDim: string,
   holidayDateSet: Set<string> = new Set(),
   vacationDateSet: Set<string> = new Set(),
+  compDayDateSet: Set<string> = new Set(),
 ): Record<string, number> {
   const oStart = booking.startDate > rangeStart ? booking.startDate : rangeStart;
   const oEnd   = booking.endDate   < rangeEnd   ? booking.endDate   : rangeEnd;
@@ -63,7 +64,7 @@ export function assignBookingToBuckets(
   while (d <= e) {
     const dow     = d.getUTCDay();
     const dateStr = d.toISOString().slice(0, 10);
-    const hours   = calcDayHours(dow, dateStr, booking.hoursPerDay, booking.weekdayHours, holidayDateSet, vacationDateSet);
+    const hours   = calcDayHours(dow, dateStr, booking.hoursPerDay, booking.weekdayHours, holidayDateSet, vacationDateSet, compDayDateSet);
     if (hours > 0) {
       const b = colDim === "none" ? "Total" : dateToBucket(dateStr, colDim);
       res[b] = (res[b] ?? 0) + hours;

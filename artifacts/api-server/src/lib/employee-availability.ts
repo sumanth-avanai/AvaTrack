@@ -16,8 +16,18 @@ import {
 import { buildVacationDateSet } from "./utilization";
 
 export interface EmpAvailability {
-  holidayDates:   string[];
+  holidayDates:    string[];
   vacationDateSet: Set<string>;
+  /**
+   * Compensatory leave days (YYYY-MM-DD) that should be excluded from
+   * planned and available hour calculations — same as vacation days.
+   *
+   * NOTE: No comp-day DB table exists yet. This field is wired into
+   * calcDayHours so that once a `employeeCompDays` table is added and
+   * queried here, the exclusion will automatically flow through to all
+   * booking-hour and pivot-report computations without further changes.
+   */
+  compDayDateSet:  Set<string>;
 }
 
 export async function fetchEmpAvailabilityMap(
@@ -81,7 +91,13 @@ export async function fetchEmpAvailabilityMap(
 
     const vacationDateSet = buildVacationDateSet(vacByEmp.get(emp.id) ?? []);
 
-    result.set(emp.id, { holidayDates, vacationDateSet });
+    // compDayDateSet: placeholder empty set until an employeeCompDays table
+    // is introduced. When that table exists, query it here (grouped by
+    // employee, filtered to the period) and expand ranges into individual
+    // YYYY-MM-DD strings — exactly as vacationDateSet is built above.
+    const compDayDateSet = new Set<string>();
+
+    result.set(emp.id, { holidayDates, vacationDateSet, compDayDateSet });
   }
 
   return result;
