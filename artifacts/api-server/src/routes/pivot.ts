@@ -206,7 +206,7 @@ function getBucketLabel(key: string, colDim: string): string {
 // ─── Resource booking → bucket hours (weekday-by-weekday) ─────────────────────
 
 function assignBookingToBuckets(
-  booking: { startDate: string; endDate: string; hoursPerDay: number },
+  booking: { startDate: string; endDate: string; hoursPerDay: number; weekdayHours: Record<string, number> | null },
   rangeStart: string,
   rangeEnd: string,
   colDim: string,
@@ -223,8 +223,11 @@ function assignBookingToBuckets(
     const dow     = d.getUTCDay(); // 0=Sun, 6=Sat
     const dateStr = d.toISOString().slice(0, 10);
     if (dow !== 0 && dow !== 6 && !holidayDateSet.has(dateStr)) {
+      const hours = booking.weekdayHours != null
+        ? (booking.weekdayHours[String(dow)] ?? 0)
+        : booking.hoursPerDay;
       const b = colDim === "none" ? "Total" : dateToBucket(dateStr, colDim);
-      res[b] = (res[b] ?? 0) + booking.hoursPerDay;
+      res[b] = (res[b] ?? 0) + hours;
     }
     d.setUTCDate(d.getUTCDate() + 1);
   }
