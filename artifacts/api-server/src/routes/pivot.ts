@@ -34,6 +34,7 @@ import {
 } from "@workspace/db";
 import { calculateAvailableHours } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
+import { calcDayHours } from "../lib/booking-hours";
 
 const router: IRouter = Router();
 
@@ -211,21 +212,20 @@ function assignBookingToBuckets(
   rangeEnd: string,
   colDim: string,
   holidayDateSet: Set<string> = new Set(),
+  vacationDateSet: Set<string> = new Set(),
 ): Record<string, number> {
   const oStart = booking.startDate > rangeStart ? booking.startDate : rangeStart;
   const oEnd   = booking.endDate   < rangeEnd   ? booking.endDate   : rangeEnd;
   if (oStart > oEnd) return {};
 
   const res: Record<string, number> = {};
-  const d = new Date(oStart + "T12:00:00Z");
-  const e = new Date(oEnd   + "T12:00:00Z");
+  const d = new Date(oStart + "T00:00:00Z");
+  const e = new Date(oEnd   + "T00:00:00Z");
   while (d <= e) {
-    const dow     = d.getUTCDay(); // 0=Sun, 6=Sat
+    const dow     = d.getUTCDay();
     const dateStr = d.toISOString().slice(0, 10);
-    if (dow !== 0 && dow !== 6 && !holidayDateSet.has(dateStr)) {
-      const hours = booking.weekdayHours != null
-        ? (booking.weekdayHours[String(dow)] ?? 0)
-        : booking.hoursPerDay;
+    const hours   = calcDayHours(dow, dateStr, booking.hoursPerDay, booking.weekdayHours, holidayDateSet, vacationDateSet);
+    if (hours > 0) {
       const b = colDim === "none" ? "Total" : dateToBucket(dateStr, colDim);
       res[b] = (res[b] ?? 0) + hours;
     }
@@ -395,9 +395,10 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
 
   for (const b of rawBookings) {
     const roleStr      = b.projectRoleId != null ? String(b.projectRoleId) : "null";
-    const empAvail     = availMap.get(b.employeeId);
-    const holidaySet   = empAvail ? new Set(empAvail.holidayDates) : new Set<string>();
-    const bucketHrs    = assignBookingToBuckets(b, startDate, endDate, colDimension, holidaySet);
+    const empAvail      = availMap.get(b.employeeId);
+    const holidaySet    = empAvail ? new Set(empAvail.holidayDates) : new Set<string>();
+    const vacationSet   = empAvail ? empAvail.vacationDateSet : new Set<string>();
+    const bucketHrs     = assignBookingToBuckets(b, startDate, endDate, colDimension, holidaySet, vacationSet);
 
     for (const [timeBucket, hours] of Object.entries(bucketHrs)) {
       const buckets = timeBucket === "Total" ? ["Total"] : [timeBucket, "Total"];
