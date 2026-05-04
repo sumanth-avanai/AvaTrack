@@ -206,7 +206,7 @@ function getBucketLabel(key: string, colDim: string): string {
 
 // ─── Resource booking → bucket hours (weekday-by-weekday) ─────────────────────
 
-function assignBookingToBuckets(
+export function assignBookingToBuckets(
   booking: { startDate: string; endDate: string; hoursPerDay: number; weekdayHours: Record<string, number> | null },
   rangeStart: string,
   rangeEnd: string,
