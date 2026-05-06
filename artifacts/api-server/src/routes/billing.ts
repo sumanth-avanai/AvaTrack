@@ -199,6 +199,110 @@ router.get("/projects/:projectId/billing", async (req, res): Promise<void> => {
   });
 });
 
+// ── GET /projects/:projectId/billing/history ─────────────────────────────────
+
+router.get("/projects/:projectId/billing/history", async (req, res): Promise<void> => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
+
+  const [project] = await db
+    .select({ id: projectsTable.id, name: projectsTable.name })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, projectId));
+
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  // Fetch all invoiced entries for this project that have a role
+  const rows = await db
+    .select({
+      invoiceReference:  timeEntriesTable.invoiceReference,
+      invoicedAt:        timeEntriesTable.invoicedAt,
+      hours:             timeEntriesTable.hours,
+      projectRoleId:     timeEntriesTable.projectRoleId,
+      projectRoleName:   projectRolesTable.name,
+      dayRate:           projectRolesTable.dayRate,
+      employeeId:        timeEntriesTable.employeeId,
+      employeeName:      employeesTable.name,
+    })
+    .from(timeEntriesTable)
+    .leftJoin(projectRolesTable, eq(timeEntriesTable.projectRoleId, projectRolesTable.id))
+    .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
+    .where(
+      and(
+        eq(timeEntriesTable.projectId, projectId),
+        sql`(
+          ${timeEntriesTable.billingStatus} = 'invoiced'
+          OR (${timeEntriesTable.billingStatus} IS NULL AND ${timeEntriesTable.invoicedAt} IS NOT NULL)
+        )`,
+      ),
+    )
+    .orderBy(timeEntriesTable.invoicedAt);
+
+  // Group by invoice reference. For entries without a reference each distinct
+  // invoicedAt timestamp is its own audit event (preserves granularity).
+  type HistoryGroup = {
+    reference: string | null;
+    invoicedAt: Date;
+    totalAmount: number;
+    roles: { id: number; name: string }[];
+    employees: { id: number; name: string }[];
+  };
+
+  const groups = new Map<string, HistoryGroup>();
+
+  for (const row of rows) {
+    const invoicedAt = row.invoicedAt ?? new Date(0);
+    const key = row.invoiceReference
+      ? `ref:${row.invoiceReference}`
+      : `ts:${invoicedAt.toISOString()}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        reference:   row.invoiceReference ?? null,
+        invoicedAt,
+        totalAmount: 0,
+        roles:       [],
+        employees:   [],
+      });
+    }
+
+    const g = groups.get(key)!;
+
+    // Update invoicedAt to the latest timestamp within the group
+    if (row.invoicedAt && row.invoicedAt > g.invoicedAt) g.invoicedAt = row.invoicedAt;
+
+    // Accumulate amount
+    if (row.dayRate != null) {
+      g.totalAmount += round2((Number(row.hours) / 8) * row.dayRate);
+    }
+
+    // Track unique roles
+    if (row.projectRoleId != null && !g.roles.find((r) => r.id === row.projectRoleId)) {
+      g.roles.push({ id: row.projectRoleId, name: row.projectRoleName ?? `Role #${row.projectRoleId}` });
+    }
+
+    // Track unique employees
+    if (row.employeeId != null && !g.employees.find((e) => e.id === row.employeeId)) {
+      g.employees.push({ id: row.employeeId, name: row.employeeName ?? `#${row.employeeId}` });
+    }
+  }
+
+  // Sort by invoicedAt descending (most recent first)
+  const history = Array.from(groups.values())
+    .sort((a, b) => b.invoicedAt.getTime() - a.invoicedAt.getTime())
+    .map((g) => ({
+      reference:     g.reference,
+      invoicedAt:    g.invoicedAt.toISOString(),
+      totalAmount:   round2(g.totalAmount),
+      roleCount:     g.roles.length,
+      employeeCount: g.employees.length,
+      roles:         g.roles,
+      employees:     g.employees,
+    }));
+
+  res.json({ project, history });
+});
+
 // ── POST /time-entries/mark-invoiced (legacy) ────────────────────────────────
 
 const MarkInvoicedSchema = z.object({

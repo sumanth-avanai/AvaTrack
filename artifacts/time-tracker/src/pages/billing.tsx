@@ -40,7 +40,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Download, ChevronDown, ChevronRight, Receipt, X } from "lucide-react";
+import { Download, ChevronDown, ChevronRight, Receipt, X, History } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -100,6 +100,21 @@ interface BillingResponse {
     remaining: number;
   };
   roles: BillingRole[];
+}
+
+interface HistoryEntry {
+  reference: string | null;
+  invoicedAt: string;
+  totalAmount: number;
+  roleCount: number;
+  employeeCount: number;
+  roles: { id: number; name: string }[];
+  employees: { id: number; name: string }[];
+}
+
+interface HistoryResponse {
+  project: { id: number; name: string };
+  history: HistoryEntry[];
 }
 
 // ─── Selection helpers ────────────────────────────────────────────────────────
@@ -223,6 +238,10 @@ export default function Billing() {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceRef, setInvoiceRef]             = useState("");
 
+  // ── History panel state ───────────────────────────────────────────────────────
+  const [historyOpen,    setHistoryOpen]    = useState(false);
+  const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
+
   const { startDate, endDate } = useMemo(
     () => computePeriod(preset, customStart, customEnd),
     [preset, customStart, customEnd],
@@ -245,6 +264,16 @@ export default function Billing() {
   });
 
   const data = billingQuery.data;
+
+  const historyQuery = useQuery<HistoryResponse>({
+    queryKey: ["billing-history", projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/billing/history`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load invoice history");
+      return res.json();
+    },
+    enabled: projectId != null,
+  });
 
   // Auto-expand roles with unbilled hours after each load
   useEffect(() => {
@@ -280,6 +309,7 @@ export default function Billing() {
     },
     onSuccess: ({ updatedCount }, { status }) => {
       queryClient.invalidateQueries({ queryKey: ["billing"] });
+      queryClient.invalidateQueries({ queryKey: ["billing-history"] });
       setSelection(new Set());
       setShowInvoiceModal(false);
       setInvoiceRef("");
@@ -695,6 +725,122 @@ export default function Billing() {
             </div>
           )}
         </>
+      )}
+
+      {/* Invoice history panel */}
+      {projectId != null && (
+        <div className="mt-8">
+          <button
+            className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left group"
+            onClick={() => setHistoryOpen((o) => !o)}
+          >
+            {historyOpen
+              ? <ChevronDown className="h-4 w-4 shrink-0" />
+              : <ChevronRight className="h-4 w-4 shrink-0" />
+            }
+            <History className="h-4 w-4 shrink-0" />
+            <span>Invoice history</span>
+            {historyQuery.data && historyQuery.data.history.length > 0 && (
+              <span className="ml-1 rounded-full bg-white/8 px-1.5 py-0.5 text-xs tabular-nums">
+                {historyQuery.data.history.length}
+              </span>
+            )}
+          </button>
+
+          {historyOpen && (
+            <div className="mt-3 rounded-xl border border-white/8 overflow-hidden">
+              {historyQuery.isLoading && (
+                <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+              )}
+              {historyQuery.isError && (
+                <p className="py-8 text-center text-sm text-destructive">Failed to load invoice history.</p>
+              )}
+              {historyQuery.data && historyQuery.data.history.length === 0 && (
+                <p className="py-8 text-center text-sm text-muted-foreground">No invoices recorded for this project yet.</p>
+              )}
+              {historyQuery.data && historyQuery.data.history.length > 0 && (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-white/8 hover:bg-transparent">
+                      <TableHead className="w-6 pr-0" />
+                      <TableHead>Reference</TableHead>
+                      <TableHead className="whitespace-nowrap">Date Invoiced</TableHead>
+                      <TableHead>Roles</TableHead>
+                      <TableHead>Employees</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Amount</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {historyQuery.data.history.map((entry, idx) => {
+                      const key = entry.reference ?? `idx-${idx}`;
+                      const expanded = expandedHistory.has(key);
+                      const toggleRow = () =>
+                        setExpandedHistory((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(key)) next.delete(key); else next.add(key);
+                          return next;
+                        });
+                      const dateLabel = new Date(entry.invoicedAt).toLocaleDateString("de-DE", {
+                        day: "2-digit", month: "short", year: "numeric",
+                      });
+
+                      return [
+                        <TableRow
+                          key={`hist-${key}`}
+                          className="border-white/8 cursor-pointer hover:bg-white/3"
+                          onClick={toggleRow}
+                        >
+                          <TableCell className="pr-0 pl-3">
+                            {expanded
+                              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                            }
+                          </TableCell>
+                          <TableCell>
+                            {entry.reference
+                              ? <span className="font-mono text-sm text-foreground">{entry.reference}</span>
+                              : <span className="text-muted-foreground text-sm italic">No reference</span>
+                            }
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{dateLabel}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{entry.roleCount} role{entry.roleCount !== 1 ? "s" : ""}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{entry.employeeCount} employee{entry.employeeCount !== 1 ? "s" : ""}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium text-green-400">{eur(entry.totalAmount)}</TableCell>
+                        </TableRow>,
+
+                        ...(!expanded ? [] : [
+                          <TableRow key={`hist-detail-${key}`} className="border-white/8 hover:bg-transparent">
+                            <TableCell />
+                            <TableCell colSpan={5} className="pb-3 pt-1">
+                              <div className="flex gap-8 text-sm">
+                                <div>
+                                  <p className="text-xs text-muted-foreground mb-1.5 font-medium uppercase tracking-wide">Roles</p>
+                                  <ul className="space-y-0.5">
+                                    {entry.roles.map((r) => (
+                                      <li key={r.id} className="text-foreground/80">{r.name}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground mb-1.5 font-medium uppercase tracking-wide">Employees</p>
+                                  <ul className="space-y-0.5">
+                                    {entry.employees.map((e) => (
+                                      <li key={e.id} className="text-foreground/80">{e.name}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>,
+                        ]),
+                      ];
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Mark as invoiced modal */}
