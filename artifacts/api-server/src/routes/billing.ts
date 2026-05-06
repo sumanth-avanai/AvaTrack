@@ -217,6 +217,8 @@ router.post("/time-entries/mark-invoiced", async (req, res): Promise<void> => {
   const conditions = [
     eq(timeEntriesTable.projectId, projectId),
     isNull(timeEntriesTable.invoicedAt),
+    // Exclude invest entries — legacy endpoint must not overwrite explicit invest status
+    sql`(${timeEntriesTable.billingStatus} IS NULL OR ${timeEntriesTable.billingStatus} != 'invest')`,
   ];
   if (startDate) conditions.push(gte(timeEntriesTable.entryDate, startDate));
   if (endDate)   conditions.push(lte(timeEntriesTable.entryDate, endDate));

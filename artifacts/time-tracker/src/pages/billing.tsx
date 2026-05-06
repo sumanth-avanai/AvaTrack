@@ -526,42 +526,42 @@ export default function Billing() {
 
             {/* Selection info */}
             {selection.size > 0 && (
-              <>
-                <span className="text-sm text-muted-foreground">
-                  Selected: <span className="text-foreground font-medium">{selection.size}</span>
-                  {selectedAmount > 0 && (
-                    <span className="text-yellow-400 ml-1">({eur(selectedAmount)})</span>
-                  )}
-                </span>
+              <span className="text-sm text-muted-foreground">
+                Selected: <span className="text-foreground font-medium">{selection.size}</span>
+                {selectedAmount > 0 && (
+                  <span className="text-yellow-400 ml-1">({eur(selectedAmount)})</span>
+                )}
+              </span>
+            )}
 
-                {/* Mark as dropdown */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="default" className="gap-1">
-                      Mark as <ChevronDown className="h-3.5 w-3.5" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
-                      <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
-                      Invoiced
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => updateStatusMutation.mutate({ status: "invest" })}
-                      disabled={updateStatusMutation.isPending}
-                    >
-                      <span className="h-1.5 w-1.5 rounded-full bg-purple-400 mr-2 shrink-0" />
-                      Invest
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Clear selection */}
-                <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
-                  <X className="h-3.5 w-3.5" />
-                  Clear selection
+            {/* Mark as dropdown — always visible, disabled when nothing selected */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="default" className="gap-1" disabled={selection.size === 0}>
+                  Mark as <ChevronDown className="h-3.5 w-3.5" />
                 </Button>
-              </>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
+                  <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
+                  Invoiced
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => updateStatusMutation.mutate({ status: "invest" })}
+                  disabled={updateStatusMutation.isPending}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-purple-400 mr-2 shrink-0" />
+                  Invest
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Clear selection — only when items are checked */}
+            {selection.size > 0 && (
+              <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
+                <X className="h-3.5 w-3.5" />
+                Clear selection
+              </Button>
             )}
           </div>
 
