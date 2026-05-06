@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   format,
@@ -33,13 +33,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Download, ChevronDown, ChevronRight, Receipt } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Download, ChevronDown, ChevronRight, Receipt, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type BillingPreset = "this_month" | "last_month" | "this_quarter" | "last_quarter" | "all_time" | "custom";
+type FilterMode    = "all" | "unbilled" | "invoiced" | "invest";
+type BillingStatusVal = "invoiced" | "invest" | null;
 
 const PRESET_LABELS: Record<BillingPreset, string> = {
   this_month:   "This Month",
@@ -57,7 +66,10 @@ interface BillingEmployee {
   logged: number;
   invoicedHours: number;
   invoiced: number;
+  investHours: number;
+  invest: number;
   unbilled: number;
+  billingStatus: BillingStatusVal;
 }
 
 interface BillingRole {
@@ -70,6 +82,8 @@ interface BillingRole {
   logged: number;
   invoicedHours: number;
   invoiced: number;
+  investHours: number;
+  invest: number;
   unbilled: number;
   remaining: number | null;
   employees: BillingEmployee[];
@@ -77,13 +91,32 @@ interface BillingRole {
 
 interface BillingResponse {
   project: { id: number; name: string };
-  totals: { budget: number; logged: number; invoiced: number; unbilled: number; remaining: number };
+  totals: {
+    budget: number;
+    logged: number;
+    invoiced: number;
+    invest: number;
+    unbilled: number;
+    remaining: number;
+  };
   roles: BillingRole[];
 }
 
-type FilterMode = "all" | "unbilled" | "invoiced";
+// ─── Selection helpers ────────────────────────────────────────────────────────
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+function empKey(roleId: number, employeeId: number): string {
+  return `r${roleId}-e${employeeId}`;
+}
+
+function parseSelection(sel: Set<string>): { roleId: number; employeeId: number }[] {
+  return Array.from(sel).map((key) => {
+    const m = key.match(/^r(\d+)-e(\d+)$/);
+    if (!m) throw new Error(`Invalid key: ${key}`);
+    return { roleId: Number(m[1]), employeeId: Number(m[2]) };
+  });
+}
+
+// ─── Period helpers ───────────────────────────────────────────────────────────
 
 function computePeriod(
   preset: BillingPreset,
@@ -104,10 +137,8 @@ function computePeriod(
       const d = subQuarters(today, 1);
       return { startDate: format(startOfQuarter(d), "yyyy-MM-dd"), endDate: format(endOfQuarter(d), "yyyy-MM-dd") };
     }
-    case "all_time":
-      return { startDate: null, endDate: null };
-    case "custom":
-      return { startDate: customStart || null, endDate: customEnd || null };
+    case "all_time": return { startDate: null, endDate: null };
+    case "custom":   return { startDate: customStart || null, endDate: customEnd || null };
   }
 }
 
@@ -116,19 +147,17 @@ function getPeriodLabel(preset: BillingPreset, customStart: string, customEnd: s
   switch (preset) {
     case "this_month":   return format(today, "MMMM yyyy");
     case "last_month":   return format(subMonths(today, 1), "MMMM yyyy");
-    case "this_quarter": {
-      const q = Math.ceil((today.getMonth() + 1) / 3);
-      return `Q${q} ${today.getFullYear()}`;
-    }
+    case "this_quarter": return `Q${Math.ceil((today.getMonth() + 1) / 3)} ${today.getFullYear()}`;
     case "last_quarter": {
       const d = subQuarters(today, 1);
-      const q = Math.ceil((d.getMonth() + 1) / 3);
-      return `Q${q} ${d.getFullYear()}`;
+      return `Q${Math.ceil((d.getMonth() + 1) / 3)} ${d.getFullYear()}`;
     }
     case "all_time": return "All Time";
     case "custom":   return customStart && customEnd ? `${customStart} – ${customEnd}` : "Custom";
   }
 }
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 function eur(n: number | null | undefined): string {
   if (n == null) return "—";
@@ -139,14 +168,33 @@ function eurDayRate(n: number): string {
   return `${eur(n)}/d`;
 }
 
-// ─── KPI Card ─────────────────────────────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, accent }: { label: string; value: string; accent?: string }) {
+function KpiCard({ label, value, accent, subLabel }: { label: string; value: string; accent?: string; subLabel?: string }) {
   return (
-    <div className="rounded-xl border border-white/8 bg-white/3 px-5 py-4 flex flex-col gap-1 min-w-0">
+    <div className="rounded-xl border border-white/8 bg-white/3 px-5 py-4 flex flex-col gap-0.5 min-w-0">
       <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{label}</span>
       <span className={cn("text-2xl font-bold tabular-nums", accent ?? "text-foreground")}>{value}</span>
+      {subLabel && <span className="text-xs text-muted-foreground">{subLabel}</span>}
     </div>
+  );
+}
+
+function StatusBadge({ status }: { status: BillingStatusVal }) {
+  if (!status) return <span className="text-muted-foreground/50 text-sm">—</span>;
+  if (status === "invoiced") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-400 shrink-0" />
+        Invoiced
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-purple-400">
+      <span className="h-1.5 w-1.5 rounded-full bg-purple-400 shrink-0" />
+      Invest
+    </span>
   );
 }
 
@@ -157,21 +205,30 @@ export default function Billing() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const [projectId, setProjectId] = useState<number | null>(null);
-  const [preset, setPreset] = useState<BillingPreset>("this_month");
+  // ── Selectors state ──────────────────────────────────────────────────────────
+  const [projectId, setProjectId]   = useState<number | null>(null);
+  const [preset, setPreset]         = useState<BillingPreset>("this_month");
   const [customStart, setCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
   const [customEnd,   setCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
-  const [filter, setFilter]           = useState<FilterMode>("all");
+  const [filter, setFilter]         = useState<FilterMode>("all");
+
+  // ── Table state ──────────────────────────────────────────────────────────────
   const [expandedRoles, setExpandedRoles] = useState<Set<number>>(new Set());
-  const [initialised, setInitialised] = useState(false);
-  const [showModal, setShowModal]     = useState(false);
-  const [invoiceRef, setInvoiceRef]   = useState("");
+  const [initialised,   setInitialised]   = useState(false);
+
+  // ── Selection state ──────────────────────────────────────────────────────────
+  const [selection, setSelection]     = useState<Set<string>>(new Set());
+
+  // ── Modal state ──────────────────────────────────────────────────────────────
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [invoiceRef, setInvoiceRef]             = useState("");
 
   const { startDate, endDate } = useMemo(
     () => computePeriod(preset, customStart, customEnd),
     [preset, customStart, customEnd],
   );
 
+  // ── Data ─────────────────────────────────────────────────────────────────────
   const { data: projects } = useListProjects();
 
   const billingQuery = useQuery<BillingResponse>({
@@ -197,84 +254,139 @@ export default function Billing() {
     }
   }, [data, initialised]);
 
-  // Reset expansion state when project / period changes
-  useEffect(() => { setInitialised(false); }, [projectId, startDate, endDate]);
+  // Clear selection and reset on project/period change
+  useEffect(() => {
+    setInitialised(false);
+    setSelection(new Set());
+  }, [projectId, startDate, endDate]);
 
-  const markInvoicedMutation = useMutation({
-    mutationFn: async (reference: string) => {
-      const body: Record<string, unknown> = { projectId };
-      if (startDate) body.startDate = startDate;
-      if (endDate)   body.endDate   = endDate;
-      if (reference) body.invoiceReference = reference;
-      const res = await fetch("/api/time-entries/mark-invoiced", {
+  // ── Mutations ─────────────────────────────────────────────────────────────────
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ status, invoiceReference }: { status: "invoiced" | "invest"; invoiceReference?: string }) => {
+      const items = parseSelection(selection);
+      const body: Record<string, unknown> = { projectId, items, status };
+      if (startDate)        body.startDate = startDate;
+      if (endDate)          body.endDate   = endDate;
+      if (invoiceReference) body.invoiceReference = invoiceReference;
+      const res = await fetch("/api/time-entries/update-billing-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error("Failed to mark as invoiced");
+      if (!res.ok) throw new Error("Failed to update billing status");
       return res.json() as Promise<{ updatedCount: number }>;
     },
-    onSuccess: ({ updatedCount }) => {
+    onSuccess: ({ updatedCount }, { status }) => {
       queryClient.invalidateQueries({ queryKey: ["billing"] });
-      setShowModal(false);
+      setSelection(new Set());
+      setShowInvoiceModal(false);
       setInvoiceRef("");
-      toast({ title: `${updatedCount} entr${updatedCount === 1 ? "y" : "ies"} marked as invoiced` });
+      const label = status === "invest" ? "invest" : "invoiced";
+      toast({ title: `${updatedCount} entr${updatedCount === 1 ? "y" : "ies"} marked as ${label}` });
     },
-    onError: () => toast({ title: "Failed to mark as invoiced", variant: "destructive" }),
+    onError: () => toast({ title: "Failed to update billing status", variant: "destructive" }),
   });
 
-  // ── Filtered roles ──────────────────────────────────────────────────────────
+  // ── Filtered roles ────────────────────────────────────────────────────────────
 
   const filteredRoles = useMemo<BillingRole[]>(() => {
     if (!data) return [];
     return data.roles.filter((r) => {
       if (filter === "unbilled") return r.unbilled > 0;
       if (filter === "invoiced") return r.invoiced > 0;
+      if (filter === "invest")   return r.invest > 0;
       return true;
     });
   }, [data, filter]);
 
-  // ── CSV export ──────────────────────────────────────────────────────────────
+  // ── Selection helpers ─────────────────────────────────────────────────────────
+
+  const allVisibleKeys = useMemo(
+    () => filteredRoles.flatMap((r) => r.employees.map((e) => empKey(r.id, e.id))),
+    [filteredRoles],
+  );
+
+  const isRoleSelected = useCallback((role: BillingRole) =>
+    role.employees.length > 0 && role.employees.every((e) => selection.has(empKey(role.id, e.id))),
+  [selection]);
+
+  const isRoleIndeterminate = useCallback((role: BillingRole) => {
+    const count = role.employees.filter((e) => selection.has(empKey(role.id, e.id))).length;
+    return count > 0 && count < role.employees.length;
+  }, [selection]);
+
+  const handleRoleCheck = useCallback((role: BillingRole, checked: boolean) => {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      for (const emp of role.employees) {
+        const key = empKey(role.id, emp.id);
+        if (checked) next.add(key); else next.delete(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleEmpCheck = useCallback((roleId: number, empId: number, checked: boolean) => {
+    const key = empKey(roleId, empId);
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(key); else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const allSelected  = allVisibleKeys.length > 0 && allVisibleKeys.every((k) => selection.has(k));
+  const someSelected = allVisibleKeys.some((k) => selection.has(k));
+
+  const handleSelectAll = useCallback((checked: boolean) => {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (checked) { allVisibleKeys.forEach((k) => next.add(k)); }
+      else         { allVisibleKeys.forEach((k) => next.delete(k)); }
+      return next;
+    });
+  }, [allVisibleKeys]);
+
+  // ── Selected amount ───────────────────────────────────────────────────────────
+
+  const selectedAmount = useMemo(() => {
+    if (!data) return 0;
+    let total = 0;
+    for (const role of data.roles) {
+      for (const emp of role.employees) {
+        if (selection.has(empKey(role.id, emp.id))) total += emp.unbilled;
+      }
+    }
+    return Math.round(total * 100) / 100;
+  }, [data, selection]);
+
+  // ── CSV export ────────────────────────────────────────────────────────────────
 
   function exportCSV() {
     if (!data) return;
-    const rows: string[] = ["Role,Employee,Dayrate,Budget,Logged,Invoiced,Unbilled,Remaining"];
+    const rows: string[] = ["Role,Employee,Dayrate,Budget,Logged,Invoiced,Invest,Unbilled,Remaining,Status"];
 
     for (const role of data.roles) {
       rows.push([
-        `"${role.name}"`,
-        "",
-        eurDayRate(role.dayrate),
-        eur(role.budget),
-        eur(role.logged),
-        eur(role.invoiced),
-        eur(role.unbilled),
-        eur(role.remaining),
+        `"${role.name}"`, "", eurDayRate(role.dayrate),
+        eur(role.budget), eur(role.logged), eur(role.invoiced),
+        eur(role.invest), eur(role.unbilled), eur(role.remaining), "",
       ].join(","));
       for (const emp of role.employees) {
         rows.push([
-          `"${role.name}"`,
-          `"${emp.name}"`,
-          eurDayRate(role.dayrate),
-          "",
-          eur(emp.logged),
-          eur(emp.invoiced),
-          eur(emp.unbilled),
-          "",
+          `"${role.name}"`, `"${emp.name}"`, eurDayRate(role.dayrate),
+          "", eur(emp.logged), eur(emp.invoiced),
+          eur(emp.invest), eur(emp.unbilled), "", emp.billingStatus ?? "",
         ].join(","));
       }
     }
 
     rows.push([
-      "TOTAL",
-      "",
-      "",
-      eur(data.totals.budget),
-      eur(data.totals.logged),
-      eur(data.totals.invoiced),
-      eur(data.totals.unbilled),
-      eur(data.totals.remaining),
+      "TOTAL", "", "", eur(data.totals.budget), eur(data.totals.logged),
+      eur(data.totals.invoiced), eur(data.totals.invest),
+      eur(data.totals.unbilled), eur(data.totals.remaining), "",
     ].join(","));
 
     const blob = new Blob([rows.join("\n")], { type: "text/csv" });
@@ -286,7 +398,7 @@ export default function Billing() {
     URL.revokeObjectURL(url);
   }
 
-  // ── Remaining colour ────────────────────────────────────────────────────────
+  // ── Colours ───────────────────────────────────────────────────────────────────
 
   function remainingColour(remaining: number | null, budget: number | null): string {
     if (remaining == null || budget == null || budget === 0) return "text-foreground";
@@ -300,15 +412,9 @@ export default function Billing() {
     return unbilled > 0 ? "text-yellow-400" : "text-green-400";
   }
 
-  // ── Totals remaining colour ─────────────────────────────────────────────────
-
   const totalsRemainingColour = data
     ? remainingColour(data.totals.remaining, data.totals.budget)
     : "text-foreground";
-
-  const showMarkButton = data != null;
-
-  // ── Period label ─────────────────────────────────────────────────────────────
 
   const periodLabel = getPeriodLabel(preset, customStart, customEnd);
 
@@ -320,29 +426,18 @@ export default function Billing() {
           <Receipt className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
           <h1 className="text-xl font-semibold">Billing</h1>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!data}
-          onClick={exportCSV}
-          className="gap-2"
-        >
+        <Button variant="outline" size="sm" disabled={!data} onClick={exportCSV} className="gap-2">
           <Download className="h-4 w-4" />
           Export CSV
         </Button>
       </div>
 
-      {/* Selectors */}
+      {/* Project + Period selectors */}
       <div className="flex flex-wrap gap-3 mb-6">
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">Project</Label>
-          <Select
-            value={projectId != null ? String(projectId) : ""}
-            onValueChange={(v) => setProjectId(Number(v))}
-          >
-            <SelectTrigger className="w-64">
-              <SelectValue placeholder="Select a project…" />
-            </SelectTrigger>
+          <Select value={projectId != null ? String(projectId) : ""} onValueChange={(v) => setProjectId(Number(v))}>
+            <SelectTrigger className="w-64"><SelectValue placeholder="Select a project…" /></SelectTrigger>
             <SelectContent>
               {(projects ?? []).map((p) => (
                 <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
@@ -354,9 +449,7 @@ export default function Billing() {
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">Period</Label>
           <Select value={preset} onValueChange={(v) => setPreset(v as BillingPreset)}>
-            <SelectTrigger className="w-44">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
             <SelectContent>
               {(Object.keys(PRESET_LABELS) as BillingPreset[]).map((k) => (
                 <SelectItem key={k} value={k}>{PRESET_LABELS[k]}</SelectItem>
@@ -369,21 +462,11 @@ export default function Billing() {
           <>
             <div className="flex flex-col gap-1">
               <Label className="text-xs text-muted-foreground">From</Label>
-              <Input
-                type="date"
-                className="w-40"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-              />
+              <Input type="date" className="w-40" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
             </div>
             <div className="flex flex-col gap-1">
               <Label className="text-xs text-muted-foreground">To</Label>
-              <Input
-                type="date"
-                className="w-40"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-              />
+              <Input type="date" className="w-40" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
             </div>
           </>
         )}
@@ -397,24 +480,25 @@ export default function Billing() {
         </div>
       )}
 
-      {/* Loading */}
       {projectId && billingQuery.isLoading && (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
       )}
 
-      {/* Error */}
       {projectId && billingQuery.isError && (
         <div className="text-sm text-destructive py-12 text-center">Failed to load billing data.</div>
       )}
 
-      {/* Content */}
       {data && (
         <>
           {/* KPI Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-            <KpiCard label="Budget"    value={eur(data.totals.budget)} />
-            <KpiCard label="Logged"    value={eur(data.totals.logged)} />
-            <KpiCard label="Invoiced"  value={eur(data.totals.invoiced)} />
+            <KpiCard label="Budget"   value={eur(data.totals.budget)} />
+            <KpiCard
+              label="Logged"
+              value={eur(data.totals.logged)}
+              subLabel={data.totals.invest > 0 ? `(${eur(data.totals.invest)} inv)` : undefined}
+            />
+            <KpiCard label="Invoiced" value={eur(data.totals.invoiced)} />
             <KpiCard
               label="Unbilled"
               value={eur(data.totals.unbilled)}
@@ -427,27 +511,57 @@ export default function Billing() {
             />
           </div>
 
-          {/* Toolbar: filter + mark-invoiced */}
-          <div className="flex items-center justify-between mb-3">
+          {/* Toolbar */}
+          <div className="flex items-center gap-2 mb-3">
+            {/* Filter */}
             <Select value={filter} onValueChange={(v) => setFilter(v as FilterMode)}>
-              <SelectTrigger className="w-40">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="unbilled">Unbilled only</SelectItem>
                 <SelectItem value="invoiced">Invoiced only</SelectItem>
+                <SelectItem value="invest">Invest only</SelectItem>
               </SelectContent>
             </Select>
 
-            {showMarkButton && (
-              <Button
-                size="sm"
-                disabled={data.totals.unbilled === 0}
-                onClick={() => setShowModal(true)}
-              >
-                Mark all as invoiced
-              </Button>
+            {/* Selection info */}
+            {selection.size > 0 && (
+              <>
+                <span className="text-sm text-muted-foreground">
+                  Selected: <span className="text-foreground font-medium">{selection.size}</span>
+                  {selectedAmount > 0 && (
+                    <span className="text-yellow-400 ml-1">({eur(selectedAmount)})</span>
+                  )}
+                </span>
+
+                {/* Mark as dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="default" className="gap-1">
+                      Mark as <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
+                      Invoiced
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => updateStatusMutation.mutate({ status: "invest" })}
+                      disabled={updateStatusMutation.isPending}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-purple-400 mr-2 shrink-0" />
+                      Invest
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Clear selection */}
+                <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
+                  <X className="h-3.5 w-3.5" />
+                  Clear selection
+                </Button>
+              </>
             )}
           </div>
 
@@ -461,19 +575,29 @@ export default function Billing() {
               <Table>
                 <TableHeader>
                   <TableRow className="border-white/8 hover:bg-transparent">
+                    <TableHead className="w-8 pr-0">
+                      <Checkbox
+                        checked={someSelected && !allSelected ? "indeterminate" : allSelected}
+                        onCheckedChange={(c) => handleSelectAll(!!c)}
+                        aria-label="Select all"
+                      />
+                    </TableHead>
                     <TableHead className="w-full">Role / Employee</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Day Rate</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Budget</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Logged</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Invoiced</TableHead>
+                    <TableHead className="whitespace-nowrap">Status</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Unbilled</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Remaining</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredRoles.map((role) => {
-                    const expanded = expandedRoles.has(role.id);
-                    const toggle = () =>
+                    const expanded    = expandedRoles.has(role.id);
+                    const roleChecked = isRoleSelected(role);
+                    const roleIndet   = isRoleIndeterminate(role);
+
+                    const toggleExpand = () =>
                       setExpandedRoles((prev) => {
                         const next = new Set(prev);
                         if (next.has(role.id)) next.delete(role.id); else next.add(role.id);
@@ -481,12 +605,19 @@ export default function Billing() {
                       });
 
                     return [
-                      // Role row
+                      // ── Role row ──────────────────────────────────────────────
                       <TableRow
                         key={`role-${role.id}`}
                         className="border-white/8 cursor-pointer hover:bg-white/3 font-medium"
-                        onClick={toggle}
+                        onClick={toggleExpand}
                       >
+                        <TableCell className="pr-0" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={roleIndet ? "indeterminate" : roleChecked}
+                            onCheckedChange={(c) => handleRoleCheck(role, !!c)}
+                            aria-label={`Select role ${role.name}`}
+                          />
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1.5">
                             {expanded
@@ -503,7 +634,7 @@ export default function Billing() {
                           {role.budget != null ? eur(role.budget) : <span className="text-muted-foreground">—</span>}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{eur(role.logged)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{eur(role.invoiced)}</TableCell>
+                        <TableCell />
                         <TableCell className={cn("text-right tabular-nums", unbilledColour(role.unbilled))}>
                           {eur(role.unbilled)}
                         </TableCell>
@@ -512,35 +643,46 @@ export default function Billing() {
                         </TableCell>
                       </TableRow>,
 
-                      // Employee rows (collapsed by default unless unbilled > 0)
-                      ...(!expanded ? [] : role.employees.map((emp) => (
-                        <TableRow
-                          key={`emp-${role.id}-${emp.id}`}
-                          className="border-white/8 hover:bg-white/2 text-sm text-muted-foreground"
-                        >
-                          <TableCell>
-                            <span className="ml-6 text-foreground/70">{emp.name}</span>
-                          </TableCell>
-                          <TableCell />
-                          <TableCell />
-                          <TableCell className="text-right tabular-nums">{eur(emp.logged)}</TableCell>
-                          <TableCell className="text-right tabular-nums">{eur(emp.invoiced)}</TableCell>
-                          <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
-                            {eur(emp.unbilled)}
-                          </TableCell>
-                          <TableCell />
-                        </TableRow>
-                      ))),
+                      // ── Employee rows ─────────────────────────────────────────
+                      ...(!expanded ? [] : role.employees.map((emp) => {
+                        const empChecked = selection.has(empKey(role.id, emp.id));
+                        return (
+                          <TableRow
+                            key={`emp-${role.id}-${emp.id}`}
+                            className="border-white/8 hover:bg-white/2 text-sm text-muted-foreground"
+                          >
+                            <TableCell className="pr-0">
+                              <Checkbox
+                                checked={empChecked}
+                                onCheckedChange={(c) => handleEmpCheck(role.id, emp.id, !!c)}
+                                aria-label={`Select ${emp.name}`}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <span className="ml-6 text-foreground/70">{emp.name}</span>
+                            </TableCell>
+                            <TableCell />
+                            <TableCell />
+                            <TableCell className="text-right tabular-nums">{eur(emp.logged)}</TableCell>
+                            <TableCell><StatusBadge status={emp.billingStatus} /></TableCell>
+                            <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
+                              {eur(emp.unbilled)}
+                            </TableCell>
+                            <TableCell />
+                          </TableRow>
+                        );
+                      })),
                     ];
                   })}
 
                   {/* Totals row */}
                   <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
+                    <TableCell />
                     <TableCell>Total</TableCell>
                     <TableCell />
                     <TableCell className="text-right tabular-nums">{eur(data.totals.budget)}</TableCell>
                     <TableCell className="text-right tabular-nums">{eur(data.totals.logged)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{eur(data.totals.invoiced)}</TableCell>
+                    <TableCell />
                     <TableCell className={cn("text-right tabular-nums", unbilledColour(data.totals.unbilled))}>
                       {eur(data.totals.unbilled)}
                     </TableCell>
@@ -556,13 +698,13 @@ export default function Billing() {
       )}
 
       {/* Mark as invoiced modal */}
-      <Dialog open={showModal} onOpenChange={setShowModal}>
+      <Dialog open={showInvoiceModal} onOpenChange={setShowInvoiceModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Mark as invoiced</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-3 py-2 text-sm">
+          <div className="space-y-2.5 py-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Project</span>
               <span className="font-medium">{data?.project.name}</span>
@@ -572,30 +714,36 @@ export default function Billing() {
               <span className="font-medium">{periodLabel}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Amount (unbilled)</span>
-              <span className="font-semibold text-yellow-400">{eur(data?.totals.unbilled ?? 0)}</span>
+              <span className="text-muted-foreground">Selected</span>
+              <span className="font-medium">{selection.size} item{selection.size !== 1 ? "s" : ""}</span>
             </div>
+            {selectedAmount > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Amount (unbilled)</span>
+                <span className="font-semibold text-yellow-400">{eur(selectedAmount)}</span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="invoice-ref">Invoice reference (optional)</Label>
             <Input
               id="invoice-ref"
-              placeholder={`INV-${format(today, "yyyy-MM")}-${data?.project.name.slice(0, 6).toUpperCase() ?? ""}`}
+              placeholder={`INV-${format(today, "yyyy-MM")}`}
               value={invoiceRef}
               onChange={(e) => setInvoiceRef(e.target.value)}
             />
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setShowModal(false); setInvoiceRef(""); }}>
+            <Button variant="outline" onClick={() => { setShowInvoiceModal(false); setInvoiceRef(""); }}>
               Cancel
             </Button>
             <Button
-              onClick={() => markInvoicedMutation.mutate(invoiceRef)}
-              disabled={markInvoicedMutation.isPending}
+              onClick={() => updateStatusMutation.mutate({ status: "invoiced", invoiceReference: invoiceRef || undefined })}
+              disabled={updateStatusMutation.isPending}
             >
-              {markInvoicedMutation.isPending ? "Saving…" : "Confirm"}
+              {updateStatusMutation.isPending ? "Saving…" : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>

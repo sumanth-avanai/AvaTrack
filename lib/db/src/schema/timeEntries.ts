@@ -15,6 +15,7 @@ export const timeEntriesTable = pgTable("time_entries", {
   note: text("note"),
   invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
   invoiceReference: varchar("invoice_reference", { length: 100 }),
+  billingStatus: varchar("billing_status", { length: 20 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (t) => [

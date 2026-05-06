@@ -75,7 +75,7 @@ Employee personal link tokens can be found via `/api/employees` or the Employees
 - `employee_vacations` — absence entries (vacation/sick/unpaid_leave/other) per employee with date ranges
 - `holiday_calendars` — calendar registry (DE-BASE-2026 seeded)
 - `holidays` — individual holiday dates per calendar
-- `time_entries` — time entries (employee, project, optional `project_role_id`, date, hours, note, `invoiced_at` timestamptz nullable, `invoice_reference` varchar(100) nullable)
+- `time_entries` — time entries (employee, project, optional `project_role_id`, date, hours, note, `invoiced_at` timestamptz nullable, `invoice_reference` varchar(100) nullable, `billing_status` varchar(20) nullable — 'invoiced'|'invest'|null)
 - `project_roles` — T&M roles per project (name, day_rate, budgeted_days, budgeted_hours)
 - `project_role_assignments` — many-to-many: employee assigned to a project role
 
@@ -96,6 +96,17 @@ lib/
 scripts/
   src/seed.ts      # Demo data seeder
 ```
+
+## API Endpoints (billing — not in OpenAPI spec, called directly)
+
+```
+GET  /api/projects/:id/billing?startDate=&endDate=   — logged/invoiced/invest/unbilled per role+employee
+POST /api/time-entries/mark-invoiced                 — legacy: stamp all unbilled entries as invoiced
+POST /api/time-entries/update-billing-status         — bulk update: { projectId, items[{roleId,employeeId}], status:'invoiced'|'invest'|null, invoiceReference? }
+```
+- GET response now includes `invest`/`investHours` per role/employee and `billing_status` badge per employee
+- `invoicedHours` aggregation: `billing_status='invoiced'` OR (`billing_status IS NULL AND invoiced_at IS NOT NULL`) for backward compat
+- Unbilled = logged − invoiced − invest
 
 ## API Endpoints (vacation/absence — not in OpenAPI spec, called directly)
 
