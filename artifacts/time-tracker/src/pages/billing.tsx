@@ -239,27 +239,25 @@ export default function Billing() {
 
   function exportCSV() {
     if (!data) return;
-    const rows: string[] = ["Role,Employee,Dayrate,Days Logged,Logged,Invoiced,Unbilled,Remaining"];
+    const rows: string[] = ["Role,Employee,Dayrate,Budget,Logged,Invoiced,Unbilled,Remaining"];
 
     for (const role of data.roles) {
-      const daysLogged = (role.loggedHours / 8).toFixed(2);
       rows.push([
         `"${role.name}"`,
         "",
-        eur(role.dayrate),
-        daysLogged,
+        eurDayRate(role.dayrate),
+        eur(role.budget),
         eur(role.logged),
         eur(role.invoiced),
         eur(role.unbilled),
         eur(role.remaining),
       ].join(","));
       for (const emp of role.employees) {
-        const empDays = (emp.loggedHours / 8).toFixed(2);
         rows.push([
           `"${role.name}"`,
           `"${emp.name}"`,
-          eur(role.dayrate),
-          empDays,
+          eurDayRate(role.dayrate),
+          "",
           eur(emp.logged),
           eur(emp.invoiced),
           eur(emp.unbilled),
@@ -268,12 +266,11 @@ export default function Billing() {
       }
     }
 
-    const totalDays = (data.totals.logged / (data.roles[0]?.dayrate ?? 8) * 8 / 8).toFixed(2);
     rows.push([
       "TOTAL",
       "",
       "",
-      totalDays,
+      eur(data.totals.budget),
       eur(data.totals.logged),
       eur(data.totals.invoiced),
       eur(data.totals.unbilled),
@@ -309,7 +306,7 @@ export default function Billing() {
     ? remainingColour(data.totals.remaining, data.totals.budget)
     : "text-foreground";
 
-  const showMarkButton = data && data.totals.unbilled > 0 && (filter === "all" || filter === "unbilled");
+  const showMarkButton = data != null && data.totals.unbilled > 0;
 
   // ── Period label ─────────────────────────────────────────────────────────────
 
