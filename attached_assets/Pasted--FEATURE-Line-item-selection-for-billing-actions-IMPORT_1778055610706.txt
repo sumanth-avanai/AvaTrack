@@ -1,0 +1,171 @@
+```
+FEATURE: Line item selection for billing actions
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== OVERVIEW ===
+
+Add checkboxes to billing table for selecting individual line items.
+Allow bulk actions: "Mark as invoiced" or "Mark as invest".
+
+=== DATABASE CHANGE ===
+
+```sql
+ALTER TABLE time_entries ADD COLUMN billing_status VARCHAR(20) NULL;
+-- Values: NULL (unbilled), 'invoiced', 'invest'
+```
+
+Note: Keep existing invoiced_at and invoice_reference columns, billing_status is additional.
+
+=== UPDATED LAYOUT ===
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ [All ▼]                     Selected: 3       [Mark as ▼] [Clear selection]│
+│                                                ├─ Invoiced                  │
+│                                                └─ Invest                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ☐ │ ROLE / EMPLOYEE        │DAYRATE│ BUDGET │ LOGGED │ STATUS │ UNBILLED  │
+│───│────────────────────────│───────│────────│────────│────────│───────────│
+│ ☑ │ ▼ Engineering Manager  │ €805/d│ €40,250│ €16,905│        │    €4,905 │
+│ ☑ │    └─ Rohan            │       │        │  €8,855│        │      €855 │
+│ ☐ │    └─ Sascha           │       │        │  €8,050│ Invest │        €0 │
+│ ☑ │ ▼ DevOps Engineer      │ €650/d│ €32,500│  €9,100│Invoiced│        €0 │
+│   │    └─ Punit            │       │        │  €9,100│Invoiced│        €0 │
+```
+
+=== CHECKBOX LOGIC ===
+
+```javascript
+// Select role = select all employees under it
+const handleRoleSelect = (roleId, checked) => {
+  const employeeIds = getEmployeesForRole(roleId);
+  setSelected(checked 
+    ? [...selected, roleId, ...employeeIds]
+    : selected.filter(id => id !== roleId && !employeeIds.includes(id))
+  );
+};
+
+// Select employee individually
+const handleEmployeeSelect = (employeeId, checked) => {
+  setSelected(checked
+    ? [...selected, employeeId]
+    : selected.filter(id => id !== employeeId)
+  );
+};
+
+// Header checkbox = select all
+const handleSelectAll = (checked) => {
+  setSelected(checked ? allSelectableIds : []);
+};
+```
+
+=== STATUS COLUMN ===
+
+Show billing_status as badge:
+
+| Status | Badge |
+|--------|-------|
+| NULL | — |
+| invoiced | 🟢 Invoiced |
+| invest | 🟣 Invest |
+
+=== ACTION DROPDOWN ===
+
+"Mark as" dropdown (only enabled when selection > 0):
+
+```
+[Mark as ▼]
+├─ Invoiced    → Opens modal with invoice reference
+└─ Invest      → Marks immediately (no modal)
+```
+
+=== MODAL (for Invoiced only) ===
+
+```
+┌─────────────────────────────────────────┐
+│ Mark as invoiced                    ✕   │
+├─────────────────────────────────────────┤
+│                                         │
+│ Selected: 3 items (€12,905)             │
+│                                         │
+│ Invoice reference (optional):           │
+│ [INV-2026-04                          ] │
+│                                         │
+│              [Cancel]  [Confirm]        │
+└─────────────────────────────────────────┘
+```
+
+=== FILTER UPDATE ===
+
+Update filter dropdown:
+
+```
+[All ▼]
+├─ All
+├─ Unbilled only
+├─ Invoiced only
+├─ Invest only
+```
+
+=== KPI CARDS UPDATE ===
+
+Invest hours should NOT count as unbilled:
+
+```javascript
+const unbilled = logged - invoiced - invest;
+```
+
+Add small "Invest" indicator under Logged if invest > 0:
+
+```
+┌───────────┐
+│  €26,005  │
+│  Logged   │
+│ (€2k inv) │  ← small text showing invest amount
+└───────────┘
+```
+
+=== API UPDATE ===
+
+```
+POST /api/time-entries/update-billing-status
+
+Body:
+{
+  projectId: 123,
+  roleId: 456,           // optional, if selecting whole role
+  employeeId: 789,       // optional, if selecting specific employee
+  startDate: "2026-04-01",
+  endDate: "2026-04-30",
+  status: "invoiced" | "invest" | null,
+  invoiceReference: "INV-2026-04"  // optional, only for invoiced
+}
+
+Response:
+{ updatedCount: 42 }
+```
+
+=== SELECTION PERSISTENCE ===
+
+- Selection clears after successful action
+- Selection clears on project/period change
+- "Clear selection" button to manually clear
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Check |
+|---|-------|
+| 1 | Checkbox column added to table |
+| 2 | Can select individual employee rows |
+| 3 | Selecting role selects all employees under it |
+| 4 | Header checkbox selects/deselects all |
+| 5 | "Selected: X" counter shows when selection > 0 |
+| 6 | "Mark as" dropdown with Invoiced/Invest options |
+| 7 | Invoiced opens modal with reference field |
+| 8 | Invest marks immediately without modal |
+| 9 | Status column shows badge (Invoiced/Invest/—) |
+| 10 | Filter includes "Invest only" option |
+| 11 | Unbilled calculation excludes invest |
+| 12 | time_entries.billing_status column added |
+| 13 | Selection clears after action |
+```
