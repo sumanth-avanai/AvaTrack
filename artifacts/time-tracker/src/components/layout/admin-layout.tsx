@@ -20,6 +20,7 @@ import {
   CalendarRange,
   Settings,
   LogOut,
+  Receipt,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSetUnauthenticated } from "@/hooks/use-app-auth";
@@ -34,6 +35,7 @@ const navItems = [
   { title: "Projects",         href: "/projects",         icon: FolderKanban },
   { title: "Employees",        href: "/employees",        icon: Users },
   { title: "Reports",          href: "/reports",          icon: BarChart3 },
+  { title: "Billing",          href: "/billing",          icon: Receipt },
 ];
 
 function readStorage(): boolean {

@@ -14,6 +14,7 @@ import Timesheet from "@/pages/timesheet";
 import EmployeePortal from "@/pages/employee-portal";
 import Login from "@/pages/login";
 import ResourcePlanner from "@/pages/resource-planner";
+import Billing from "@/pages/billing";
 import { useAppAuth } from "@/hooks/use-app-auth";
 import { DirtyGuardProvider } from "@/contexts/dirty-guard";
 
@@ -61,6 +62,7 @@ function Router() {
       <Route path="/employees/:id"><AuthGuard><EmployeeDetail /></AuthGuard></Route>
       <Route path="/employees"><AuthGuard><Employees /></AuthGuard></Route>
       <Route path="/reports"><AuthGuard><Reports /></AuthGuard></Route>
+      <Route path="/billing"><AuthGuard><Billing /></AuthGuard></Route>
       <Route path="/settings"><AuthGuard><Settings /></AuthGuard></Route>
       <Route path="/vacations"><Redirect to="/employees" /></Route>
 

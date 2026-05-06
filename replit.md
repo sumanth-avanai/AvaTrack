@@ -38,6 +38,7 @@ A lightweight internal time-tracking web app for small agencies, branded as **Av
 - **Vacations** — absence/vacation management per employee (vacation, sick, unpaid leave, other); filterable by employee; correctly deducted from utilization
 - **Reports** — Pivot/flat reporting with 9 date presets, multi-select filters, metric selector, CSV export
 - **Project Roles (T&M)** — Per-project role management (name, day rate €/day, budgeted days, assigned employees); role selection in Timesheet "Add Project" flow; Budget tab with booked vs. budgeted per role; Allocations tab with planned vs. booked per employee per role
+- **Billing** — Revenue tracking per project: logged vs invoiced vs unbilled per role/employee; period presets (this/last month, quarter, all time, custom); 5 KPI cards; collapsible role/employee table with colour-coded unbilled amounts; "Mark all as invoiced" modal with optional invoice reference; CSV export
 
 ### Employee Personal Links (`/u/:token`)
 - PIN-protected personal URL per employee (route no longer requires admin session)
@@ -74,7 +75,7 @@ Employee personal link tokens can be found via `/api/employees` or the Employees
 - `employee_vacations` — absence entries (vacation/sick/unpaid_leave/other) per employee with date ranges
 - `holiday_calendars` — calendar registry (DE-BASE-2026 seeded)
 - `holidays` — individual holiday dates per calendar
-- `time_entries` — time entries (employee, project, optional `project_role_id`, date, hours, note)
+- `time_entries` — time entries (employee, project, optional `project_role_id`, date, hours, note, `invoiced_at` timestamptz nullable, `invoice_reference` varchar(100) nullable)
 - `project_roles` — T&M roles per project (name, day_rate, budgeted_days, budgeted_hours)
 - `project_role_assignments` — many-to-many: employee assigned to a project role
 
@@ -83,10 +84,10 @@ Employee personal link tokens can be found via `/api/employees` or the Employees
 ```
 artifacts/
   api-server/      # Express 5 backend
-    src/routes/    # clients, projects, employees, holidays, timeEntries, reports, pivot, vacations, dashboard, auth
+    src/routes/    # clients, projects, employees, holidays, timeEntries, reports, pivot, vacations, dashboard, auth, billing
     src/lib/       # utilization.ts, employee-availability.ts, crypto.ts
   time-tracker/    # React + Vite frontend
-    src/pages/     # Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Vacations, Reports, EmployeePortal
+    src/pages/     # Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Vacations, Reports, Billing, EmployeePortal
 lib/
   api-spec/        # openapi.yaml (source of truth)
   api-client-react/ # Generated React Query hooks
