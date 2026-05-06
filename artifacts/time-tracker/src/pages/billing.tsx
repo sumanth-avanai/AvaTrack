@@ -306,7 +306,7 @@ export default function Billing() {
     ? remainingColour(data.totals.remaining, data.totals.budget)
     : "text-foreground";
 
-  const showMarkButton = data != null && data.totals.unbilled > 0;
+  const showMarkButton = data != null;
 
   // ── Period label ─────────────────────────────────────────────────────────────
 
@@ -441,7 +441,11 @@ export default function Billing() {
             </Select>
 
             {showMarkButton && (
-              <Button size="sm" onClick={() => setShowModal(true)}>
+              <Button
+                size="sm"
+                disabled={data.totals.unbilled === 0}
+                onClick={() => setShowModal(true)}
+              >
                 Mark all as invoiced
               </Button>
             )}
