@@ -107,6 +107,7 @@ export const CreateProjectBody = zod.object({
   startDate: zod.coerce.date().nullish(),
   endDate: zod.coerce.date().nullish(),
   color: zod.string().nullish(),
+  pmName: zod.string().nullish(),
 });
 
 export const GetProjectParams = zod.object({
@@ -142,6 +143,7 @@ export const UpdateProjectBody = zod.object({
   startDate: zod.coerce.date().nullish(),
   endDate: zod.coerce.date().nullish(),
   color: zod.string().nullish(),
+  pmName: zod.string().nullish(),
 });
 
 export const UpdateProjectResponse = zod.object({

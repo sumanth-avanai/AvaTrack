@@ -21,4 +21,6 @@ export interface CreateProjectBody {
   endDate?: Date | null;
   /** @nullable */
   color?: string | null;
+  /** @nullable */
+  pmName?: string | null;
 }

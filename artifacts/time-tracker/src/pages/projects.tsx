@@ -126,6 +126,7 @@ type Project = {
   isBillable: boolean;
   budgetHours: number | null;
   color: string | null;
+  pmName: string | null;
   roleCount?: number | null;
   budgetDays?: number | null;
   bookedDays?: number | null;
@@ -308,6 +309,7 @@ export default function Projects() {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const budgetHours = formData.get("budgetHours") as string;
+    const pmName = (formData.get("pmName") as string) || null;
 
     createProject.mutate(
       {
@@ -319,6 +321,7 @@ export default function Projects() {
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
           color: createColor,
+          pmName,
         },
       },
       {
@@ -336,6 +339,7 @@ export default function Projects() {
     if (!selectedProject) return;
     const formData = new FormData(e.currentTarget);
     const budgetHours = formData.get("budgetHours") as string;
+    const pmName = (formData.get("pmName") as string) || null;
 
     updateProject.mutate(
       {
@@ -348,6 +352,7 @@ export default function Projects() {
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
           color: editColor,
+          pmName,
         },
       },
       {
@@ -559,6 +564,10 @@ export default function Projects() {
                 <div className="space-y-2">
                   <Label htmlFor="budgetHours">Budget Hours (Optional)</Label>
                   <Input id="budgetHours" name="budgetHours" type="number" step="0.5" placeholder="100" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pmName">PM (Optional)</Label>
+                  <Input id="pmName" name="pmName" placeholder="Jane Smith" />
                 </div>
                 <div className="space-y-2">
                   <Label>Project Color</Label>
@@ -817,6 +826,15 @@ export default function Projects() {
                     type="number"
                     step="0.5"
                     defaultValue={selectedProject.budgetHours ?? ""}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-pmName">PM</Label>
+                  <Input
+                    id="edit-pmName"
+                    name="pmName"
+                    placeholder="Jane Smith"
+                    defaultValue={selectedProject.pmName ?? ""}
                   />
                 </div>
                 <div className="space-y-2">

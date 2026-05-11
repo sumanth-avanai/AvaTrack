@@ -78,9 +78,10 @@ router.post("/projects", async (req, res): Promise<void> => {
         active: parsed.data.active ?? true,
         isBillable: parsed.data.isBillable ?? true,
         budgetHours: parsed.data.budgetHours ?? null,
-        startDate: parsed.data.startDate ?? null,
-        endDate: parsed.data.endDate ?? null,
+        startDate: parsed.data.startDate ? parsed.data.startDate.toISOString().slice(0, 10) : null,
+        endDate: parsed.data.endDate ? parsed.data.endDate.toISOString().slice(0, 10) : null,
         color: parsed.data.color ?? null,
+        pmName: parsed.data.pmName ?? null,
       })
       .returning();
 
@@ -153,12 +154,21 @@ router.patch("/projects/:id", async (req, res): Promise<void> => {
   }
 
   const pmNameUpdate = Object.prototype.hasOwnProperty.call(req.body, "pmName")
-    ? { pmName: (req.body.pmName as string | null) ?? null }
+    ? { pmName: parsed.data.pmName ?? null }
     : {};
 
   const [project] = await db
     .update(projectsTable)
-    .set({ ...parsed.data, ...pmNameUpdate })
+    .set({
+      ...parsed.data,
+      startDate: parsed.data.startDate !== undefined
+        ? (parsed.data.startDate ? parsed.data.startDate.toISOString().slice(0, 10) : null)
+        : undefined,
+      endDate: parsed.data.endDate !== undefined
+        ? (parsed.data.endDate ? parsed.data.endDate.toISOString().slice(0, 10) : null)
+        : undefined,
+      ...pmNameUpdate,
+    })
     .where(eq(projectsTable.id, params.data.id))
     .returning();
 

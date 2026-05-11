@@ -830,6 +830,10 @@ components:
         endDate:
           type: ["string", "null"]
           format: date
+        color:
+          type: ["string", "null"]
+        pmName:
+          type: ["string", "null"]
       required:
         - clientId
         - name
@@ -855,6 +859,10 @@ components:
         endDate:
           type: ["string", "null"]
           format: date
+        color:
+          type: ["string", "null"]
+        pmName:
+          type: ["string", "null"]
 
     # ── Employee ──────────────────────────────────────────────────────────────
     Employee:
