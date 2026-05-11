@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, boolean, real, date, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, timestamp, boolean, real, date, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { clientsTable } from "./clients";
@@ -14,6 +14,10 @@ export const projectsTable = pgTable("projects", {
   startDate: date("start_date"),
   endDate: date("end_date"),
   color: text("color"),
+  pmName: text("pm_name"),
+  generalStatus: varchar("general_status", { length: 20 }),
+  budgetStatus: varchar("budget_status", { length: 20 }),
+  riskLevel: varchar("risk_level", { length: 20 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

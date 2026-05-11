@@ -16,6 +16,7 @@ import resourceBookingsRouter from "./resourceBookings";
 import projectRolesRouter from "./projectRoles";
 import billingRouter from "./billing";
 import employeeTimesheetRouter from "./employeeTimesheet";
+import projectStatusRouter from "./projectStatus";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use(resourceBookingsRouter);
 router.use(projectRolesRouter);
 router.use(billingRouter);
 router.use(employeeTimesheetRouter);
+router.use(projectStatusRouter);
 
 export default router;

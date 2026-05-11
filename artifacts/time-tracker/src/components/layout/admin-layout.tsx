@@ -21,6 +21,7 @@ import {
   Settings,
   LogOut,
   Receipt,
+  Activity,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSetUnauthenticated } from "@/hooks/use-app-auth";
@@ -36,6 +37,7 @@ const navItems = [
   { title: "Employees",        href: "/employees",        icon: Users },
   { title: "Reports",          href: "/reports",          icon: BarChart3 },
   { title: "Billing",          href: "/billing",          icon: Receipt },
+  { title: "Project Status",   href: "/project-status",   icon: Activity },
 ];
 
 function readStorage(): boolean {
@@ -77,7 +79,8 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
   function isActive(href: string) {
     if (href === "/home")      return location === "/home" || location === "/" || location === "/dashboard";
     if (href === "/employees") return location.startsWith("/employees");
-    if (href === "/projects")  return location.startsWith("/projects") || location.startsWith("/clients");
+    if (href === "/projects")       return location.startsWith("/projects") || location.startsWith("/clients");
+    if (href === "/project-status") return location.startsWith("/project-status");
     return location.startsWith(href);
   }
 

@@ -44,6 +44,10 @@ router.get("/projects", async (req, res): Promise<void> => {
       startDate: projectsTable.startDate,
       endDate: projectsTable.endDate,
       color: projectsTable.color,
+      pmName: projectsTable.pmName,
+      generalStatus: projectsTable.generalStatus,
+      budgetStatus: projectsTable.budgetStatus,
+      riskLevel: projectsTable.riskLevel,
       createdAt: projectsTable.createdAt,
       roleCount: sql<number>`(select count(*)::int from ${projectRolesTable} where ${projectRolesTable.projectId} = ${projectsTable.id})`,
       budgetDays: sql<number | null>`(select case when count(*) filter (where pr.budgeted_days is not null) > 0 then coalesce(sum(pr.budgeted_days), 0) else null end from project_roles pr where pr.project_id = ${projectsTable.id})`,
@@ -117,6 +121,10 @@ router.get("/projects/:id", async (req, res): Promise<void> => {
       startDate: projectsTable.startDate,
       endDate: projectsTable.endDate,
       color: projectsTable.color,
+      pmName: projectsTable.pmName,
+      generalStatus: projectsTable.generalStatus,
+      budgetStatus: projectsTable.budgetStatus,
+      riskLevel: projectsTable.riskLevel,
       createdAt: projectsTable.createdAt,
     })
     .from(projectsTable)
@@ -144,9 +152,13 @@ router.patch("/projects/:id", async (req, res): Promise<void> => {
     return;
   }
 
+  const pmNameUpdate = Object.prototype.hasOwnProperty.call(req.body, "pmName")
+    ? { pmName: (req.body.pmName as string | null) ?? null }
+    : {};
+
   const [project] = await db
     .update(projectsTable)
-    .set(parsed.data)
+    .set({ ...parsed.data, ...pmNameUpdate })
     .where(eq(projectsTable.id, params.data.id))
     .returning();
 
