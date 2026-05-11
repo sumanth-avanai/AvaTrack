@@ -275,6 +275,13 @@ export default function Billing() {
     enabled: projectId != null,
   });
 
+  // Pre-select project from ?project= query param (e.g. deep-link from Project Status)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get("project");
+    if (pid && !isNaN(Number(pid))) setProjectId(Number(pid));
+  }, []);
+
   // Auto-expand roles with unbilled hours after each load
   useEffect(() => {
     if (data && !initialised) {

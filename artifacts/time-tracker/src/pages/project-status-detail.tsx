@@ -375,7 +375,7 @@ export default function ProjectStatusDetail() {
             variant="outline"
             size="sm"
             className="gap-1.5"
-            onClick={() => navigate(`/billing`)}
+            onClick={() => navigate(`/billing?project=${project.id}`)}
           >
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.5} />
             Open in Billing
