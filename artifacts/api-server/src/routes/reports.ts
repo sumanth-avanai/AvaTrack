@@ -7,7 +7,7 @@ import {
   clientsTable,
   employeesTable,
 } from "@workspace/db";
-import { calculateAvailableHours } from "../lib/utilization";
+import { calculateAvailableHours, wasEmployeeActiveDuring } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
 
 const router: IRouter = Router();
@@ -35,7 +35,13 @@ router.get("/reports/utilization", async (req, res): Promise<void> => {
       ? and(eq(employeesTable.id, employeeId), eq(employeesTable.active, true))
       : eq(employeesTable.active, true);
 
-  const employees = await db.select().from(employeesTable).where(employeeFilter);
+  const allFetchedEmployees = await db.select().from(employeesTable).where(employeeFilter);
+
+  // Exclude employees whose contract has no overlap with the requested period.
+  // wasEmployeeActiveDuring() returns true when contractStart/End are both null (no restriction).
+  const employees = allFetchedEmployees.filter((emp) =>
+    wasEmployeeActiveDuring(emp.contractStartDate, emp.contractEndDate, startDate, endDate)
+  );
 
   const availMap = await fetchEmpAvailabilityMap(employees, startDate, endDate);
 

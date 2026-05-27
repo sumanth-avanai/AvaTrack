@@ -32,7 +32,7 @@ import {
   resourceBookingsTable,
   projectRolesTable,
 } from "@workspace/db";
-import { calculateAvailableHours } from "../lib/utilization";
+import { calculateAvailableHours, wasEmployeeActiveDuring } from "../lib/utilization";
 import { fetchEmpAvailabilityMap } from "../lib/employee-availability";
 import { dateToBucket, assignBookingToBuckets } from "../lib/pivot-buckets";
 
@@ -261,7 +261,10 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
   // ── 2. Employees ──────────────────────────────────────────────────────────
   const empConds: any[] = [eq(employeesTable.active, true)];
   if (filterEmpIds) empConds.push(inArray(employeesTable.id, filterEmpIds));
-  const allEmployees  = await db.select().from(employeesTable).where(and(...empConds));
+  const allEmployees  = (await db.select().from(employeesTable).where(and(...empConds)))
+    // Exclude employees whose contract has no overlap with the requested period.
+    // wasEmployeeActiveDuring() returns true when both contract dates are null (no restriction).
+    .filter((e) => wasEmployeeActiveDuring(e.contractStartDate, e.contractEndDate, startDate, endDate));
   const employeeById  = new Map(allEmployees.map((e) => [e.id, e]));
   const inScopeEmpIds = allEmployees.map((e) => e.id);
 

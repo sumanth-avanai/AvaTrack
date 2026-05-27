@@ -124,6 +124,30 @@ export function calculateAvailableHours(
 }
 
 /**
+ * Returns true if an employee's contract overlaps with the given period.
+ *
+ * Overlap condition: contractStart <= periodEnd AND contractEnd >= periodStart.
+ * A NULL contractStart/End means "no restriction" on that side (treated as always active).
+ *
+ * @param contractStartDate - first day of employment, or null/undefined for no restriction
+ * @param contractEndDate   - last day of employment, or null/undefined for no restriction
+ * @param periodStart       - ISO date string "YYYY-MM-DD" (period start, inclusive)
+ * @param periodEnd         - ISO date string "YYYY-MM-DD" (period end, inclusive)
+ */
+export function wasEmployeeActiveDuring(
+  contractStartDate: string | null | undefined,
+  contractEndDate: string | null | undefined,
+  periodStart: string,
+  periodEnd: string,
+): boolean {
+  // Contract hadn't started yet during the period
+  if (contractStartDate && contractStartDate > periodEnd) return false;
+  // Contract had already ended before the period started
+  if (contractEndDate && contractEndDate < periodStart) return false;
+  return true;
+}
+
+/**
  * Returns the Monday of the week containing the given date (UTC).
  */
 export function getWeekStart(date: Date): Date {
