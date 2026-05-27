@@ -247,6 +247,7 @@ export default function EmployeeDetail() {
                   { label: "Holiday Calendar", value: calendarName },
                   { label: "Contract Start", value: employee.contractStartDate || "—" },
                   { label: "Contract End", value: employee.contractEndDate || "—" },
+                  { label: "Utilization Target", value: (employee as any).utilizationTarget != null ? `${(employee as any).utilizationTarget}%` : "—" },
                   { label: "Status", value: employee.active ? "Active" : "Inactive" },
                 ].map((item) => (
                   <div key={item.label} className="bg-card border border-border rounded-lg p-4">

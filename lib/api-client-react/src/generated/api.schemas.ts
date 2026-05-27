@@ -48,8 +48,6 @@ export interface Project {
   startDate: string | null;
   /** @nullable */
   endDate: string | null;
-  /** @nullable */
-  color: string | null;
   createdAt: string;
 }
 
@@ -100,31 +98,24 @@ export interface Employee {
   workingDaysMask: number[];
   /** @nullable */
   holidayCalendarCode: string | null;
+  personalAccessToken: string;
+  active: boolean;
   /** @nullable */
   contractStartDate: string | null;
   /** @nullable */
   contractEndDate: string | null;
-  personalAccessToken: string;
-  active: boolean;
+  /**
+   * @minimum 0
+   * @maximum 100
+   * @nullable
+   */
+  utilizationTarget: number | null;
   createdAt: string;
 }
 
 export interface EmployeePublic {
   id: number;
   name: string;
-  /** @nullable */
-  email: string | null;
-  weeklyCapacityHours: number;
-  workingDaysMask: number[];
-  /** @nullable */
-  holidayCalendarCode: string | null;
-  /** @nullable */
-  contractStartDate: string | null;
-  /** @nullable */
-  contractEndDate: string | null;
-  personalAccessToken: string;
-  active: boolean;
-  createdAt: string;
 }
 
 export interface CreateEmployeeBody {
@@ -136,6 +127,15 @@ export interface CreateEmployeeBody {
   /** @nullable */
   holidayCalendarCode?: string | null;
   active?: boolean;
+  contractStartDate: string;
+  /** @nullable */
+  contractEndDate?: string | null;
+  /**
+   * @minimum 0
+   * @maximum 100
+   * @nullable
+   */
+  utilizationTarget?: number | null;
   pin: string;
 }
 
@@ -148,6 +148,16 @@ export interface UpdateEmployeeBody {
   /** @nullable */
   holidayCalendarCode?: string | null;
   active?: boolean;
+  /** @nullable */
+  contractStartDate?: string | null;
+  /** @nullable */
+  contractEndDate?: string | null;
+  /**
+   * @minimum 0
+   * @maximum 100
+   * @nullable
+   */
+  utilizationTarget?: number | null;
 }
 
 export interface ResetPinBody {

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   format,
@@ -166,6 +166,7 @@ interface EmployeeRow {
   logged: number;
   allocationPct: number | null;
   utilizationPct: number | null;
+  utilizationTarget: number | null;
 }
 
 interface ReportConfig {
@@ -530,39 +531,62 @@ export default function Reports() {
     return m;
   }, [employees]);
 
+  const employeeUtilTargetMap = useMemo<Map<number, number | null>>(() => {
+    const m = new Map<number, number | null>();
+    for (const e of employees ?? []) m.set(e.id, (e as any).utilizationTarget ?? null);
+    return m;
+  }, [employees]);
+
   const employeeRows = useMemo<EmployeeRow[]>(() => {
     if (!pivotData?.rows) return [];
     return pivotData.rows.map((row) => {
-      const planned   = row.data?.["Total"]?.["planned"] ?? 0;
-      const logged    = row.data?.["Total"]?.["booked"]  ?? 0;
-      const empId     = parseInt(row.id.replace(/^emp-/, ""), 10);
-      const capacity  = employeeCapacityMap.get(empId) ?? 40;
-      const target    = Math.round(baseTarget * (capacity / 40) * 100) / 100;
+      const planned          = row.data?.["Total"]?.["planned"] ?? 0;
+      const logged           = row.data?.["Total"]?.["booked"]  ?? 0;
+      const empId            = parseInt(row.id.replace(/^emp-/, ""), 10);
+      const capacity         = employeeCapacityMap.get(empId) ?? 40;
+      const target           = Math.round(baseTarget * (capacity / 40) * 100) / 100;
+      const utilizationTarget = employeeUtilTargetMap.get(empId) ?? null;
       return {
         id:             row.id,
         name:           row.name,
         target,
         planned,
         logged,
-        allocationPct:  target > 0 ? Math.round((planned / target) * 1000) / 10 : null,
-        utilizationPct: target > 0 ? Math.round((logged  / target) * 1000) / 10 : null,
+        allocationPct:    target > 0 ? Math.round((planned / target) * 1000) / 10 : null,
+        utilizationPct:   target > 0 ? Math.round((logged  / target) * 1000) / 10 : null,
+        utilizationTarget,
       };
     });
-  }, [pivotData, baseTarget, employeeCapacityMap]);
+  }, [pivotData, baseTarget, employeeCapacityMap, employeeUtilTargetMap]);
 
   const teamTotals = useMemo<EmployeeRow>(() => {
     const totalTarget  = employeeRows.reduce((s, r) => s + r.target,  0);
     const totalPlanned = employeeRows.reduce((s, r) => s + r.planned, 0);
     const totalLogged  = employeeRows.reduce((s, r) => s + r.logged,  0);
     return {
-      id:             "total",
-      name:           "TOTAL",
-      target:         totalTarget,
-      planned:        totalPlanned,
-      logged:         totalLogged,
-      allocationPct:  totalTarget > 0 ? Math.round((totalPlanned / totalTarget) * 1000) / 10 : null,
-      utilizationPct: totalTarget > 0 ? Math.round((totalLogged  / totalTarget) * 1000) / 10 : null,
+      id:               "total",
+      name:             "TOTAL",
+      target:           totalTarget,
+      planned:          totalPlanned,
+      logged:           totalLogged,
+      allocationPct:    totalTarget > 0 ? Math.round((totalPlanned / totalTarget) * 1000) / 10 : null,
+      utilizationPct:   totalTarget > 0 ? Math.round((totalLogged  / totalTarget) * 1000) / 10 : null,
+      utilizationTarget: null,
     };
+  }, [employeeRows]);
+
+  // Weighted average utilization target across employees who have a target set.
+  // Weight = each employee's target hours (capacity-adjusted).
+  const teamUtilTarget = useMemo<number | null>(() => {
+    let weightedSum = 0;
+    let totalWeight = 0;
+    for (const row of employeeRows) {
+      if (row.utilizationTarget !== null) {
+        weightedSum += row.utilizationTarget * row.target;
+        totalWeight += row.target;
+      }
+    }
+    return totalWeight > 0 ? weightedSum / totalWeight : null;
   }, [employeeRows]);
 
   const metricsVisible = useMemo(
@@ -690,23 +714,27 @@ export default function Reports() {
           <KpiCard
             label="Allocation"
             value={kpiAllocPct !== null && hasData ? fmtPct(kpiAllocPct) : "—"}
-            sub="Planned ÷ Target"
+            sub={teamUtilTarget !== null ? `Planned ÷ Target · Team goal: ${Math.round(teamUtilTarget)}%` : "Planned ÷ Target"}
             valueClass={
               kpiAllocPct === null || !hasData ? "text-muted-foreground"
-              : kpiAllocPct > 100 ? "text-red-500"
-              : kpiAllocPct >= 70 ? "text-emerald-600"
-              : "text-amber-500"
+              : teamUtilTarget !== null
+                ? (kpiAllocPct >= teamUtilTarget ? "text-emerald-600" : "text-red-500")
+                : kpiAllocPct > 100 ? "text-red-500"
+                : kpiAllocPct >= 70 ? "text-emerald-600"
+                : "text-amber-500"
             }
           />
           <KpiCard
             label="Utilization"
             value={kpiUtilPct !== null && hasData ? fmtPct(kpiUtilPct) : "—"}
-            sub="Logged ÷ Target"
+            sub={teamUtilTarget !== null ? `Logged ÷ Target · Team goal: ${Math.round(teamUtilTarget)}%` : "Logged ÷ Target"}
             valueClass={
               kpiUtilPct === null || !hasData ? "text-muted-foreground"
-              : kpiUtilPct > 100 ? "text-red-500"
-              : kpiUtilPct >= 70 ? "text-emerald-600"
-              : "text-amber-500"
+              : teamUtilTarget !== null
+                ? (kpiUtilPct >= teamUtilTarget ? "text-emerald-600" : "text-red-500")
+                : kpiUtilPct > 100 ? "text-red-500"
+                : kpiUtilPct >= 70 ? "text-emerald-600"
+                : "text-amber-500"
             }
           />
           <KpiCard
@@ -776,12 +804,18 @@ export default function Reports() {
                     Name
                   </TableHead>
                   {metricsVisible.map((m) => (
-                    <TableHead
-                      key={m.key}
-                      className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4"
-                    >
-                      {m.short}
-                    </TableHead>
+                    <Fragment key={m.key}>
+                      <TableHead
+                        className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4"
+                      >
+                        {m.short}
+                      </TableHead>
+                      {m.key === "utilization_pct" && (
+                        <TableHead className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4 text-muted-foreground">
+                          UTI TARGET
+                        </TableHead>
+                      )}
+                    </Fragment>
                   ))}
                 </TableRow>
               </TableHeader>
@@ -789,7 +823,7 @@ export default function Reports() {
                 {employeeRows.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={1 + metricsVisible.length}
+                      colSpan={1 + metricsVisible.length + (metricsVisible.some((m) => m.key === "utilization_pct") ? 1 : 0)}
                       className="text-center py-12 text-muted-foreground text-sm"
                     >
                       No data for {periodLabel}.
@@ -803,14 +837,22 @@ export default function Reports() {
                         {metricsVisible.map((m) => {
                           const val = getCellValue(row, m.key);
                           const isPct = PCT_METRICS.has(m.key);
-                          const colorClass = isPct ? pctCellClass(val) : "";
+                          const colorClass = m.key === "utilization_pct" && row.utilizationTarget !== null && val !== null
+                            ? (val >= row.utilizationTarget ? "text-emerald-600 font-semibold" : "text-red-500 font-semibold")
+                            : isPct ? pctCellClass(val) : "";
                           return (
-                            <TableCell
-                              key={m.key}
-                              className={`text-right tabular-nums whitespace-nowrap px-4 py-3 ${colorClass}`}
-                            >
-                              {fmtMetric(m.key, val)}
-                            </TableCell>
+                            <Fragment key={m.key}>
+                              <TableCell
+                                className={`text-right tabular-nums whitespace-nowrap px-4 py-3 ${colorClass}`}
+                              >
+                                {fmtMetric(m.key, val)}
+                              </TableCell>
+                              {m.key === "utilization_pct" && (
+                                <TableCell className="text-right tabular-nums whitespace-nowrap px-4 py-3 text-muted-foreground text-sm">
+                                  {row.utilizationTarget !== null ? `${row.utilizationTarget}%` : "—"}
+                                </TableCell>
+                              )}
+                            </Fragment>
                           );
                         })}
                       </TableRow>
@@ -822,14 +864,22 @@ export default function Reports() {
                       {metricsVisible.map((m) => {
                         const val = getCellValue(teamTotals, m.key);
                         const isPct = PCT_METRICS.has(m.key);
-                        const colorClass = isPct ? pctCellClass(val) : "";
+                        const colorClass = m.key === "utilization_pct" && teamUtilTarget !== null && val !== null
+                          ? (val >= teamUtilTarget ? "text-emerald-600 font-semibold" : "text-red-500 font-semibold")
+                          : isPct ? pctCellClass(val) : "";
                         return (
-                          <TableCell
-                            key={m.key}
-                            className={`text-right tabular-nums whitespace-nowrap px-4 py-3 text-sm ${colorClass}`}
-                          >
-                            {fmtMetric(m.key, val)}
-                          </TableCell>
+                          <Fragment key={m.key}>
+                            <TableCell
+                              className={`text-right tabular-nums whitespace-nowrap px-4 py-3 text-sm ${colorClass}`}
+                            >
+                              {fmtMetric(m.key, val)}
+                            </TableCell>
+                            {m.key === "utilization_pct" && (
+                              <TableCell className="text-right tabular-nums whitespace-nowrap px-4 py-3 text-muted-foreground text-sm">
+                                {teamUtilTarget !== null ? `${Math.round(teamUtilTarget)}%` : "—"}
+                              </TableCell>
+                            )}
+                          </Fragment>
                         );
                       })}
                     </TableRow>

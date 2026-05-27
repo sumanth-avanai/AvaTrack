@@ -12,6 +12,7 @@ export const employeesTable = pgTable("employees", {
   holidayCalendarCode: text("holiday_calendar_code"),
   contractStartDate: date("contract_start_date"),
   contractEndDate: date("contract_end_date"),
+  utilizationTarget: integer("utilization_target"),
   personalAccessToken: text("personal_access_token").notNull(),
   personalAccessPinHash: text("personal_access_pin_hash").notNull(),
   active: boolean("active").notNull().default(true),

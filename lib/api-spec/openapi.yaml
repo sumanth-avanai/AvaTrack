@@ -892,6 +892,10 @@ components:
         contractEndDate:
           type: ["string", "null"]
           format: date
+        utilizationTarget:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 100
         createdAt:
           type: string
           format: date-time
@@ -906,6 +910,7 @@ components:
         - active
         - contractStartDate
         - contractEndDate
+        - utilizationTarget
         - createdAt
 
     EmployeePublic:
@@ -942,6 +947,10 @@ components:
         contractEndDate:
           type: ["string", "null"]
           format: date
+        utilizationTarget:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 100
         pin:
           type: string
       required:
@@ -974,6 +983,10 @@ components:
         contractEndDate:
           type: ["string", "null"]
           format: date
+        utilizationTarget:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 100
 
     ResetPinBody:
       type: object

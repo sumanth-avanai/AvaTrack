@@ -92,7 +92,6 @@ export const ListProjectsResponseItem = zod.object({
   budgetHours: zod.number().nullable(),
   startDate: zod.coerce.date().nullable(),
   endDate: zod.coerce.date().nullable(),
-  color: zod.string().nullable(),
   createdAt: zod.coerce.date(),
 });
 export const ListProjectsResponse = zod.array(ListProjectsResponseItem);
@@ -125,7 +124,6 @@ export const GetProjectResponse = zod.object({
   budgetHours: zod.number().nullable(),
   startDate: zod.coerce.date().nullable(),
   endDate: zod.coerce.date().nullable(),
-  color: zod.string().nullable(),
   createdAt: zod.coerce.date(),
 });
 
@@ -157,7 +155,6 @@ export const UpdateProjectResponse = zod.object({
   budgetHours: zod.number().nullable(),
   startDate: zod.coerce.date().nullable(),
   endDate: zod.coerce.date().nullable(),
-  color: zod.string().nullable(),
   createdAt: zod.coerce.date(),
 });
 
@@ -172,6 +169,9 @@ export const ListEmployeesQueryParams = zod.object({
   includeInactive: zod.coerce.boolean().optional(),
 });
 
+export const listEmployeesResponseUtilizationTargetMin = 0;
+export const listEmployeesResponseUtilizationTargetMax = 100;
+
 export const ListEmployeesResponseItem = zod.object({
   id: zod.number(),
   name: zod.string(),
@@ -179,13 +179,21 @@ export const ListEmployeesResponseItem = zod.object({
   weeklyCapacityHours: zod.number(),
   workingDaysMask: zod.array(zod.number()),
   holidayCalendarCode: zod.string().nullable(),
-  contractStartDate: zod.string().nullable(),
-  contractEndDate: zod.string().nullable(),
   personalAccessToken: zod.string(),
   active: zod.boolean(),
+  contractStartDate: zod.coerce.date().nullable(),
+  contractEndDate: zod.coerce.date().nullable(),
+  utilizationTarget: zod
+    .number()
+    .min(listEmployeesResponseUtilizationTargetMin)
+    .max(listEmployeesResponseUtilizationTargetMax)
+    .nullable(),
   createdAt: zod.coerce.date(),
 });
 export const ListEmployeesResponse = zod.array(ListEmployeesResponseItem);
+
+export const createEmployeeBodyUtilizationTargetMin = 0;
+export const createEmployeeBodyUtilizationTargetMax = 100;
 
 export const CreateEmployeeBody = zod.object({
   name: zod.string(),
@@ -193,15 +201,23 @@ export const CreateEmployeeBody = zod.object({
   weeklyCapacityHours: zod.number(),
   workingDaysMask: zod.array(zod.number()),
   holidayCalendarCode: zod.string().nullish(),
-  contractStartDate: zod.string(),
-  contractEndDate: zod.string().nullish(),
   active: zod.boolean().optional(),
+  contractStartDate: zod.coerce.date(),
+  contractEndDate: zod.coerce.date().nullish(),
+  utilizationTarget: zod
+    .number()
+    .min(createEmployeeBodyUtilizationTargetMin)
+    .max(createEmployeeBodyUtilizationTargetMax)
+    .nullish(),
   pin: zod.string(),
 });
 
 export const GetEmployeeParams = zod.object({
   id: zod.coerce.number(),
 });
+
+export const getEmployeeResponseUtilizationTargetMin = 0;
+export const getEmployeeResponseUtilizationTargetMax = 100;
 
 export const GetEmployeeResponse = zod.object({
   id: zod.number(),
@@ -210,10 +226,15 @@ export const GetEmployeeResponse = zod.object({
   weeklyCapacityHours: zod.number(),
   workingDaysMask: zod.array(zod.number()),
   holidayCalendarCode: zod.string().nullable(),
-  contractStartDate: zod.string().nullable(),
-  contractEndDate: zod.string().nullable(),
   personalAccessToken: zod.string(),
   active: zod.boolean(),
+  contractStartDate: zod.coerce.date().nullable(),
+  contractEndDate: zod.coerce.date().nullable(),
+  utilizationTarget: zod
+    .number()
+    .min(getEmployeeResponseUtilizationTargetMin)
+    .max(getEmployeeResponseUtilizationTargetMax)
+    .nullable(),
   createdAt: zod.coerce.date(),
 });
 
@@ -221,16 +242,27 @@ export const UpdateEmployeeParams = zod.object({
   id: zod.coerce.number(),
 });
 
+export const updateEmployeeBodyUtilizationTargetMin = 0;
+export const updateEmployeeBodyUtilizationTargetMax = 100;
+
 export const UpdateEmployeeBody = zod.object({
   name: zod.string().optional(),
   email: zod.string().nullish(),
   weeklyCapacityHours: zod.number().optional(),
   workingDaysMask: zod.array(zod.number()).optional(),
   holidayCalendarCode: zod.string().nullish(),
-  contractStartDate: zod.string().nullish(),
-  contractEndDate: zod.string().nullish(),
   active: zod.boolean().optional(),
+  contractStartDate: zod.coerce.date().nullish(),
+  contractEndDate: zod.coerce.date().nullish(),
+  utilizationTarget: zod
+    .number()
+    .min(updateEmployeeBodyUtilizationTargetMin)
+    .max(updateEmployeeBodyUtilizationTargetMax)
+    .nullish(),
 });
+
+export const updateEmployeeResponseUtilizationTargetMin = 0;
+export const updateEmployeeResponseUtilizationTargetMax = 100;
 
 export const UpdateEmployeeResponse = zod.object({
   id: zod.number(),
@@ -239,10 +271,15 @@ export const UpdateEmployeeResponse = zod.object({
   weeklyCapacityHours: zod.number(),
   workingDaysMask: zod.array(zod.number()),
   holidayCalendarCode: zod.string().nullable(),
-  contractStartDate: zod.string().nullable(),
-  contractEndDate: zod.string().nullable(),
   personalAccessToken: zod.string(),
   active: zod.boolean(),
+  contractStartDate: zod.coerce.date().nullable(),
+  contractEndDate: zod.coerce.date().nullable(),
+  utilizationTarget: zod
+    .number()
+    .min(updateEmployeeResponseUtilizationTargetMin)
+    .max(updateEmployeeResponseUtilizationTargetMax)
+    .nullable(),
   createdAt: zod.coerce.date(),
 });
 
@@ -261,6 +298,9 @@ export const ResetEmployeePinBody = zod.object({
   pin: zod.string(),
 });
 
+export const resetEmployeePinResponseUtilizationTargetMin = 0;
+export const resetEmployeePinResponseUtilizationTargetMax = 100;
+
 export const ResetEmployeePinResponse = zod.object({
   id: zod.number(),
   name: zod.string(),
@@ -268,10 +308,15 @@ export const ResetEmployeePinResponse = zod.object({
   weeklyCapacityHours: zod.number(),
   workingDaysMask: zod.array(zod.number()),
   holidayCalendarCode: zod.string().nullable(),
-  contractStartDate: zod.string().nullable(),
-  contractEndDate: zod.string().nullable(),
   personalAccessToken: zod.string(),
   active: zod.boolean(),
+  contractStartDate: zod.coerce.date().nullable(),
+  contractEndDate: zod.coerce.date().nullable(),
+  utilizationTarget: zod
+    .number()
+    .min(resetEmployeePinResponseUtilizationTargetMin)
+    .max(resetEmployeePinResponseUtilizationTargetMax)
+    .nullable(),
   createdAt: zod.coerce.date(),
 });
 
@@ -515,6 +560,9 @@ export const VerifyEmployeePinBody = zod.object({
   pin: zod.string(),
 });
 
+export const verifyEmployeePinResponseUtilizationTargetMin = 0;
+export const verifyEmployeePinResponseUtilizationTargetMax = 100;
+
 export const VerifyEmployeePinResponse = zod.object({
   id: zod.number(),
   name: zod.string(),
@@ -524,6 +572,13 @@ export const VerifyEmployeePinResponse = zod.object({
   holidayCalendarCode: zod.string().nullable(),
   personalAccessToken: zod.string(),
   active: zod.boolean(),
+  contractStartDate: zod.coerce.date().nullable(),
+  contractEndDate: zod.coerce.date().nullable(),
+  utilizationTarget: zod
+    .number()
+    .min(verifyEmployeePinResponseUtilizationTargetMin)
+    .max(verifyEmployeePinResponseUtilizationTargetMax)
+    .nullable(),
   createdAt: zod.coerce.date(),
 });
 

@@ -14,9 +14,15 @@ export interface CreateEmployeeBody {
   workingDaysMask: number[];
   /** @nullable */
   holidayCalendarCode?: string | null;
-  contractStartDate: string;
-  /** @nullable */
-  contractEndDate?: string | null;
   active?: boolean;
+  contractStartDate: Date;
+  /** @nullable */
+  contractEndDate?: Date | null;
+  /**
+   * @minimum 0
+   * @maximum 100
+   * @nullable
+   */
+  utilizationTarget?: number | null;
   pin: string;
 }

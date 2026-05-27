@@ -15,11 +15,17 @@ export interface Employee {
   workingDaysMask: number[];
   /** @nullable */
   holidayCalendarCode: string | null;
-  /** @nullable */
-  contractStartDate: string | null;
-  /** @nullable */
-  contractEndDate: string | null;
   personalAccessToken: string;
   active: boolean;
+  /** @nullable */
+  contractStartDate: Date | null;
+  /** @nullable */
+  contractEndDate: Date | null;
+  /**
+   * @minimum 0
+   * @maximum 100
+   * @nullable
+   */
+  utilizationTarget: number | null;
   createdAt: Date;
 }

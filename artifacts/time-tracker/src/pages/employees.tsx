@@ -73,6 +73,7 @@ export default function Employees() {
           holidayCalendarCode: (fd.get("holidayCalendarCode") as string || "") === "none" ? null : ((fd.get("holidayCalendarCode") as string) || null),
           contractStartDate:   (fd.get("contractStartDate") as string) || null,
           contractEndDate:     (fd.get("contractEndDate") as string) || null,
+          utilizationTarget:   fd.get("utilizationTarget") ? Number(fd.get("utilizationTarget")) : null,
           active:              fd.get("active") === "on",
           workingDaysMask:     [1, 1, 1, 1, 1, 0, 0],
           pin:                 fd.get("pin") as string,
@@ -99,6 +100,7 @@ export default function Employees() {
           holidayCalendarCode: (fd.get("holidayCalendarCode") as string || "") === "none" ? null : ((fd.get("holidayCalendarCode") as string) || null),
           contractStartDate:   (fd.get("contractStartDate") as string) || null,
           contractEndDate:     (fd.get("contractEndDate") as string) || null,
+          utilizationTarget:   fd.get("utilizationTarget") ? Number(fd.get("utilizationTarget")) : null,
           active:              fd.get("active") === "on",
         } as any,
       },
@@ -181,6 +183,10 @@ export default function Employees() {
                   <div className="space-y-2">
                     <Label htmlFor="contractEndDate">Contract End <span className="text-muted-foreground text-xs">(optional)</span></Label>
                     <Input id="contractEndDate" name="contractEndDate" type="date" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="utilizationTarget">Util Target % <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input id="utilizationTarget" name="utilizationTarget" type="number" min="0" max="100" placeholder="e.g. 80" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="pin">Initial PIN (4 digits) <span className="text-destructive">*</span></Label>
@@ -318,6 +324,10 @@ export default function Employees() {
                   <div className="space-y-2">
                     <Label>Contract End <span className="text-muted-foreground text-xs">(optional)</span></Label>
                     <Input name="contractEndDate" type="date" defaultValue={(selectedEmployee as any).contractEndDate || ""} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Util Target % <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                    <Input name="utilizationTarget" type="number" min="0" max="100" placeholder="e.g. 80" defaultValue={(selectedEmployee as any).utilizationTarget ?? ""} />
                   </div>
                   <div className="flex items-center gap-2 col-span-2 pt-1">
                     <Switch id="edit-active" name="active" defaultChecked={selectedEmployee.active} />
