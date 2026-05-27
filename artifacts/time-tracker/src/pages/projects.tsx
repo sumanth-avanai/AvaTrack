@@ -461,6 +461,9 @@ export default function Projects() {
         )}
       </TableCell>
       <TableCell className="text-muted-foreground text-sm">
+        {project.pmName || "—"}
+      </TableCell>
+      <TableCell className="text-muted-foreground text-sm">
         {project.roleCount != null ? (
           <span>{project.roleCount} {project.roleCount === 1 ? "role" : "roles"}</span>
         ) : (
@@ -490,6 +493,7 @@ export default function Projects() {
         <TableHead>Name</TableHead>
         <TableHead>Code</TableHead>
         <TableHead>Status</TableHead>
+        <TableHead>PM</TableHead>
         <TableHead>Roles</TableHead>
         <TableHead>Budget</TableHead>
         <TableHead className="w-[50px]"></TableHead>
@@ -504,6 +508,7 @@ export default function Projects() {
         <TableHead>Name</TableHead>
         <TableHead>Code</TableHead>
         <TableHead>Status</TableHead>
+        <TableHead>PM</TableHead>
         <TableHead>Roles</TableHead>
         <TableHead>Budget</TableHead>
         <TableHead className="w-[50px]"></TableHead>
@@ -717,6 +722,7 @@ export default function Projects() {
                       <TableCell><Skeleton className="h-4 w-[200px]" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-[80px]" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-[60px] rounded-full" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-[80px]" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-[60px]" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-[90px]" /></TableCell>
                       <TableCell><Skeleton className="h-8 w-8" /></TableCell>
@@ -724,7 +730,7 @@ export default function Projects() {
                   ))
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
                       No projects found.
                     </TableCell>
                   </TableRow>
@@ -754,6 +760,9 @@ export default function Projects() {
                             Inactive
                           </Badge>
                         )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {project.pmName || "—"}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-sm">
                         {project.roleCount != null ? (
