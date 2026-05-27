@@ -39,16 +39,19 @@ interface ProjectDetail {
   clientName: string | null;
   pmName: string | null;
   generalStatus: string | null;
-  budgetStatus: string | null;
   riskLevel: string | null;
+  clientSatisfaction: string | null;
+  budgetTotal: number | null;
+  budgetConsumed: number | null;
 }
 
 interface HealthUpdate {
   id: number;
   projectId: number;
   generalStatus: string;
-  budgetStatus: string;
+  budgetStatus: string | null;
   riskLevel: string;
+  clientSatisfaction: string | null;
   comment: string | null;
   createdAt: string;
 }
@@ -68,12 +71,12 @@ const GENERAL_STATUS_OPTIONS = [
   { value: "cancelled",   label: "Cancelled" },
 ];
 
-const BUDGET_STATUS_OPTIONS = [
-  { value: "on_track",    label: "On Track" },
-  { value: "at_risk",     label: "At Risk" },
-  { value: "over_budget", label: "Over Budget" },
-  { value: "completed",   label: "Completed" },
-];
+const BUDGET_STATUS_LABELS: Record<string, string> = {
+  on_track:    "On Track",
+  at_risk:     "At Risk",
+  over_budget: "Over Budget",
+  completed:   "Completed",
+};
 
 const RISK_LEVEL_OPTIONS = [
   { value: "low",    label: "Low" },
@@ -81,14 +84,20 @@ const RISK_LEVEL_OPTIONS = [
   { value: "high",   label: "High" },
 ];
 
+const CLIENT_SATISFACTION_OPTIONS = [
+  { value: "happy",    label: "Happy" },
+  { value: "neutral",  label: "Neutral" },
+  { value: "critical", label: "Critical" },
+];
+
 const GENERAL_STATUS_LABELS: Record<string, string> = Object.fromEntries(
   GENERAL_STATUS_OPTIONS.map((o) => [o.value, o.label]),
 );
-const BUDGET_STATUS_LABELS: Record<string, string> = Object.fromEntries(
-  BUDGET_STATUS_OPTIONS.map((o) => [o.value, o.label]),
-);
 const RISK_LEVEL_LABELS: Record<string, string> = Object.fromEntries(
   RISK_LEVEL_OPTIONS.map((o) => [o.value, o.label]),
+);
+const CLIENT_SATISFACTION_LABELS: Record<string, string> = Object.fromEntries(
+  CLIENT_SATISFACTION_OPTIONS.map((o) => [o.value, o.label]),
 );
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
@@ -123,6 +132,15 @@ function riskLevelCls(s: string | null) {
   }
 }
 
+function clientSatisfactionCls(s: string | null) {
+  switch (s) {
+    case "happy":    return "bg-green-500/15 text-green-400 border-green-500/25";
+    case "neutral":  return "bg-gray-500/15 text-gray-400 border-gray-500/25";
+    case "critical": return "bg-red-500/15 text-red-400 border-red-500/25";
+    default:         return "bg-white/5 text-muted-foreground border-white/10";
+  }
+}
+
 function StatusBadge({
   value,
   labels,
@@ -150,6 +168,35 @@ function StatusBadge({
   );
 }
 
+// ─── Budget display ────────────────────────────────────────────────────────────
+
+function BudgetBar({ budgetTotal, budgetConsumed }: { budgetTotal: number | null; budgetConsumed: number | null }) {
+  if (!budgetTotal || budgetTotal === 0) return null;
+  const consumed = budgetConsumed ?? 0;
+  const pct = Math.round((consumed / budgetTotal) * 100);
+  const barColor = pct >= 90 ? "bg-red-500" : pct >= 75 ? "bg-amber-500" : "bg-green-500";
+  const textColor = pct >= 90 ? "text-red-400" : pct >= 75 ? "text-amber-400" : "text-green-400";
+
+  const fmt = (n: number) => {
+    if (n >= 1000) return `€${Math.round(n / 1000)}k`;
+    return `€${Math.round(n)}`;
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 h-2 bg-white/8 rounded-full overflow-hidden">
+          <div className={cn("h-full rounded-full transition-all", barColor)} style={{ width: `${Math.min(100, pct)}%` }} />
+        </div>
+        <span className={cn("text-sm font-semibold tabular-nums", textColor)}>{pct}%</span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {fmt(consumed)} of {fmt(budgetTotal)} consumed ({pct}%)
+      </p>
+    </div>
+  );
+}
+
 // ─── History entry ────────────────────────────────────────────────────────────
 
 function HistoryEntry({ entry }: { entry: HealthUpdate }) {
@@ -168,8 +215,13 @@ function HistoryEntry({ entry }: { entry: HealthUpdate }) {
         </div>
         <div className="flex flex-wrap gap-2 mb-2">
           <StatusBadge value={entry.generalStatus} labels={GENERAL_STATUS_LABELS} cls={generalStatusCls} />
-          <StatusBadge value={entry.budgetStatus}  labels={BUDGET_STATUS_LABELS}  cls={budgetStatusCls} />
-          <StatusBadge value={entry.riskLevel}     labels={RISK_LEVEL_LABELS}     cls={riskLevelCls} />
+          {entry.budgetStatus && (
+            <StatusBadge value={entry.budgetStatus} labels={BUDGET_STATUS_LABELS} cls={budgetStatusCls} />
+          )}
+          <StatusBadge value={entry.riskLevel} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} />
+          {entry.clientSatisfaction && (
+            <StatusBadge value={entry.clientSatisfaction} labels={CLIENT_SATISFACTION_LABELS} cls={clientSatisfactionCls} />
+          )}
         </div>
         {entry.comment && (
           <p className="text-sm text-foreground/80 whitespace-pre-wrap">{entry.comment}</p>
@@ -185,16 +237,16 @@ interface AddUpdateDialogProps {
   open: boolean;
   onClose: () => void;
   projectId: number;
-  defaults: { generalStatus: string; budgetStatus: string; riskLevel: string };
+  defaults: { generalStatus: string; riskLevel: string; clientSatisfaction: string };
   onSuccess: () => void;
 }
 
 function AddUpdateDialog({ open, onClose, projectId, defaults, onSuccess }: AddUpdateDialogProps) {
   const { toast } = useToast();
-  const [generalStatus, setGeneralStatus] = useState(defaults.generalStatus);
-  const [budgetStatus,  setBudgetStatus]  = useState(defaults.budgetStatus);
-  const [riskLevel,     setRiskLevel]     = useState(defaults.riskLevel);
-  const [comment,       setComment]       = useState("");
+  const [generalStatus,      setGeneralStatus]      = useState(defaults.generalStatus);
+  const [riskLevel,          setRiskLevel]          = useState(defaults.riskLevel);
+  const [clientSatisfaction, setClientSatisfaction] = useState(defaults.clientSatisfaction);
+  const [comment,            setComment]            = useState("");
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -202,7 +254,12 @@ function AddUpdateDialog({ open, onClose, projectId, defaults, onSuccess }: AddU
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ generalStatus, budgetStatus, riskLevel, comment: comment || undefined }),
+        body: JSON.stringify({
+          generalStatus,
+          riskLevel,
+          clientSatisfaction: clientSatisfaction && clientSatisfaction !== "__none__" ? clientSatisfaction : undefined,
+          comment: comment || undefined,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -244,11 +301,11 @@ function AddUpdateDialog({ open, onClose, projectId, defaults, onSuccess }: AddU
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label className="text-xs text-muted-foreground">Budget Status</Label>
-            <Select value={budgetStatus} onValueChange={setBudgetStatus}>
+            <Label className="text-xs text-muted-foreground">Risk Level</Label>
+            <Select value={riskLevel} onValueChange={setRiskLevel}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {BUDGET_STATUS_OPTIONS.map((o) => (
+                {RISK_LEVEL_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
               </SelectContent>
@@ -256,11 +313,12 @@ function AddUpdateDialog({ open, onClose, projectId, defaults, onSuccess }: AddU
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label className="text-xs text-muted-foreground">Risk Level</Label>
-            <Select value={riskLevel} onValueChange={setRiskLevel}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Label className="text-xs text-muted-foreground">Client Satisfaction <span className="text-muted-foreground/50">(optional)</span></Label>
+            <Select value={clientSatisfaction} onValueChange={setClientSatisfaction}>
+              <SelectTrigger><SelectValue placeholder="Not set" /></SelectTrigger>
               <SelectContent>
-                {RISK_LEVEL_OPTIONS.map((o) => (
+                <SelectItem value="__none__">Not set</SelectItem>
+                {CLIENT_SATISFACTION_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
               </SelectContent>
@@ -340,9 +398,9 @@ export default function ProjectStatusDetail() {
   const latestEntry = history[0] ?? null;
 
   const dialogDefaults = {
-    generalStatus: project.generalStatus ?? "in_progress",
-    budgetStatus:  project.budgetStatus  ?? "on_track",
-    riskLevel:     project.riskLevel     ?? "low",
+    generalStatus:      project.generalStatus      ?? "in_progress",
+    riskLevel:          project.riskLevel          ?? "low",
+    clientSatisfaction: project.clientSatisfaction ?? "__none__",
   };
 
   return (
@@ -402,7 +460,7 @@ export default function ProjectStatusDetail() {
           </Button>
         </div>
 
-        {project.generalStatus || project.budgetStatus || project.riskLevel ? (
+        {project.generalStatus || project.riskLevel ? (
           <>
             <div className="flex flex-wrap gap-4 mb-4">
               <div className="flex flex-col gap-1.5">
@@ -410,14 +468,22 @@ export default function ProjectStatusDetail() {
                 <StatusBadge value={project.generalStatus} labels={GENERAL_STATUS_LABELS} cls={generalStatusCls} size="lg" />
               </div>
               <div className="flex flex-col gap-1.5">
-                <span className="text-xs text-muted-foreground uppercase tracking-wide">Budget</span>
-                <StatusBadge value={project.budgetStatus} labels={BUDGET_STATUS_LABELS} cls={budgetStatusCls} size="lg" />
-              </div>
-              <div className="flex flex-col gap-1.5">
                 <span className="text-xs text-muted-foreground uppercase tracking-wide">Risk</span>
                 <StatusBadge value={project.riskLevel} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} size="lg" />
               </div>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs text-muted-foreground uppercase tracking-wide">Satisfaction</span>
+                <StatusBadge value={project.clientSatisfaction} labels={CLIENT_SATISFACTION_LABELS} cls={clientSatisfactionCls} size="lg" />
+              </div>
             </div>
+
+            {/* Budget computed display */}
+            {project.budgetTotal && project.budgetTotal > 0 && (
+              <div className="border-t border-white/8 pt-4 mt-2 mb-2">
+                <span className="text-xs text-muted-foreground uppercase tracking-wide block mb-2">Budget Consumption</span>
+                <BudgetBar budgetTotal={project.budgetTotal} budgetConsumed={project.budgetConsumed} />
+              </div>
+            )}
 
             {latestEntry?.comment && (
               <p className="text-sm text-foreground/70 whitespace-pre-wrap border-t border-white/8 pt-4 mt-4">

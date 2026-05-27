@@ -18,6 +18,7 @@ export const projectsTable = pgTable("projects", {
   generalStatus: varchar("general_status", { length: 20 }),
   budgetStatus: varchar("budget_status", { length: 20 }),
   riskLevel: varchar("risk_level", { length: 20 }),
+  clientSatisfaction: varchar("client_satisfaction", { length: 20 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -10,6 +10,8 @@ import {
   getListClientsQueryKey,
   useCreateClient,
   useUpdateClient,
+  useListEmployees,
+  getListEmployeesQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
@@ -210,6 +212,8 @@ export default function Projects() {
   const [createColor, setCreateColor] = useState(DEFAULT_COLOR);
   const [editColor, setEditColor] = useState(DEFAULT_COLOR);
   const [rolesProject, setRolesProject] = useState<{ id: number; name: string } | null>(null);
+  const [createPmName, setCreatePmName] = useState<string>("");
+  const [editPmName, setEditPmName] = useState<string>("");
 
   const [view, setView] = useState<"grouped" | "flat">(() =>
     readLocalStorage("projects-view", "grouped" as "grouped" | "flat")
@@ -236,6 +240,15 @@ export default function Projects() {
     { includeInactive: true },
     { query: { queryKey: getListClientsQueryKey({ includeInactive: true }) } }
   );
+
+  const { data: employees } = useListEmployees(
+    {},
+    { query: { queryKey: getListEmployeesQueryKey({}) } }
+  );
+
+  const employeeNames = useMemo(() => {
+    return (employees ?? []).map((e) => (e as { name: string }).name).filter(Boolean).sort() as string[];
+  }, [employees]);
 
   const createProject = useCreateProject();
   const updateProject = useUpdateProject();
@@ -309,7 +322,6 @@ export default function Projects() {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const budgetHours = formData.get("budgetHours") as string;
-    const pmName = (formData.get("pmName") as string) || null;
 
     createProject.mutate(
       {
@@ -321,7 +333,7 @@ export default function Projects() {
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
           color: createColor,
-          pmName,
+          pmName: createPmName && createPmName !== "__none__" ? createPmName : null,
         },
       },
       {
@@ -329,6 +341,7 @@ export default function Projects() {
           queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey({ includeInactive: true }) });
           setIsCreateOpen(false);
           setCreateColor(DEFAULT_COLOR);
+          setCreatePmName("");
         },
       }
     );
@@ -339,7 +352,6 @@ export default function Projects() {
     if (!selectedProject) return;
     const formData = new FormData(e.currentTarget);
     const budgetHours = formData.get("budgetHours") as string;
-    const pmName = (formData.get("pmName") as string) || null;
 
     updateProject.mutate(
       {
@@ -352,7 +364,7 @@ export default function Projects() {
           active: formData.get("active") === "on",
           budgetHours: budgetHours ? Number(budgetHours) : null,
           color: editColor,
-          pmName,
+          pmName: editPmName && editPmName !== "__none__" ? editPmName : null,
         },
       },
       {
@@ -427,6 +439,7 @@ export default function Projects() {
   function openEditProject(p: Project) {
     setSelectedProject(p);
     setEditColor(p.color ?? DEFAULT_COLOR);
+    setEditPmName(p.pmName ?? "");
     setIsEditOpen(true);
   }
 
@@ -572,7 +585,17 @@ export default function Projects() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="pmName">PM (Optional)</Label>
-                  <Input id="pmName" name="pmName" placeholder="Jane Smith" />
+                  <Select value={createPmName} onValueChange={setCreatePmName}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select PM…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— None —</SelectItem>
+                      {employeeNames.map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label>Project Color</Label>
@@ -839,12 +862,21 @@ export default function Projects() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-pmName">PM</Label>
-                  <Input
-                    id="edit-pmName"
-                    name="pmName"
-                    placeholder="Jane Smith"
-                    defaultValue={selectedProject.pmName ?? ""}
-                  />
+                  <Select value={editPmName} onValueChange={setEditPmName}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select PM…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— None —</SelectItem>
+                      {/* If current value doesn't match any employee, show it as an option */}
+                      {editPmName && !employeeNames.includes(editPmName) && editPmName !== "__none__" && (
+                        <SelectItem value={editPmName}>Current: {editPmName}</SelectItem>
+                      )}
+                      {employeeNames.map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label>Project Color</Label>
