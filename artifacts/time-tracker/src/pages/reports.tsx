@@ -718,8 +718,7 @@ export default function Reports() {
             valueClass={
               kpiAllocPct === null || !hasData ? "text-muted-foreground"
               : teamUtilTarget !== null
-                ? (kpiAllocPct >= teamUtilTarget ? "text-emerald-600" : "text-red-500")
-                : kpiAllocPct > 100 ? "text-red-500"
+                ? (kpiAllocPct >= teamUtilTarget ? "text-emerald-600" : "text-amber-500")
                 : kpiAllocPct >= 70 ? "text-emerald-600"
                 : "text-amber-500"
             }
@@ -812,7 +811,7 @@ export default function Reports() {
                       </TableHead>
                       {m.key === "utilization_pct" && (
                         <TableHead className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4 text-muted-foreground">
-                          UTI TARGET
+                          TARGET
                         </TableHead>
                       )}
                     </Fragment>
@@ -837,8 +836,9 @@ export default function Reports() {
                         {metricsVisible.map((m) => {
                           const val = getCellValue(row, m.key);
                           const isPct = PCT_METRICS.has(m.key);
-                          const colorClass = m.key === "utilization_pct" && row.utilizationTarget !== null && val !== null
-                            ? (val >= row.utilizationTarget ? "text-emerald-600 font-semibold" : "text-red-500 font-semibold")
+                          const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct") && row.utilizationTarget !== null && val !== null;
+                          const colorClass = isTargetPct
+                            ? (val >= row.utilizationTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
                             : isPct ? pctCellClass(val) : "";
                           return (
                             <Fragment key={m.key}>
@@ -864,8 +864,9 @@ export default function Reports() {
                       {metricsVisible.map((m) => {
                         const val = getCellValue(teamTotals, m.key);
                         const isPct = PCT_METRICS.has(m.key);
-                        const colorClass = m.key === "utilization_pct" && teamUtilTarget !== null && val !== null
-                          ? (val >= teamUtilTarget ? "text-emerald-600 font-semibold" : "text-red-500 font-semibold")
+                        const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct") && teamUtilTarget !== null && val !== null;
+                        const colorClass = isTargetPct
+                          ? (val >= teamUtilTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
                           : isPct ? pctCellClass(val) : "";
                         return (
                           <Fragment key={m.key}>
