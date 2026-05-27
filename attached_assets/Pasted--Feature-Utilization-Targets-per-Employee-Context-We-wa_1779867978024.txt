@@ -1,0 +1,88 @@
+# Feature: Utilization Targets per Employee
+
+## Context
+We want to define an individual utilization target per employee (e.g. 80% for
+Rohan, 50% for Regina, 0% for Christian). This target reflects how much of their
+total working time they are expected to spend on client projects. In Reports, the
+target should be visible next to the actual utilization so it's immediately clear
+who is above or below goal — both at the individual and team level.
+
+No changes to how allocation % or utilization % are calculated. This is purely
+additive: a new field and color-coded benchmarks on top of the existing numbers.
+
+⚠️ IMPORTANT: Preserve ALL existing data. Any schema changes must be additive and
+backward-compatible. Use the existing migration/schema pattern in the codebase.
+
+---
+
+## Required Changes
+
+### 1. Data model: Employee
+
+Add an optional `utilizationTarget` field to the Employee model:
+- Type: integer, 0–100 (percentage)
+- Nullable. NULL means no target has been set for this employee.
+
+---
+
+### 2. Employee module UI
+
+Add an optional "Utilization Target" input field (0–100, shown with % suffix) to
+the employee edit/create form. Leave blank by default. Show the value in the
+employee list or detail view; display `—` if not set.
+
+---
+
+### 3. Reports table: Target column + color coding
+
+Add a **"Target %"** column to the Team Overview table, positioned next to the
+existing UTIL % column:
+
+```
+NAME             TARGET   PLANNED   ALLOC %   LOGGED   UTIL %   UTI TARGET
+Rohan            173.3h   144.0h    83.1%     96.0h    55.4%    80% 🔴
+Regina           86.7h    28.0h     32.3%     22.0h    25.4%    50% 🔴
+Christian        173.3h   —         0%        —        0%       0%  🟢
+Keshav           173.3h   112.0h    64.6%     112.0h   64.6%    —
+```
+
+Color coding for the individual UTIL % value and/or target column:
+- 🟢 Green: actual util % ≥ target %
+- 🔴 Red/orange: actual util % < target %
+- No color if target is not set
+
+---
+
+### 4. KPI cards: color coding based on aggregated target
+
+Calculate the team-level utilization target as a weighted average of all active
+employees' individual targets (only include employees who have a target set).
+
+Apply color coding to the **Utilization % KPI card**:
+- 🟢 Green: team utilization ≥ team target
+- 🔴 Red/orange: team utilization < team target
+- No color change if no targets are set (current default behavior preserved)
+
+Apply the same logic to the **Allocation % KPI card**, using the same aggregated
+target as benchmark (allocation and utilization share the same target since both
+measure % of total capacity — allocation planned, utilization logged).
+
+The allocation card is especially important at the start of a month: utilization
+will still be 0% since nobody has logged hours yet, but allocation already shows
+whether enough work is planned. This is the moment to adjust resourcing before
+the month is underway.
+
+Being above target is a positive signal (more demand than expected), so green
+above target is intentional.
+
+---
+
+## Acceptance Criteria
+
+- [ ] `utilizationTarget` (0–100 or null) can be set and saved per employee in the Employee module.
+- [ ] Reports table shows a "Uti Target %" column with the value or `—`.
+- [ ] Individual rows are color-coded: green if actual util ≥ target, red if below, neutral if no target.
+- [ ] Team-level Utilization % KPI card is color-coded against the aggregated team target.
+- [ ] Team-level Allocation % KPI card uses the same target for color coding.
+- [ ] Employees without a target set have no color coding and don't affect the aggregated team target.
+- [ ] No existing calculations or data are affected — purely additive change.
