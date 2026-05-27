@@ -1,0 +1,130 @@
+# Bug Fix: Exclude Employees Outside Contract Period from Reports & Calculations
+
+## Context
+AvaTrack currently shows all employees in the Reports page regardless of whether
+they are still active. Employees who have already left (contract end date passed)
+or haven't started yet (contract start date in the future) distort allocation and
+utilization calculations.
+
+⚠️ IMPORTANT: Preserve ALL existing data. Only additive schema changes (nullable columns with defaults).
+
+---
+
+## Changes Required
+
+### 1. Database: Add contract date fields to Employee
+
+Add two nullable date columns to the `employees` table:
+
+```sql
+ALTER TABLE employees
+  ADD COLUMN IF NOT EXISTS contract_start_date DATE DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS contract_end_date   DATE DEFAULT NULL;
+```
+
+- Both are nullable. NULL means "no restriction" (treat as always active).
+- Do NOT add NOT NULL constraints or backfill with dummy data.
+
+---
+
+### 2. Backend: Employee API
+
+**GET /api/employees**
+- Return `contractStartDate` and `contractEndDate` for each employee.
+
+**PUT /api/employees/:id**
+- Accept `contractStartDate` and `contractEndDate` in the request body (optional, nullable).
+
+---
+
+### 3. Shared utility: `wasEmployeeActiveDuring(employee, periodStart, periodEnd)`
+
+Create a shared helper (usable on both frontend and backend) that checks whether
+an employee's contract **overlaps** with the selected report period — not just
+whether they are active today. This ensures historical reports remain correct.
+
+```typescript
+function wasEmployeeActiveDuring(
+  employee: Employee,
+  periodStart: Date,
+  periodEnd: Date
+): boolean {
+  // Employee was active during the period if their contract overlaps with [periodStart, periodEnd]
+  // Overlap condition: contractStart <= periodEnd AND contractEnd >= periodStart
+  if (employee.contractStartDate && new Date(employee.contractStartDate) > periodEnd) {
+    return false; // contract hadn't started yet during this period
+  }
+  if (employee.contractEndDate && new Date(employee.contractEndDate) < periodStart) {
+    return false; // contract had already ended before this period
+  }
+  return true;
+}
+```
+
+**How this works with examples** (period = April 2026, i.e. 2026-04-01 to 2026-04-30):
+
+| Employee        | contractStart | contractEnd | Active in April? | Active in May?  |
+|-----------------|---------------|-------------|------------------|-----------------|
+| Suresh          | —             | 2026-04-30  | ✅ Yes           | ❌ No (ended)   |
+| Neuer Kollege   | 2026-07-01    | —           | ❌ No (future)   | ❌ No (future)  |
+| Christian       | —             | —           | ✅ Yes           | ✅ Yes          |
+
+---
+
+### 4. Reports page: Filter inactive employees
+
+Derive `periodStart` and `periodEnd` from the currently selected time filter
+(e.g. "This Month" → 2026-05-01 to 2026-05-31, "Last Month" → 2026-04-01 to 2026-04-30).
+Apply `wasEmployeeActiveDuring(employee, periodStart, periodEnd)` **before** all calculations:
+
+- **Team Overview table**: Only show employees active during the selected period.
+- **Target card** (e.g. "1906.6h · 173.3h base × 12 employees"): Recalculate using only those employees.
+- **Allocation % card**: Numerator (planned hours) and denominator (target hours) both only from active employees.
+- **Utilization % card**: Same – only active employees.
+- **Total row**: Only sum active employees.
+
+---
+
+### 5. Resource Planner: Visual indicator (non-blocking, optional)
+
+If easy to implement: grey out or add a badge to employees in the planner whose contract has ended or not yet started for the visible date range. Do not block the main fix on this.
+
+---
+
+### 6. Employee module: Contract date fields in UI
+
+In the employee edit/create form, add two date input fields:
+
+```
+Contract Start  [date picker, optional]
+Contract End    [date picker, optional]
+```
+
+- Leave both blank by default (existing employees are unaffected).
+- Show them in the employee detail view.
+
+---
+
+## Acceptance Criteria
+
+- [ ] Employees with `contractEndDate` in the past do not appear in Reports table or affect any KPI cards.
+- [ ] Employees with `contractStartDate` in the future do not appear in Reports or affect any KPI cards.
+- [ ] Employees with both fields NULL are treated as always active (no regression for existing data).
+- [ ] Target hours in the KPI card correctly reflects only active-employee count.
+- [ ] Allocation % and Utilization % denominators only include active employees' target hours.
+- [ ] Contract start/end fields are editable in the Employee module UI.
+- [ ] No existing employee data is lost or corrupted.
+
+---
+
+## Example
+
+Suresh Ganeshan has `contractEndDate = 2026-04-30`. Today is 2026-05-27.
+
+| Selected period | Suresh shown? | Why |
+|---|---|---|
+| This Month (May 2026) | ❌ No | contractEnd 30.04. < periodStart 01.05. |
+| Last Month (April 2026) | ✅ Yes | contractEnd 30.04. = periodEnd 30.04. → overlap |
+| Q1 2026 (Jan–Mar) | ✅ Yes | contract was active during Q1 |
+
+This way historical reports remain accurate: you can look back at April and still see Suresh's hours, but May onwards he's correctly excluded.
