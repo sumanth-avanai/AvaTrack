@@ -63,6 +63,35 @@ router.post("/employees", async (req, res): Promise<void> => {
     })
     .returning();
 
+  void (async () => {
+    const n8nEmployeeUrl = process.env.N8N_EMPLOYEE_WEBHOOK_URL;
+    const n8nUser = process.env.N8N_WEBHOOK_USER;
+    const n8nPass = process.env.N8N_WEBHOOK_PASS;
+    if (!n8nEmployeeUrl || !n8nUser || !n8nPass) {
+      req.log.error("n8n employee webhook not configured: N8N_EMPLOYEE_WEBHOOK_URL, N8N_WEBHOOK_USER, or N8N_WEBHOOK_PASS is missing");
+      return;
+    }
+    try {
+      const authHeader = "Basic " + Buffer.from(`${n8nUser}:${n8nPass}`).toString("base64");
+      const response = await fetch(n8nEmployeeUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: authHeader },
+        body: JSON.stringify({
+          name: parsed.data.name,
+          email: parsed.data.email ?? null,
+          pin: parsed.data.pin,
+          contract_start: parsed.data.contractStartDate ?? null,
+          weekly_capacity: parsed.data.weeklyCapacityHours,
+        }),
+      });
+      if (!response.ok) {
+        req.log.error({ status: response.status }, "n8n employee webhook returned non-2xx");
+      }
+    } catch (err) {
+      req.log.error({ err }, "n8n employee webhook failed");
+    }
+  })();
+
   res.status(201).json(formatEmployee(emp));
 });
 

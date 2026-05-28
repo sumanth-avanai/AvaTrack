@@ -29,6 +29,7 @@ function buildSelect() {
       createdAt: resourceBookingsTable.createdAt,
       updatedAt: resourceBookingsTable.updatedAt,
       employeeName: employeesTable.name,
+      employeeEmail: employeesTable.email,
       weeklyCapacityHours: employeesTable.weeklyCapacityHours,
       projectName: projectsTable.name,
       projectColor: projectsTable.color,
@@ -44,8 +45,9 @@ function buildSelect() {
 }
 
 function enrichRow(row: Awaited<ReturnType<typeof buildSelect>>[number]) {
+  const { employeeEmail: _email, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     projectColor: resolveProjectColor(row.projectId, row.projectColor),
   };
 }
@@ -143,7 +145,41 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
 
   const rows = await buildSelect().where(eq(resourceBookingsTable.id, inserted.id));
   if (rows.length === 0) { res.status(500).json({ error: "Failed to retrieve created booking" }); return; }
-  res.status(201).json(enrichRow(rows[0]));
+
+  const enriched = enrichRow(rows[0]);
+
+  void (async () => {
+    const n8nBookingUrl = process.env.N8N_BOOKING_WEBHOOK_URL;
+    const n8nUser = process.env.N8N_WEBHOOK_USER;
+    const n8nPass = process.env.N8N_WEBHOOK_PASS;
+    if (!n8nBookingUrl || !n8nUser || !n8nPass) {
+      req.log.error("n8n booking webhook not configured: N8N_BOOKING_WEBHOOK_URL, N8N_WEBHOOK_USER, or N8N_WEBHOOK_PASS is missing");
+      return;
+    }
+    try {
+      const authHeader = "Basic " + Buffer.from(`${n8nUser}:${n8nPass}`).toString("base64");
+      const response = await fetch(n8nBookingUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: authHeader },
+        body: JSON.stringify({
+          employee_name: enriched.employeeName,
+          employee_email: rows[0].employeeEmail,
+          project_name: enriched.projectName,
+          role_name: enriched.projectRoleName,
+          start_date: enriched.startDate,
+          end_date: enriched.endDate,
+          hours_per_day: enriched.hoursPerDay,
+        }),
+      });
+      if (!response.ok) {
+        req.log.error({ status: response.status }, "n8n booking webhook returned non-2xx");
+      }
+    } catch (err) {
+      req.log.error({ err }, "n8n booking webhook failed");
+    }
+  })();
+
+  res.status(201).json(enriched);
 });
 
 // ── PUT /resource-bookings/:id ────────────────────────────────────────────────
