@@ -79,9 +79,6 @@ router.post("/employees", async (req, res): Promise<void> => {
         body: JSON.stringify({
           name: parsed.data.name,
           email: parsed.data.email ?? null,
-          pin: parsed.data.pin,
-          contract_start: parsed.data.contractStartDate ?? null,
-          weekly_capacity: parsed.data.weeklyCapacityHours,
         }),
       });
       if (!response.ok) {
