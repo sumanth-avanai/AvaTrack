@@ -72,6 +72,8 @@ router.post("/employees", async (req, res): Promise<void> => {
       return;
     }
     try {
+      const domain = (process.env.REPLIT_DOMAINS ?? "").split(",")[0];
+      const personalLink = `https://${domain}/u/${emp.personalAccessToken}`;
       const authHeader = "Basic " + Buffer.from(`${n8nUser}:${n8nPass}`).toString("base64");
       const response = await fetch(n8nEmployeeUrl, {
         method: "POST",
@@ -79,6 +81,8 @@ router.post("/employees", async (req, res): Promise<void> => {
         body: JSON.stringify({
           name: parsed.data.name,
           email: parsed.data.email ?? null,
+          pin: parsed.data.pin,
+          personal_link: personalLink,
         }),
       });
       if (!response.ok) {
