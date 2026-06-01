@@ -12,6 +12,7 @@ export async function runStartupMigrations(): Promise<void> {
   await fixWorkingDaysMasks();
   await deleteZeroHourEntries();
   await backfillProjectColors();
+  await createNotificationQueueTable();
 }
 
 /**
@@ -100,6 +101,36 @@ async function deleteZeroHourEntries(): Promise<void> {
     }
   } catch (err) {
     logger.error({ err }, "startup-migration: deleteZeroHourEntries failed");
+  }
+}
+
+/**
+ * Create the notification_queue table if it does not already exist.
+ * Rows are upserted on booking CREATE/UPDATE (with a 30-minute delay) and
+ * deleted on booking DELETE (if not yet sent), so the queue consumer can
+ * fire employee-notification emails without coupling the booking API to n8n.
+ */
+async function createNotificationQueueTable(): Promise<void> {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS notification_queue (
+        id               SERIAL PRIMARY KEY,
+        employee_email   TEXT        NOT NULL,
+        employee_name    TEXT        NOT NULL,
+        project_name     TEXT        NOT NULL,
+        role_name        TEXT,
+        start_date       DATE        NOT NULL,
+        end_date         DATE        NOT NULL,
+        hours_per_day    REAL        NOT NULL,
+        send_after       TIMESTAMPTZ NOT NULL,
+        sent             BOOLEAN     NOT NULL DEFAULT FALSE,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (employee_email, project_name)
+      )
+    `);
+  } catch (err) {
+    logger.error({ err }, "startup-migration: createNotificationQueueTable failed");
   }
 }
 

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db,
@@ -149,33 +149,28 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
   const enriched = enrichRow(rows[0]);
 
   void (async () => {
-    const n8nBookingUrl = process.env.N8N_BOOKING_WEBHOOK_URL;
-    const n8nUser = process.env.N8N_WEBHOOK_USER;
-    const n8nPass = process.env.N8N_WEBHOOK_PASS;
-    if (!n8nBookingUrl || !n8nUser || !n8nPass) {
-      req.log.error("n8n booking webhook not configured: N8N_BOOKING_WEBHOOK_URL, N8N_WEBHOOK_USER, or N8N_WEBHOOK_PASS is missing");
-      return;
-    }
     try {
-      const authHeader = "Basic " + Buffer.from(`${n8nUser}:${n8nPass}`).toString("base64");
-      const response = await fetch(n8nBookingUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: authHeader },
-        body: JSON.stringify({
-          employee_name: enriched.employeeName,
-          employee_email: rows[0].employeeEmail,
-          project_name: enriched.projectName,
-          role_name: enriched.projectRoleName,
-          start_date: enriched.startDate,
-          end_date: enriched.endDate,
-          hours_per_day: enriched.hoursPerDay,
-        }),
-      });
-      if (!response.ok) {
-        req.log.error({ status: response.status }, "n8n booking webhook returned non-2xx");
-      }
+      await db.execute(
+        sql`INSERT INTO notification_queue
+              (employee_email, employee_name, project_name, role_name,
+               start_date, end_date, hours_per_day, send_after, sent, updated_at)
+            VALUES
+              (${rows[0].employeeEmail}, ${rows[0].employeeName}, ${rows[0].projectName},
+               ${rows[0].projectRoleName ?? null},
+               ${rows[0].startDate}, ${rows[0].endDate}, ${rows[0].hoursPerDay},
+               NOW() + INTERVAL '30 minutes', FALSE, NOW())
+            ON CONFLICT (employee_email, project_name) DO UPDATE
+              SET employee_name  = EXCLUDED.employee_name,
+                  role_name      = EXCLUDED.role_name,
+                  start_date     = EXCLUDED.start_date,
+                  end_date       = EXCLUDED.end_date,
+                  hours_per_day  = EXCLUDED.hours_per_day,
+                  send_after     = NOW() + INTERVAL '30 minutes',
+                  sent           = FALSE,
+                  updated_at     = NOW()`
+      );
     } catch (err) {
-      req.log.error({ err }, "n8n booking webhook failed");
+      req.log.error({ err }, "notification_queue upsert failed (create booking)");
     }
   })();
 
@@ -227,6 +222,33 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
 
   const rows = await buildSelect().where(eq(resourceBookingsTable.id, id));
   if (rows.length === 0) { res.status(500).json({ error: "Failed to retrieve updated booking" }); return; }
+
+  void (async () => {
+    try {
+      await db.execute(
+        sql`INSERT INTO notification_queue
+              (employee_email, employee_name, project_name, role_name,
+               start_date, end_date, hours_per_day, send_after, sent, updated_at)
+            VALUES
+              (${rows[0].employeeEmail}, ${rows[0].employeeName}, ${rows[0].projectName},
+               ${rows[0].projectRoleName ?? null},
+               ${rows[0].startDate}, ${rows[0].endDate}, ${rows[0].hoursPerDay},
+               NOW() + INTERVAL '30 minutes', FALSE, NOW())
+            ON CONFLICT (employee_email, project_name) DO UPDATE
+              SET employee_name  = EXCLUDED.employee_name,
+                  role_name      = EXCLUDED.role_name,
+                  start_date     = EXCLUDED.start_date,
+                  end_date       = EXCLUDED.end_date,
+                  hours_per_day  = EXCLUDED.hours_per_day,
+                  send_after     = NOW() + INTERVAL '30 minutes',
+                  sent           = FALSE,
+                  updated_at     = NOW()`
+      );
+    } catch (err) {
+      req.log.error({ err }, "notification_queue upsert failed (update booking)");
+    }
+  })();
+
   res.json(enrichRow(rows[0]));
 });
 
@@ -235,12 +257,38 @@ router.delete("/resource-bookings/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid booking id" }); return; }
 
+  const preRows = await buildSelect().where(eq(resourceBookingsTable.id, id));
+  if (preRows.length === 0) { res.status(404).json({ error: "Booking not found" }); return; }
+
+  const { employeeEmail, projectName } = preRows[0];
+
   const result = await db
     .delete(resourceBookingsTable)
     .where(eq(resourceBookingsTable.id, id))
     .returning({ id: resourceBookingsTable.id });
 
   if (result.length === 0) { res.status(404).json({ error: "Booking not found" }); return; }
+
+  void (async () => {
+    try {
+      const deleted = await db.execute(
+        sql`DELETE FROM notification_queue
+            WHERE employee_email = ${employeeEmail}
+              AND project_name   = ${projectName}
+              AND sent           = FALSE`
+      );
+      const count = (deleted as { rowCount?: number }).rowCount ?? 0;
+      if (count === 0) {
+        req.log.info(
+          { employeeEmail, projectName },
+          "notification_queue: row already sent or not found — no cleanup needed"
+        );
+      }
+    } catch (err) {
+      req.log.error({ err }, "notification_queue cleanup failed (delete booking)");
+    }
+  })();
+
   res.json({ success: true });
 });
 
