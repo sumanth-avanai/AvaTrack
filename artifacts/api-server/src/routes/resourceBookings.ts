@@ -152,14 +152,14 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
     try {
       await db.execute(
         sql`INSERT INTO notification_queue
-              (employee_email, employee_name, project_name, role_name,
+              (booking_id, employee_email, employee_name, project_name, role_name,
                start_date, end_date, hours_per_day, send_after, sent, updated_at)
             VALUES
-              (${rows[0].employeeEmail}, ${rows[0].employeeName}, ${rows[0].projectName},
+              (${enriched.id}, ${rows[0].employeeEmail}, ${rows[0].employeeName}, ${rows[0].projectName},
                ${rows[0].projectRoleName ?? null},
                ${rows[0].startDate}, ${rows[0].endDate}, ${rows[0].hoursPerDay},
                NOW() + INTERVAL '30 minutes', FALSE, NOW())
-            ON CONFLICT (employee_email, project_name) DO UPDATE
+            ON CONFLICT (employee_email, project_name, booking_id) DO UPDATE
               SET employee_name  = EXCLUDED.employee_name,
                   role_name      = EXCLUDED.role_name,
                   start_date     = EXCLUDED.start_date,
@@ -227,14 +227,14 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
     try {
       await db.execute(
         sql`INSERT INTO notification_queue
-              (employee_email, employee_name, project_name, role_name,
+              (booking_id, employee_email, employee_name, project_name, role_name,
                start_date, end_date, hours_per_day, send_after, sent, updated_at)
             VALUES
-              (${rows[0].employeeEmail}, ${rows[0].employeeName}, ${rows[0].projectName},
+              (${id}, ${rows[0].employeeEmail}, ${rows[0].employeeName}, ${rows[0].projectName},
                ${rows[0].projectRoleName ?? null},
                ${rows[0].startDate}, ${rows[0].endDate}, ${rows[0].hoursPerDay},
                NOW() + INTERVAL '30 minutes', FALSE, NOW())
-            ON CONFLICT (employee_email, project_name) DO UPDATE
+            ON CONFLICT (employee_email, project_name, booking_id) DO UPDATE
               SET employee_name  = EXCLUDED.employee_name,
                   role_name      = EXCLUDED.role_name,
                   start_date     = EXCLUDED.start_date,
@@ -273,14 +273,15 @@ router.delete("/resource-bookings/:id", async (req, res): Promise<void> => {
     try {
       const deleted = await db.execute(
         sql`DELETE FROM notification_queue
-            WHERE employee_email = ${employeeEmail}
+            WHERE booking_id     = ${id}
+              AND employee_email = ${employeeEmail}
               AND project_name   = ${projectName}
               AND sent           = FALSE`
       );
       const count = (deleted as { rowCount?: number }).rowCount ?? 0;
       if (count === 0) {
         req.log.info(
-          { employeeEmail, projectName },
+          { employeeEmail, projectName, bookingId: id },
           "notification_queue: row already sent or not found — no cleanup needed"
         );
       }

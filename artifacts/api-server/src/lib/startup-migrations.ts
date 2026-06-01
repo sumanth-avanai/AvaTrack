@@ -13,6 +13,7 @@ export async function runStartupMigrations(): Promise<void> {
   await deleteZeroHourEntries();
   await backfillProjectColors();
   await createNotificationQueueTable();
+  await migrateNotificationQueueAddBookingId();
 }
 
 /**
@@ -106,15 +107,18 @@ async function deleteZeroHourEntries(): Promise<void> {
 
 /**
  * Create the notification_queue table if it does not already exist.
+ * Each row is keyed by (employee_email, project_name, booking_id) so that
+ * two separate bookings for the same employee+project each get their own
+ * queue entry and their own debounced notification.
  * Rows are upserted on booking CREATE/UPDATE (with a 30-minute delay) and
- * deleted on booking DELETE (if not yet sent), so the queue consumer can
- * fire employee-notification emails without coupling the booking API to n8n.
+ * deleted on booking DELETE (if not yet sent).
  */
 async function createNotificationQueueTable(): Promise<void> {
   try {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS notification_queue (
         id               SERIAL PRIMARY KEY,
+        booking_id       INTEGER     NOT NULL,
         employee_email   TEXT        NOT NULL,
         employee_name    TEXT        NOT NULL,
         project_name     TEXT        NOT NULL,
@@ -126,11 +130,109 @@ async function createNotificationQueueTable(): Promise<void> {
         sent             BOOLEAN     NOT NULL DEFAULT FALSE,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (employee_email, project_name)
+        UNIQUE (employee_email, project_name, booking_id)
       )
     `);
   } catch (err) {
     logger.error({ err }, "startup-migration: createNotificationQueueTable failed");
+  }
+}
+
+/**
+ * Migrate an existing notification_queue table from the old
+ * UNIQUE (employee_email, project_name) key to the new per-booking key
+ * UNIQUE (employee_email, project_name, booking_id).
+ *
+ * Fully idempotent — safe to run on every boot regardless of how far a
+ * previous run got.  Steps:
+ *
+ *  1. Skip entirely if the table does not exist yet.
+ *  2. Add booking_id column as nullable (ADD COLUMN IF NOT EXISTS is a no-op
+ *     when the column already exists).
+ *  3. Delete ALL rows whose booking_id is NULL — both sent and unsent.
+ *     There is no reliable way to backfill booking_id from historical data,
+ *     so all pre-migration rows are cleared.  Sent rows have already been
+ *     processed; unsent rows cannot be tied to a real booking without the id.
+ *  4. Set booking_id NOT NULL (safe because step 3 removed every NULL row).
+ *  5. Drop the old two-column constraint if it still exists.
+ *  6. Add the new three-column constraint if it does not exist yet.
+ *
+ * Steps 5–6 run unconditionally (not guarded by the column-exists check) so
+ * that partial migration states — e.g. column added on a previous boot but
+ * the process crashed before the constraint swap — are always resolved.
+ */
+async function migrateNotificationQueueAddBookingId(): Promise<void> {
+  try {
+    const tableExists = await db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'notification_queue'
+      ) AS exists
+    `);
+    const tableRows = Array.isArray(tableExists)
+      ? tableExists
+      : (tableExists as { rows: { exists: boolean }[] }).rows;
+    if (!tableRows[0]?.exists) return;
+
+    const colExists = await db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name  = 'notification_queue'
+          AND column_name = 'booking_id'
+      ) AS exists
+    `);
+    const colRows = Array.isArray(colExists)
+      ? colExists
+      : (colExists as { rows: { exists: boolean }[] }).rows;
+
+    if (!colRows[0]?.exists) {
+      logger.info("startup-migration: adding booking_id column to notification_queue");
+
+      await db.execute(sql`
+        ALTER TABLE notification_queue
+          ADD COLUMN IF NOT EXISTS booking_id INTEGER
+      `);
+
+      // Remove every legacy row (sent OR unsent) — booking_id cannot be
+      // backfilled and any remaining NULL would block SET NOT NULL below.
+      await db.execute(sql`
+        DELETE FROM notification_queue WHERE booking_id IS NULL
+      `);
+
+      await db.execute(sql`
+        ALTER TABLE notification_queue
+          ALTER COLUMN booking_id SET NOT NULL
+      `);
+
+      logger.info("startup-migration: booking_id column added to notification_queue");
+    }
+
+    // Always reconcile constraints, even if the column already existed.
+    // This handles the case where a previous boot added the column but
+    // crashed before completing the constraint swap.
+    await db.execute(sql`
+      ALTER TABLE notification_queue
+        DROP CONSTRAINT IF EXISTS notification_queue_employee_email_project_name_key
+    `);
+
+    await db.execute(sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'notification_queue_employee_email_project_name_booking_id_key'
+        ) THEN
+          ALTER TABLE notification_queue
+            ADD CONSTRAINT notification_queue_employee_email_project_name_booking_id_key
+            UNIQUE (employee_email, project_name, booking_id);
+        END IF;
+      END
+      $$
+    `);
+
+    logger.info("startup-migration: notification_queue constraint reconciliation complete");
+  } catch (err) {
+    logger.error({ err }, "startup-migration: migrateNotificationQueueAddBookingId failed");
   }
 }
 
