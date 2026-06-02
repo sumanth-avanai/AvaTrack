@@ -179,7 +179,7 @@ router.get("/billing", async (req, res): Promise<void> => {
               const invoicedHours = e.invoicedHours;
               const investHours   = e.investHours;
               const loggedDays    = round2(loggedHours / 8);
-              const revenue       = round2(loggedDays * dayRate);
+              const revenue       = round2((loggedHours / 8) * dayRate);
               const invoiced      = round2((invoicedHours / 8) * dayRate);
               const invest        = round2((investHours / 8) * dayRate);
               const unbilled      = round2(revenue - invoiced - invest);
@@ -193,7 +193,7 @@ router.get("/billing", async (req, res): Promise<void> => {
 
           const roleLoggedHours   = employees.reduce((s, e) => s + e.hours,    0);
           const roleLoggedDays    = round2(roleLoggedHours / 8);
-          const logged            = round2(roleLoggedDays * dayRate);
+          const logged            = round2((roleLoggedHours / 8) * dayRate);
           const invoiced          = round2(employees.reduce((s, e) => s + e.invoiced, 0));
           const invest            = round2(employees.reduce((s, e) => s + e.invest,   0));
           const unbilled          = round2(logged - invoiced - invest);
