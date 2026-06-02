@@ -1,0 +1,171 @@
+Ja verstanden! Also "All Projects" als Option, dann gruppiert nach Client → Project → Role → Employee.
+
+---
+
+```
+FEATURE: Billing Export CSV + Days column + All Projects view
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== CHANGES ===
+
+1. Add "DAYS" and "HOURS" columns to billing table
+2. Add "All Projects" option to project selector
+3. Group by Client → Project when "All Projects" selected
+4. Add Export CSV functionality
+
+=== PROJECT SELECTOR UPDATE ===
+
+```
+[All Projects ▼]
+├─ All Projects        ← NEW
+├─ ─────────────
+├─ n8n extension (Bayer)
+├─ FOSM (Bayer)
+├─ Brand Identity (Other Client)
+```
+
+=== TABLE: ALL PROJECTS VIEW ===
+
+Grouped by Client → Project → Role → Employee:
+
+│ CLIENT / PROJECT / ROLE / EMPLOYEE │ DAY RATE │ DAYS │ HOURS │ BUDGET │ LOGGED │ UNBILLED │
+│────────────────────────────────────│──────────│──────│───────│────────│────────│──────────│
+│ ▼ Bayer                            │          │ 4.50 │ 36.00 │        │52.000 €│ 52.000 € │
+│   ▼ n8n extension                  │          │ 2.17 │ 17.34 │60.300 €│17.336 €│ 17.336 € │
+│     ▼ n8n AI DevOps Engineer       │ 1.005 €/d│ 2.17 │ 17.34 │        │17.336 €│ 17.336 € │
+│        └─ Abdelrahman M.           │          │ 2.01 │ 16.08 │        │16.080 €│ 16.080 € │
+│        └─ Aemal Sayer              │          │ 0.16 │  1.26 │        │ 1.256 €│  1.256 € │
+│   ▼ FOSM                           │          │ 2.33 │ 18.66 │45.000 €│34.664 €│ 34.664 € │
+│     ▼ Product Manager              │  750 €/d │ 2.33 │ 18.66 │        │34.664 €│ 34.664 € │
+│        └─ Willi Wendt              │          │ 2.33 │ 18.66 │        │34.664 €│ 34.664 € │
+│ ▼ Other Client                     │          │ 1.00 │  8.00 │        │ 8.000 €│  8.000 € │
+│   ...                              │          │      │       │        │        │          │
+│────────────────────────────────────│──────────│──────│───────│────────│────────│──────────│
+│ TOTAL                              │          │ 5.50 │ 44.00 │        │60.000 €│ 60.000 € │
+
+=== TABLE: SINGLE PROJECT VIEW ===
+
+Same as before, but with DAYS + HOURS columns added:
+
+│ ROLE / EMPLOYEE        │ DAY RATE │ DAYS │ HOURS │ BUDGET │ LOGGED │ STATUS │ UNBILLED │
+│────────────────────────│──────────│──────│───────│────────│────────│────────│──────────│
+│ ▼ n8n AI DevOps Eng.   │ 1.005 €/d│ 2.17 │ 17.34 │60.300 €│17.336 €│        │ 17.336 € │
+│    └─ Abdelrahman M.   │          │ 2.01 │ 16.08 │        │16.080 €│   —    │ 16.080 € │
+
+=== KPI CARDS ===
+
+Update to show totals across all projects when "All Projects" selected:
+
+```
+BUDGET: €197.745    LOGGED: €60.000    INVOICED: €0    UNBILLED: €60.000    REMAINING: €137.745
+```
+
+=== CALCULATION ===
+
+```javascript
+const hours = sumTimeEntries(employee, role, period);
+const days = hours / 8;
+```
+
+=== EXPORT CSV ===
+
+**Format (same for single or all projects):**
+```csv
+Client,Project,Role,Employee,Dayrate,Days,Hours,Revenue
+Bayer,n8n extension,n8n AI DevOps Engineer,Abdelrahman Mabrouk,1005,2.01,16.08,16080
+Bayer,n8n extension,n8n AI DevOps Engineer,Aemal Sayer,1005,0.16,1.26,1256
+Bayer,FOSM,Product Manager,Willi Wendt,750,2.33,18.66,34664
+Other Client,Brand Identity,Designer,Max Müller,650,1.00,8.00,8000
+```
+
+**Logic:**
+```javascript
+function exportBillingCSV(data, selectedProject, period) {
+  const rows = [['Client', 'Project', 'Role', 'Employee', 'Dayrate', 'Days', 'Hours', 'Revenue']];
+  
+  const clients = selectedProject === 'all' 
+    ? data.clients 
+    : [{ projects: [data.project] }];
+  
+  clients.forEach(client => {
+    client.projects.forEach(project => {
+      project.roles.forEach(role => {
+        role.employees.forEach(emp => {
+          rows.push([
+            client.name,
+            project.name,
+            role.name,
+            emp.name,
+            role.dayrate,
+            (emp.hours / 8).toFixed(2),
+            emp.hours.toFixed(2),
+            emp.revenue.toFixed(2)
+          ]);
+        });
+      });
+    });
+  });
+  
+  const filename = selectedProject === 'all'
+    ? `billing-all-${period}.csv`
+    : `billing-${project.name}-${period}.csv`;
+    
+  downloadCSV(rows, filename);
+}
+```
+
+=== COLLAPSIBLE LOGIC ===
+
+All Projects view:
+- Clients: expanded by default
+- Projects: expanded if has unbilled
+- Roles: expanded if has unbilled
+- Employees: always visible under role
+
+=== API UPDATE ===
+
+```
+GET /api/billing?startDate=&endDate=&projectId=all
+
+Response (all projects):
+{
+  totals: { budget, logged, invoiced, unbilled, remaining },
+  clients: [
+    {
+      id, name,
+      totals: { ... },
+      projects: [
+        {
+          id, name,
+          totals: { ... },
+          roles: [
+            {
+              id, name, dayrate, budgetedDays,
+              totals: { ... },
+              employees: [{ id, name, hours, days, revenue, status }]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Check |
+|---|-------|
+| 1 | "All Projects" option in project selector |
+| 2 | All Projects view grouped: Client → Project → Role → Employee |
+| 3 | DAYS column visible (Hours / 8) |
+| 4 | HOURS column visible |
+| 5 | KPI cards show totals across all projects |
+| 6 | Export CSV downloads file |
+| 7 | CSV includes Client, Project, Role, Employee, Dayrate, Days, Hours, Revenue |
+| 8 | CSV has one row per employee per role |
+| 9 | CSV filtered by selected period |
+| 10 | Collapsible rows work for all hierarchy levels |
+| 11 | Single project view still works as before |
+```

@@ -106,7 +106,7 @@ export default function Holidays() {
     
     if (confirm("Remove this holiday?")) {
       deleteHoliday.mutate(
-        { id: activeCalendar.id, holidayId },
+        { id: holidayId },
         {
           onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: getListHolidaysQueryKey(activeCalendar.id, {}) });

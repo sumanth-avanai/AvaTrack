@@ -52,10 +52,10 @@ export default function Home() {
   const today = new Date();
 
   const stats = [
-    { label: "Active Projects",          value: summary?.activeProjects ?? 0,  icon: FolderKanban, color: "text-blue-500",   bg: "bg-blue-50 dark:bg-blue-950/30" },
-    { label: "Active Employees",         value: summary?.activeEmployees ?? 0, icon: Users,        color: "text-emerald-500",bg: "bg-emerald-50 dark:bg-emerald-950/30" },
-    { label: "Hours Logged This Week",   value: summary?.hoursThisWeek  != null ? `${summary.hoursThisWeek}h`  : "—", icon: Clock,        color: "text-violet-500", bg: "bg-violet-50 dark:bg-violet-950/30" },
-    { label: "Hours Logged This Month",  value: summary?.hoursThisMonth != null ? `${summary.hoursThisMonth}h` : "—", icon: BarChart3,    color: "text-amber-500",  bg: "bg-amber-50 dark:bg-amber-950/30" },
+    { label: "Active Employees",        value: summary?.employeeSummaries?.length ?? 0,                                          icon: Users,        color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+    { label: "Hours Logged This Week",  value: summary?.totalBookedHours   != null ? `${summary.totalBookedHours}h`   : "—",    icon: Clock,        color: "text-violet-500",  bg: "bg-violet-50 dark:bg-violet-950/30" },
+    { label: "Billable This Week",      value: summary?.billableBookedHours != null ? `${summary.billableBookedHours}h` : "—",  icon: BarChart3,    color: "text-amber-500",   bg: "bg-amber-50 dark:bg-amber-950/30" },
+    { label: "Week",                    value: summary ? format(new Date(summary.weekStartDate), "MMM d") + " – " + format(new Date(summary.weekEndDate), "MMM d") : "—", icon: FolderKanban, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-950/30" },
   ];
 
   function handleCreateEmployee(e: React.FormEvent<HTMLFormElement>) {

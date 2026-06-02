@@ -54,8 +54,8 @@ router.post("/employees", async (req, res): Promise<void> => {
       weeklyCapacityHours: parsed.data.weeklyCapacityHours,
       workingDaysMask: (parsed.data.workingDaysMask ?? [1, 1, 1, 1, 1, 0, 0]).join(","),
       holidayCalendarCode: parsed.data.holidayCalendarCode ?? null,
-      contractStartDate:  parsed.data.contractStartDate  ?? null,
-      contractEndDate:    parsed.data.contractEndDate    ?? null,
+      contractStartDate:  parsed.data.contractStartDate  ? parsed.data.contractStartDate.toISOString().split("T")[0] : null,
+      contractEndDate:    parsed.data.contractEndDate    ? parsed.data.contractEndDate.toISOString().split("T")[0]   : null,
       utilizationTarget:  parsed.data.utilizationTarget  ?? null,
       personalAccessToken: token,
       personalAccessPinHash: pinHash,
@@ -133,8 +133,8 @@ router.patch("/employees/:id", async (req, res): Promise<void> => {
   if (parsed.data.workingDaysMask) {
     updateData.workingDaysMask = parsed.data.workingDaysMask.join(",");
   }
-  if ("contractStartDate" in parsed.data) updateData.contractStartDate = parsed.data.contractStartDate ?? null;
-  if ("contractEndDate"   in parsed.data) updateData.contractEndDate   = parsed.data.contractEndDate   ?? null;
+  if ("contractStartDate" in parsed.data) updateData.contractStartDate = parsed.data.contractStartDate ? parsed.data.contractStartDate.toISOString().split("T")[0] : null;
+  if ("contractEndDate"   in parsed.data) updateData.contractEndDate   = parsed.data.contractEndDate   ? parsed.data.contractEndDate.toISOString().split("T")[0]   : null;
 
   const [emp] = await db
     .update(employeesTable)

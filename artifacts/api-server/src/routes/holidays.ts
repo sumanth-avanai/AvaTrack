@@ -76,7 +76,7 @@ router.post("/holiday-calendars/:id/holidays", async (req, res): Promise<void> =
 
   const [holiday] = await db
     .insert(holidaysTable)
-    .values({ calendarId: params.data.id, ...parsed.data })
+    .values({ calendarId: params.data.id, name: parsed.data.name, date: parsed.data.date.toISOString().split("T")[0] })
     .returning();
 
   res.status(201).json(holiday);

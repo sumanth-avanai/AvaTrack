@@ -661,13 +661,13 @@ export function TimesheetGrid({
       {/* Toolbar */}
       <div className="flex items-center justify-between bg-card p-4 rounded-md border border-border shadow-sm flex-wrap gap-3">
         <div className="flex items-center gap-4">
-          <Button variant="outline" onClick={() => dirtyGuard.guardNavigate(onPreviousWeek)} size="sm">
+          <Button variant="outline" onClick={() => onPreviousWeek && dirtyGuard.guardNavigate(onPreviousWeek)} size="sm">
             &larr; Prev Week
           </Button>
           <div className="font-medium text-sm">
             {format(weekDays[0], "MMM d")} – {format(weekDays[6], "MMM d, yyyy")}
           </div>
-          <Button variant="outline" onClick={() => dirtyGuard.guardNavigate(onNextWeek)} size="sm">
+          <Button variant="outline" onClick={() => onNextWeek && dirtyGuard.guardNavigate(onNextWeek)} size="sm">
             Next Week &rarr;
           </Button>
         </div>

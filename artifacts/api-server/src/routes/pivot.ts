@@ -690,7 +690,7 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
             children:   empChildren,
           };
         })
-        .filter((r): r is DrillRow => r !== null);
+        .filter((r) => r !== null) as DrillRow[];
 
       const projRoleIds = projRoles.map((r) => r.id);
       rows.push({
@@ -766,7 +766,7 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
                 children:   empChildren,
               };
             })
-            .filter((r): r is DrillRow => r !== null);
+            .filter((r) => r !== null) as DrillRow[];
 
           const projRoleIds = projRoles.map((r) => r.id);
           return {
@@ -778,7 +778,7 @@ router.get("/reports/pivot", async (req, res): Promise<void> => {
             children:   roleChildren,
           };
         })
-        .filter((r): r is DrillRow => r !== null);
+        .filter((r) => r !== null) as DrillRow[];
 
       rows.push({
         id:         `client-${client.id}`,

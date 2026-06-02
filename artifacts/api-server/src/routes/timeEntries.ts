@@ -114,7 +114,7 @@ router.post("/time-entries", async (req, res): Promise<void> => {
       employeeId: parsed.data.employeeId,
       projectId: parsed.data.projectId,
       projectRoleId,
-      entryDate: parsed.data.entryDate,
+      entryDate: parsed.data.entryDate.toISOString().split("T")[0],
       hours: parsed.data.hours,
       note: parsed.data.note ?? null,
     })
@@ -344,9 +344,10 @@ router.patch("/time-entries/:id", async (req, res): Promise<void> => {
     return;
   }
 
+  const { entryDate, ...rest } = parsed.data;
   const [entry] = await db
     .update(timeEntriesTable)
-    .set(parsed.data)
+    .set({ ...rest, ...(entryDate ? { entryDate: entryDate.toISOString().split("T")[0] } : {}) })
     .where(eq(timeEntriesTable.id, params.data.id))
     .returning();
 

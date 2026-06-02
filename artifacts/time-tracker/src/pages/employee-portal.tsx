@@ -27,10 +27,17 @@ export default function EmployeePortal() {
     }
   }, [token]);
 
-  const { data: employee, isLoading, isError } = useGetEmployeeByToken(
+  const { data: _employeeRaw, isLoading, isError } = useGetEmployeeByToken(
     token || "",
     { query: { queryKey: getGetEmployeeByTokenQueryKey(token || ""), enabled: !!token } }
   );
+  const employee = _employeeRaw as typeof _employeeRaw & {
+    personalAccessToken?: string;
+    weeklyCapacityHours?: number;
+    workingDaysMask?: number[];
+    contractStartDate?: string | null;
+    contractEndDate?: string | null;
+  } | undefined;
 
   const verifyPin = useVerifyEmployeePin();
 
