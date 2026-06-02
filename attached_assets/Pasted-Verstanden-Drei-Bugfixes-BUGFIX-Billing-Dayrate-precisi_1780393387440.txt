@@ -1,0 +1,105 @@
+Verstanden! Drei Bugfixes:
+
+---
+
+```
+BUGFIX: Billing - Dayrate precision, empty projects filter, CSV decimal format
+
+⚠️ IMPORTANT: Preserve ALL existing data. No destructive changes.
+
+=== BUG 1: Dayrate rounding causes wrong totals ===
+
+PROBLEM:
+- Dayrate shown as "1.257 €/d" but actual is e.g. 1257.45
+- Revenue calculated with rounded dayrate → totals don't match
+
+FIX:
+- Store/calculate with full precision
+- Display dayrate with 2 decimals: "1.257,45 €/d"
+- Or show without decimals if whole number: "1.257 €/d"
+
+```javascript
+// Display
+const formatDayrate = (rate) => {
+  return rate % 1 === 0 
+    ? `${rate.toLocaleString('de-DE')} €/d`
+    : `${rate.toLocaleString('de-DE', { minimumFractionDigits: 2 })} €/d`;
+};
+
+// Calculate revenue with full precision
+const revenue = (hours / 8) * role.dayrate; // use unrounded dayrate
+```
+
+=== BUG 2: "All Projects" shows projects with 0 hours ===
+
+PROBLEM:
+- "Infrastructure" shows with 0.00 days, 0.00 hours
+- Clutters the view
+
+FIX:
+- In "All Projects" view: hide projects/roles/employees with 0 logged hours in period
+- In single project view: show everything (including 0, for budget overview)
+
+```javascript
+// All Projects view
+const filteredClients = clients
+  .map(client => ({
+    ...client,
+    projects: client.projects
+      .filter(p => p.totals.logged > 0)
+      .map(project => ({
+        ...project,
+        roles: project.roles.filter(r => r.totals.logged > 0)
+      }))
+  }))
+  .filter(client => client.projects.length > 0);
+```
+
+=== BUG 3: CSV uses wrong decimal separator ===
+
+PROBLEM:
+- German locale uses "," for decimals
+- CSV should use "." for compatibility with Excel/tools
+- Or use ";" as CSV separator if using ","
+
+FIX:
+- Use "." for decimals, "," as separator (international standard)
+
+```javascript
+function exportCSV(rows) {
+  const csvContent = rows.map(row => 
+    row.map(cell => {
+      if (typeof cell === 'number') {
+        return cell.toFixed(2); // Always use "." for decimals
+      }
+      // Escape strings with commas
+      if (typeof cell === 'string' && cell.includes(',')) {
+        return `"${cell}"`;
+      }
+      return cell;
+    }).join(',')
+  ).join('\n');
+  
+  download(csvContent, 'text/csv');
+}
+```
+
+**CSV Output:**
+```csv
+Client,Project,Role,Employee,Dayrate,Days,Hours,Revenue
+Bayer,n8n extension,n8n AI DevOps Engineer,Abdelrahman Mabrouk,1005.00,2.01,16.08,16080.00
+```
+
+=== ACCEPTANCE CRITERIA ===
+
+| # | Check |
+|---|-------|
+| 1 | Dayrate displayed with full precision (2 decimals if needed) |
+| 2 | Revenue calculated with unrounded dayrate |
+| 3 | Totals match sum of individual rows |
+| 4 | "All Projects" hides entries with 0 logged hours |
+| 5 | Single project view still shows 0-entries |
+| 6 | CSV uses "." for decimals |
+| 7 | CSV uses "," as separator |
+| 8 | Strings with commas are quoted in CSV |
+```
