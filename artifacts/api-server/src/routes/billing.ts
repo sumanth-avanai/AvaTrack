@@ -1,4 +1,8 @@
 /**
+ * GET  /api/billing?startDate=&endDate=
+ *   Returns logged vs invoiced vs invest revenue for ALL projects, grouped by
+ *   client → project → role → employee.
+ *
  * GET  /api/projects/:id/billing?startDate=&endDate=
  *   Returns logged vs invoiced vs invest revenue per role and employee.
  *
@@ -11,6 +15,7 @@ import { eq, and, gte, lte, isNull, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import {
   db,
+  clientsTable,
   projectsTable,
   projectRolesTable,
   timeEntriesTable,
@@ -25,6 +30,251 @@ function parseDate(v: unknown): string | null {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// ── GET /billing  (all projects) ────────────────────────────────────────────
+
+router.get("/billing", async (req, res): Promise<void> => {
+  const startDate = parseDate(req.query.startDate);
+  const endDate   = parseDate(req.query.endDate);
+
+  // Fetch all clients
+  const clients = await db
+    .select({ id: clientsTable.id, name: clientsTable.name })
+    .from(clientsTable)
+    .orderBy(clientsTable.name);
+
+  // Fetch all projects with their clientId
+  const projects = await db
+    .select({ id: projectsTable.id, name: projectsTable.name, clientId: projectsTable.clientId })
+    .from(projectsTable)
+    .orderBy(projectsTable.name);
+
+  // Fetch all roles across all projects
+  const roles = await db
+    .select({
+      id: projectRolesTable.id,
+      name: projectRolesTable.name,
+      dayRate: projectRolesTable.dayRate,
+      budgetedDays: projectRolesTable.budgetedDays,
+      projectId: projectRolesTable.projectId,
+    })
+    .from(projectRolesTable)
+    .orderBy(projectRolesTable.id);
+
+  if (roles.length === 0) {
+    const clientsOut = clients.map((c) => ({
+      id: c.id, name: c.name,
+      totals: { budget: 0, logged: 0, invoiced: 0, invest: 0, unbilled: 0, remaining: 0 },
+      projects: [],
+    }));
+    res.json({
+      totals: { budget: 0, logged: 0, invoiced: 0, invest: 0, unbilled: 0, remaining: 0 },
+      clients: clientsOut.filter((c) => {
+        const cProjects = projects.filter((p) => p.clientId === c.id);
+        return cProjects.length > 0;
+      }),
+    });
+    return;
+  }
+
+  const roleIds = roles.map((r) => r.id);
+
+  // Build date conditions
+  const entryConditions: ReturnType<typeof eq>[] = [
+    sql`${timeEntriesTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`,
+  ];
+  if (startDate) entryConditions.push(gte(timeEntriesTable.entryDate, startDate));
+  if (endDate)   entryConditions.push(lte(timeEntriesTable.entryDate, endDate));
+
+  // Aggregate hours per (projectId, roleId, employeeId)
+  const entryRows = await db
+    .select({
+      projectId:    timeEntriesTable.projectId,
+      projectRoleId: timeEntriesTable.projectRoleId,
+      employeeId:    timeEntriesTable.employeeId,
+      employeeName:  employeesTable.name,
+      totalHours: sql<number>`COALESCE(SUM(${timeEntriesTable.hours}), 0)`,
+      invoicedHours: sql<number>`COALESCE(SUM(CASE
+        WHEN ${timeEntriesTable.billingStatus} = 'invoiced' THEN ${timeEntriesTable.hours}
+        WHEN ${timeEntriesTable.billingStatus} IS NULL AND ${timeEntriesTable.invoicedAt} IS NOT NULL THEN ${timeEntriesTable.hours}
+        ELSE 0
+      END), 0)`,
+      investHours: sql<number>`COALESCE(SUM(CASE
+        WHEN ${timeEntriesTable.billingStatus} = 'invest' THEN ${timeEntriesTable.hours}
+        ELSE 0
+      END), 0)`,
+    })
+    .from(timeEntriesTable)
+    .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
+    .where(and(...entryConditions))
+    .groupBy(
+      timeEntriesTable.projectId,
+      timeEntriesTable.projectRoleId,
+      timeEntriesTable.employeeId,
+      employeesTable.name,
+    );
+
+  type EmpAgg = {
+    employeeId: number;
+    employeeName: string;
+    totalHours: number;
+    invoicedHours: number;
+    investHours: number;
+  };
+  // Map: roleId → EmpAgg[]
+  const byRole = new Map<number, EmpAgg[]>();
+  for (const row of entryRows) {
+    if (row.projectRoleId == null) continue;
+    if (!byRole.has(row.projectRoleId)) byRole.set(row.projectRoleId, []);
+    byRole.get(row.projectRoleId)!.push({
+      employeeId:    row.employeeId,
+      employeeName:  row.employeeName ?? `#${row.employeeId}`,
+      totalHours:    Number(row.totalHours),
+      invoicedHours: Number(row.invoicedHours),
+      investHours:   Number(row.investHours),
+    });
+  }
+
+  // Build project lookup by id
+  const projectById = new Map(projects.map((p) => [p.id, p]));
+
+  // Build roles per project
+  const rolesByProject = new Map<number, typeof roles>();
+  for (const role of roles) {
+    if (!rolesByProject.has(role.projectId)) rolesByProject.set(role.projectId, []);
+    rolesByProject.get(role.projectId)!.push(role);
+  }
+
+  let grandBudget   = 0;
+  let grandLogged   = 0;
+  let grandInvoiced = 0;
+  let grandInvest   = 0;
+
+  // Build client → project → role → employee tree
+  const clientsOut = clients
+    .map((client) => {
+      const clientProjects = projects.filter((p) => p.clientId === client.id);
+      if (clientProjects.length === 0) return null;
+
+      let clientBudget   = 0;
+      let clientLogged   = 0;
+      let clientInvoiced = 0;
+      let clientInvest   = 0;
+
+      const projectsOut = clientProjects.map((project) => {
+        const projectRoles = rolesByProject.get(project.id) ?? [];
+
+        let projBudget   = 0;
+        let projLogged   = 0;
+        let projInvoiced = 0;
+        let projInvest   = 0;
+
+        const rolesOut = projectRoles.map((role) => {
+          const empRows = byRole.get(role.id) ?? [];
+          const dayRate = role.dayRate;
+
+          const employees = empRows
+            .map((e) => {
+              const loggedHours   = e.totalHours;
+              const invoicedHours = e.invoicedHours;
+              const investHours   = e.investHours;
+              const loggedDays    = round2(loggedHours / 8);
+              const revenue       = round2(loggedDays * dayRate);
+              const invoiced      = round2((invoicedHours / 8) * dayRate);
+              const invest        = round2((investHours / 8) * dayRate);
+              const unbilled      = round2(revenue - invoiced - invest);
+              const billingStatus =
+                invoicedHours > 0 && investHours === 0 ? "invoiced" as const :
+                investHours > 0 && invoicedHours === 0 ? "invest" as const :
+                null;
+              return { id: e.employeeId, name: e.employeeName, hours: loggedHours, days: loggedDays, revenue, invoiced, invest, unbilled, billingStatus };
+            })
+            .sort((a, b) => b.revenue - a.revenue);
+
+          const roleLoggedHours   = employees.reduce((s, e) => s + e.hours,    0);
+          const roleLoggedDays    = round2(roleLoggedHours / 8);
+          const logged            = round2(roleLoggedDays * dayRate);
+          const invoiced          = round2(employees.reduce((s, e) => s + e.invoiced, 0));
+          const invest            = round2(employees.reduce((s, e) => s + e.invest,   0));
+          const unbilled          = round2(logged - invoiced - invest);
+          const budget            = role.budgetedDays != null ? round2(role.budgetedDays * dayRate) : null;
+          const remaining         = budget != null ? round2(budget - logged) : null;
+
+          if (budget != null) projBudget += budget;
+          projLogged   += logged;
+          projInvoiced += invoiced;
+          projInvest   += invest;
+
+          return {
+            id: role.id, name: role.name,
+            dayrate: dayRate,
+            budgetedDays: role.budgetedDays,
+            budget, loggedDays: roleLoggedDays, loggedHours: round2(roleLoggedHours),
+            logged, invoiced, invest, unbilled, remaining,
+            employees,
+          };
+        });
+
+        const projUnbilled  = round2(projLogged - projInvoiced - projInvest);
+        const projRemaining = round2(projBudget - projLogged);
+
+        clientBudget   += projBudget;
+        clientLogged   += projLogged;
+        clientInvoiced += projInvoiced;
+        clientInvest   += projInvest;
+
+        return {
+          id: project.id, name: project.name,
+          totals: {
+            budget:   round2(projBudget),
+            logged:   round2(projLogged),
+            invoiced: round2(projInvoiced),
+            invest:   round2(projInvest),
+            unbilled: projUnbilled,
+            remaining: projRemaining,
+          },
+          roles: rolesOut,
+        };
+      });
+
+      const clientUnbilled  = round2(clientLogged - clientInvoiced - clientInvest);
+      const clientRemaining = round2(clientBudget - clientLogged);
+
+      grandBudget   += clientBudget;
+      grandLogged   += clientLogged;
+      grandInvoiced += clientInvoiced;
+      grandInvest   += clientInvest;
+
+      return {
+        id: client.id, name: client.name,
+        totals: {
+          budget:    round2(clientBudget),
+          logged:    round2(clientLogged),
+          invoiced:  round2(clientInvoiced),
+          invest:    round2(clientInvest),
+          unbilled:  clientUnbilled,
+          remaining: clientRemaining,
+        },
+        projects: projectsOut,
+      };
+    })
+    .filter(Boolean);
+
+  const grandUnbilled  = round2(grandLogged - grandInvoiced - grandInvest);
+  const grandRemaining = round2(grandBudget - grandLogged);
+
+  res.json({
+    totals: {
+      budget:    round2(grandBudget),
+      logged:    round2(grandLogged),
+      invoiced:  round2(grandInvoiced),
+      invest:    round2(grandInvest),
+      unbilled:  grandUnbilled,
+      remaining: grandRemaining,
+    },
+    clients: clientsOut,
+  });
+});
 
 // ── GET /projects/:projectId/billing ────────────────────────────────────────
 

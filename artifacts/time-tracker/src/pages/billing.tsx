@@ -89,17 +89,67 @@ interface BillingRole {
   employees: BillingEmployee[];
 }
 
+interface BillingTotals {
+  budget: number;
+  logged: number;
+  invoiced: number;
+  invest: number;
+  unbilled: number;
+  remaining: number;
+}
+
 interface BillingResponse {
   project: { id: number; name: string };
-  totals: {
-    budget: number;
-    logged: number;
-    invoiced: number;
-    invest: number;
-    unbilled: number;
-    remaining: number;
-  };
+  totals: BillingTotals;
   roles: BillingRole[];
+}
+
+// All-projects types
+interface AllBillingEmployee {
+  id: number;
+  name: string;
+  hours: number;
+  days: number;
+  revenue: number;
+  invoiced: number;
+  invest: number;
+  unbilled: number;
+  billingStatus: BillingStatusVal;
+}
+
+interface AllBillingRole {
+  id: number;
+  name: string;
+  dayrate: number;
+  budgetedDays: number | null;
+  budget: number | null;
+  loggedDays: number;
+  loggedHours: number;
+  logged: number;
+  invoiced: number;
+  invest: number;
+  unbilled: number;
+  remaining: number | null;
+  employees: AllBillingEmployee[];
+}
+
+interface AllBillingProject {
+  id: number;
+  name: string;
+  totals: BillingTotals;
+  roles: AllBillingRole[];
+}
+
+interface AllBillingClient {
+  id: number;
+  name: string;
+  totals: BillingTotals;
+  projects: AllBillingProject[];
+}
+
+interface AllBillingResponse {
+  totals: BillingTotals;
+  clients: AllBillingClient[];
 }
 
 interface HistoryEntry {
@@ -183,6 +233,14 @@ function eurDayRate(n: number): string {
   return `${eur(n)}/d`;
 }
 
+function fmtDays(n: number): string {
+  return n.toFixed(2);
+}
+
+function fmtHours(n: number): string {
+  return n.toFixed(2);
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function KpiCard({ label, value, accent, subLabel }: { label: string; value: string; accent?: string; subLabel?: string }) {
@@ -213,6 +271,197 @@ function StatusBadge({ status }: { status: BillingStatusVal }) {
   );
 }
 
+// ─── All Projects Table ───────────────────────────────────────────────────────
+
+function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
+  const [expandedClients,  setExpandedClients]  = useState<Set<number>>(() => new Set(allData.clients.map((c) => c.id)));
+  const [expandedProjects, setExpandedProjects] = useState<Set<number>>(() =>
+    new Set(allData.clients.flatMap((c) => c.projects.filter((p) => p.totals.unbilled > 0).map((p) => p.id))),
+  );
+  const [expandedRoles, setExpandedRoles] = useState<Set<number>>(() =>
+    new Set(allData.clients.flatMap((c) => c.projects.flatMap((p) => p.roles.filter((r) => r.unbilled > 0).map((r) => r.id)))),
+  );
+
+  const toggleClient  = (id: number) => setExpandedClients((p)  => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleProject = (id: number) => setExpandedProjects((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleRole    = (id: number) => setExpandedRoles((p)    => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  function unbilledColour(unbilled: number): string {
+    return unbilled > 0 ? "text-yellow-400" : "text-green-400";
+  }
+
+  const hasAnyData = allData.clients.some((c) => c.projects.some((p) => p.roles.length > 0));
+
+  if (!hasAnyData) {
+    return (
+      <div className="text-sm text-muted-foreground py-12 text-center">
+        No roles or time entries found for this period.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-white/8 overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow className="border-white/8 hover:bg-transparent">
+            <TableHead className="w-full">Client / Project / Role / Employee</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Day Rate</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Days</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Hours</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Budget</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Logged</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Unbilled</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {allData.clients.map((client) => {
+            if (client.projects.length === 0) return null;
+            const clientExpanded = expandedClients.has(client.id);
+
+            return [
+              // Client row
+              <TableRow
+                key={`client-${client.id}`}
+                className="border-white/8 cursor-pointer hover:bg-white/3 font-semibold bg-white/2"
+                onClick={() => toggleClient(client.id)}
+              >
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    {clientExpanded
+                      ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    }
+                    <span className="text-sm">{client.name}</span>
+                  </div>
+                </TableCell>
+                <TableCell />
+                <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                  {fmtDays(client.totals.logged > 0 ? client.projects.flatMap((p) => p.roles).reduce((s, r) => s + r.loggedDays, 0) : 0)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-sm text-muted-foreground">
+                  {fmtHours(client.projects.flatMap((p) => p.roles).reduce((s, r) => s + r.loggedHours, 0))}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-sm">
+                  {client.totals.budget > 0 ? eur(client.totals.budget) : <span className="text-muted-foreground">—</span>}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-sm">{eur(client.totals.logged)}</TableCell>
+                <TableCell className={cn("text-right tabular-nums text-sm", unbilledColour(client.totals.unbilled))}>
+                  {eur(client.totals.unbilled)}
+                </TableCell>
+              </TableRow>,
+
+              ...(!clientExpanded ? [] : client.projects.map((project) => {
+                const projectExpanded = expandedProjects.has(project.id);
+                const projectDays  = project.roles.reduce((s, r) => s + r.loggedDays,  0);
+                const projectHours = project.roles.reduce((s, r) => s + r.loggedHours, 0);
+
+                return [
+                  // Project row
+                  <TableRow
+                    key={`project-${project.id}`}
+                    className="border-white/8 cursor-pointer hover:bg-white/3 font-medium"
+                    onClick={() => toggleProject(project.id)}
+                  >
+                    <TableCell>
+                      <div className="flex items-center gap-1.5 ml-5">
+                        {projectExpanded
+                          ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        }
+                        <span className="text-sm">{project.name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell />
+                    <TableCell className="text-right tabular-nums text-sm text-muted-foreground">{fmtDays(projectDays)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-sm text-muted-foreground">{fmtHours(projectHours)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-sm">
+                      {project.totals.budget > 0 ? eur(project.totals.budget) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-sm">{eur(project.totals.logged)}</TableCell>
+                    <TableCell className={cn("text-right tabular-nums text-sm", unbilledColour(project.totals.unbilled))}>
+                      {eur(project.totals.unbilled)}
+                    </TableCell>
+                  </TableRow>,
+
+                  ...(!projectExpanded ? [] : project.roles.map((role) => {
+                    const roleExpanded = expandedRoles.has(role.id);
+
+                    return [
+                      // Role row
+                      <TableRow
+                        key={`role-${role.id}`}
+                        className="border-white/8 cursor-pointer hover:bg-white/2 text-sm"
+                        onClick={() => toggleRole(role.id)}
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 ml-10">
+                            {roleExpanded
+                              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            }
+                            <span className="text-foreground/80">{role.name}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground text-xs">{eurDayRate(role.dayrate)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">{fmtDays(role.loggedDays)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">{fmtHours(role.loggedHours)}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {role.budget != null ? eur(role.budget) : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(role.logged)}</TableCell>
+                        <TableCell className={cn("text-right tabular-nums", unbilledColour(role.unbilled))}>
+                          {eur(role.unbilled)}
+                        </TableCell>
+                      </TableRow>,
+
+                      ...(!roleExpanded ? [] : role.employees.map((emp) => (
+                        <TableRow
+                          key={`emp-${role.id}-${emp.id}`}
+                          className="border-white/8 hover:bg-white/2 text-sm text-muted-foreground"
+                        >
+                          <TableCell>
+                            <span className="ml-[72px] text-foreground/60">{emp.name}</span>
+                          </TableCell>
+                          <TableCell />
+                          <TableCell className="text-right tabular-nums">{fmtDays(emp.days)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{fmtHours(emp.hours)}</TableCell>
+                          <TableCell />
+                          <TableCell className="text-right tabular-nums">{eur(emp.revenue)}</TableCell>
+                          <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
+                            {eur(emp.unbilled)}
+                          </TableCell>
+                        </TableRow>
+                      ))),
+                    ];
+                  })),
+                ];
+              })),
+            ];
+          })}
+
+          {/* Totals row */}
+          <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
+            <TableCell>Total</TableCell>
+            <TableCell />
+            <TableCell className="text-right tabular-nums">
+              {fmtDays(allData.clients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedDays, 0))}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">
+              {fmtHours(allData.clients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedHours, 0))}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">{eur(allData.totals.budget)}</TableCell>
+            <TableCell className="text-right tabular-nums">{eur(allData.totals.logged)}</TableCell>
+            <TableCell className={cn("text-right tabular-nums", allData.totals.unbilled > 0 ? "text-yellow-400" : "text-green-400")}>
+              {eur(allData.totals.unbilled)}
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Billing() {
@@ -221,11 +470,15 @@ export default function Billing() {
   const queryClient = useQueryClient();
 
   // ── Selectors state ──────────────────────────────────────────────────────────
-  const [projectId, setProjectId]   = useState<number | null>(null);
+  // projectId: null = nothing selected, "all" = all projects, number = specific project
+  const [projectSel, setProjectSel] = useState<"all" | number | null>(null);
   const [preset, setPreset]         = useState<BillingPreset>("this_month");
   const [customStart, setCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
   const [customEnd,   setCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
   const [filter, setFilter]         = useState<FilterMode>("all");
+
+  const projectId = typeof projectSel === "number" ? projectSel : null;
+  const isAllProjects = projectSel === "all";
 
   // ── Table state ──────────────────────────────────────────────────────────────
   const [expandedRoles, setExpandedRoles] = useState<Set<number>>(new Set());
@@ -263,7 +516,21 @@ export default function Billing() {
     enabled: projectId != null,
   });
 
-  const data = billingQuery.data;
+  const allBillingQuery = useQuery<AllBillingResponse>({
+    queryKey: ["billing-all", startDate, endDate],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (startDate) params.set("startDate", startDate);
+      if (endDate)   params.set("endDate", endDate);
+      const res = await fetch(`/api/billing?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load billing data");
+      return res.json();
+    },
+    enabled: isAllProjects,
+  });
+
+  const data    = billingQuery.data;
+  const allData = allBillingQuery.data;
 
   const historyQuery = useQuery<HistoryResponse>({
     queryKey: ["billing-history", projectId],
@@ -275,11 +542,11 @@ export default function Billing() {
     enabled: projectId != null,
   });
 
-  // Pre-select project from ?project= query param (e.g. deep-link from Project Status)
+  // Pre-select project from ?project= query param
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const pid = params.get("project");
-    if (pid && !isNaN(Number(pid))) setProjectId(Number(pid));
+    if (pid && !isNaN(Number(pid))) setProjectSel(Number(pid));
   }, []);
 
   // Auto-expand roles with unbilled hours after each load
@@ -294,7 +561,7 @@ export default function Billing() {
   useEffect(() => {
     setInitialised(false);
     setSelection(new Set());
-  }, [projectId, startDate, endDate]);
+  }, [projectSel, startDate, endDate]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
@@ -402,37 +669,66 @@ export default function Billing() {
   // ── CSV export ────────────────────────────────────────────────────────────────
 
   function exportCSV() {
-    if (!data) return;
-    const rows: string[] = ["Role,Employee,Dayrate,Budget,Logged,Invoiced,Invest,Unbilled,Remaining,Status"];
+    const periodStr = startDate ?? "all";
+    const header = "Client,Project,Role,Employee,Dayrate,Days,Hours,Revenue";
 
-    for (const role of data.roles) {
-      rows.push([
-        `"${role.name}"`, "", eurDayRate(role.dayrate),
-        eur(role.budget), eur(role.logged), eur(role.invoiced),
-        eur(role.invest), eur(role.unbilled), eur(role.remaining), "",
-      ].join(","));
-      for (const emp of role.employees) {
-        rows.push([
-          `"${role.name}"`, `"${emp.name}"`, eurDayRate(role.dayrate),
-          "", eur(emp.logged), eur(emp.invoiced),
-          eur(emp.invest), eur(emp.unbilled), "", emp.billingStatus ?? "",
-        ].join(","));
+    if (isAllProjects && allData) {
+      const rows: string[] = [header];
+      for (const client of allData.clients) {
+        for (const project of client.projects) {
+          for (const role of project.roles) {
+            for (const emp of role.employees) {
+              rows.push([
+                `"${client.name}"`,
+                `"${project.name}"`,
+                `"${role.name}"`,
+                `"${emp.name}"`,
+                role.dayrate,
+                emp.days.toFixed(2),
+                emp.hours.toFixed(2),
+                emp.revenue,
+              ].join(","));
+            }
+          }
+        }
       }
+      const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `billing-all-${periodStr}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
     }
 
-    rows.push([
-      "TOTAL", "", "", eur(data.totals.budget), eur(data.totals.logged),
-      eur(data.totals.invoiced), eur(data.totals.invest),
-      eur(data.totals.unbilled), eur(data.totals.remaining), "",
-    ].join(","));
-
-    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `billing-${projectId}-${startDate ?? "all"}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (data) {
+      const projectName = data.project.name.replace(/[^a-z0-9]/gi, "-").toLowerCase();
+      const rows: string[] = [header];
+      for (const role of data.roles) {
+        for (const emp of role.employees) {
+          const days    = emp.loggedHours / 8;
+          const revenue = emp.logged;
+          rows.push([
+            `"${data.project.name}"`,
+            `"${data.project.name}"`,
+            `"${role.name}"`,
+            `"${emp.name}"`,
+            role.dayrate,
+            days.toFixed(2),
+            emp.loggedHours.toFixed(2),
+            revenue,
+          ].join(","));
+        }
+      }
+      const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `billing-${projectName}-${periodStr}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
   }
 
   // ── Colours ───────────────────────────────────────────────────────────────────
@@ -449,11 +745,15 @@ export default function Billing() {
     return unbilled > 0 ? "text-yellow-400" : "text-green-400";
   }
 
-  const totalsRemainingColour = data
-    ? remainingColour(data.totals.remaining, data.totals.budget)
+  const activeTotals = isAllProjects ? allData?.totals : data?.totals;
+
+  const totalsRemainingColour = activeTotals
+    ? remainingColour(activeTotals.remaining, activeTotals.budget)
     : "text-foreground";
 
   const periodLabel = getPeriodLabel(preset, customStart, customEnd);
+
+  const canExport = (isAllProjects && !!allData) || (!isAllProjects && !!data);
 
   return (
     <AdminLayout>
@@ -463,7 +763,7 @@ export default function Billing() {
           <Receipt className="h-5 w-5 text-muted-foreground" strokeWidth={1.5} />
           <h1 className="text-xl font-semibold">Billing</h1>
         </div>
-        <Button variant="outline" size="sm" disabled={!data} onClick={exportCSV} className="gap-2">
+        <Button variant="outline" size="sm" disabled={!canExport} onClick={exportCSV} className="gap-2">
           <Download className="h-4 w-4" />
           Export CSV
         </Button>
@@ -473,9 +773,17 @@ export default function Billing() {
       <div className="flex flex-wrap gap-3 mb-6">
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">Project</Label>
-          <Select value={projectId != null ? String(projectId) : ""} onValueChange={(v) => setProjectId(Number(v))}>
+          <Select
+            value={projectSel != null ? String(projectSel) : ""}
+            onValueChange={(v) => {
+              if (v === "all") setProjectSel("all");
+              else setProjectSel(Number(v));
+            }}
+          >
             <SelectTrigger className="w-64"><SelectValue placeholder="Select a project…" /></SelectTrigger>
             <SelectContent>
+              <SelectItem value="all">All Projects</SelectItem>
+              <div className="my-1 border-t border-white/10" />
               {(projects ?? []).map((p) => (
                 <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
               ))}
@@ -510,231 +818,260 @@ export default function Billing() {
       </div>
 
       {/* No project selected */}
-      {!projectId && (
+      {projectSel == null && (
         <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-2">
           <Receipt className="h-10 w-10 opacity-30" strokeWidth={1} />
           <p className="text-sm">Select a project to view billing</p>
         </div>
       )}
 
-      {projectId && billingQuery.isLoading && (
+      {/* Single project loading / error */}
+      {!isAllProjects && projectId != null && billingQuery.isLoading && (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
       )}
-
-      {projectId && billingQuery.isError && (
+      {!isAllProjects && projectId != null && billingQuery.isError && (
         <div className="text-sm text-destructive py-12 text-center">Failed to load billing data.</div>
       )}
 
-      {data && (
+      {/* All projects loading / error */}
+      {isAllProjects && allBillingQuery.isLoading && (
+        <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
+      )}
+      {isAllProjects && allBillingQuery.isError && (
+        <div className="text-sm text-destructive py-12 text-center">Failed to load billing data.</div>
+      )}
+
+      {/* KPI Cards — shown for both modes */}
+      {activeTotals && (
         <>
-          {/* KPI Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-            <KpiCard label="Budget"   value={eur(data.totals.budget)} />
+            <KpiCard label="Budget"   value={eur(activeTotals.budget)} />
             <KpiCard
               label="Logged"
-              value={eur(data.totals.logged)}
-              subLabel={data.totals.invest > 0 ? `(${eur(data.totals.invest)} inv)` : undefined}
+              value={eur(activeTotals.logged)}
+              subLabel={activeTotals.invest > 0 ? `(${eur(activeTotals.invest)} inv)` : undefined}
             />
-            <KpiCard label="Invoiced" value={eur(data.totals.invoiced)} />
+            <KpiCard label="Invoiced" value={eur(activeTotals.invoiced)} />
             <KpiCard
               label="Unbilled"
-              value={eur(data.totals.unbilled)}
-              accent={unbilledColour(data.totals.unbilled)}
+              value={eur(activeTotals.unbilled)}
+              accent={unbilledColour(activeTotals.unbilled)}
             />
             <KpiCard
               label="Remaining"
-              value={eur(data.totals.remaining)}
+              value={eur(activeTotals.remaining)}
               accent={totalsRemainingColour}
             />
           </div>
 
-          {/* Toolbar */}
-          <div className="flex items-center gap-2 mb-3">
-            {/* Filter */}
-            <Select value={filter} onValueChange={(v) => setFilter(v as FilterMode)}>
-              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="unbilled">Unbilled only</SelectItem>
-                <SelectItem value="invoiced">Invoiced only</SelectItem>
-                <SelectItem value="invest">Invest only</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* All Projects view */}
+          {isAllProjects && allData && (
+            <AllProjectsTable allData={allData} />
+          )}
 
-            {/* Selection info */}
-            {selection.size > 0 && (
-              <span className="text-sm text-muted-foreground">
-                Selected: <span className="text-foreground font-medium">{selection.size}</span>
-                {selectedAmount > 0 && (
-                  <span className="text-yellow-400 ml-1">({eur(selectedAmount)})</span>
+          {/* Single project view */}
+          {!isAllProjects && data && (
+            <>
+              {/* Toolbar */}
+              <div className="flex items-center gap-2 mb-3">
+                <Select value={filter} onValueChange={(v) => setFilter(v as FilterMode)}>
+                  <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="unbilled">Unbilled only</SelectItem>
+                    <SelectItem value="invoiced">Invoiced only</SelectItem>
+                    <SelectItem value="invest">Invest only</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {selection.size > 0 && (
+                  <span className="text-sm text-muted-foreground">
+                    Selected: <span className="text-foreground font-medium">{selection.size}</span>
+                    {selectedAmount > 0 && (
+                      <span className="text-yellow-400 ml-1">({eur(selectedAmount)})</span>
+                    )}
+                  </span>
                 )}
-              </span>
-            )}
 
-            {/* Mark as dropdown — always visible, disabled when nothing selected */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="default" className="gap-1" disabled={selection.size === 0}>
-                  Mark as <ChevronDown className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
-                  <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
-                  Invoiced
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => updateStatusMutation.mutate({ status: "invest" })}
-                  disabled={updateStatusMutation.isPending}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-purple-400 mr-2 shrink-0" />
-                  Invest
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="default" className="gap-1" disabled={selection.size === 0}>
+                      Mark as <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
+                      Invoiced
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => updateStatusMutation.mutate({ status: "invest" })}
+                      disabled={updateStatusMutation.isPending}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-purple-400 mr-2 shrink-0" />
+                      Invest
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
-            {/* Clear selection — only when items are checked */}
-            {selection.size > 0 && (
-              <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
-                <X className="h-3.5 w-3.5" />
-                Clear selection
-              </Button>
-            )}
-          </div>
+                {selection.size > 0 && (
+                  <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
+                    <X className="h-3.5 w-3.5" />
+                    Clear selection
+                  </Button>
+                )}
+              </div>
 
-          {/* Table */}
-          {data.roles.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-12 text-center">
-              No roles defined for this project.
-            </div>
-          ) : (
-            <div className="rounded-xl border border-white/8 overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-white/8 hover:bg-transparent">
-                    <TableHead className="w-8 pr-0">
-                      <Checkbox
-                        checked={someSelected && !allSelected ? "indeterminate" : allSelected}
-                        onCheckedChange={(c) => handleSelectAll(!!c)}
-                        aria-label="Select all"
-                      />
-                    </TableHead>
-                    <TableHead className="w-full">Role / Employee</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Day Rate</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Budget</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Logged</TableHead>
-                    <TableHead className="whitespace-nowrap">Status</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Unbilled</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Remaining</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredRoles.map((role) => {
-                    const expanded    = expandedRoles.has(role.id);
-                    const roleChecked = isRoleSelected(role);
-                    const roleIndet   = isRoleIndeterminate(role);
-
-                    const toggleExpand = () =>
-                      setExpandedRoles((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(role.id)) next.delete(role.id); else next.add(role.id);
-                        return next;
-                      });
-
-                    return [
-                      // ── Role row ──────────────────────────────────────────────
-                      <TableRow
-                        key={`role-${role.id}`}
-                        className="border-white/8 cursor-pointer hover:bg-white/3 font-medium"
-                        onClick={toggleExpand}
-                      >
-                        <TableCell className="pr-0" onClick={(e) => e.stopPropagation()}>
+              {/* Table */}
+              {data.roles.length === 0 ? (
+                <div className="text-sm text-muted-foreground py-12 text-center">
+                  No roles defined for this project.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-white/8 overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-white/8 hover:bg-transparent">
+                        <TableHead className="w-8 pr-0">
                           <Checkbox
-                            checked={roleIndet ? "indeterminate" : roleChecked}
-                            onCheckedChange={(c) => handleRoleCheck(role, !!c)}
-                            aria-label={`Select role ${role.name}`}
+                            checked={someSelected && !allSelected ? "indeterminate" : allSelected}
+                            onCheckedChange={(c) => handleSelectAll(!!c)}
+                            aria-label="Select all"
                           />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            {expanded
-                              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            }
-                            <span>{role.name}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                          {eurDayRate(role.dayrate)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {role.budget != null ? eur(role.budget) : <span className="text-muted-foreground">—</span>}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{eur(role.logged)}</TableCell>
-                        <TableCell />
-                        <TableCell className={cn("text-right tabular-nums", unbilledColour(role.unbilled))}>
-                          {eur(role.unbilled)}
-                        </TableCell>
-                        <TableCell className={cn("text-right tabular-nums", remainingColour(role.remaining, role.budget))}>
-                          {role.remaining != null ? eur(role.remaining) : <span className="text-muted-foreground">—</span>}
-                        </TableCell>
-                      </TableRow>,
+                        </TableHead>
+                        <TableHead className="w-full">Role / Employee</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Day Rate</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Days</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Hours</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Budget</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Logged</TableHead>
+                        <TableHead className="whitespace-nowrap">Status</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Unbilled</TableHead>
+                        <TableHead className="text-right whitespace-nowrap">Remaining</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredRoles.map((role) => {
+                        const expanded    = expandedRoles.has(role.id);
+                        const roleChecked = isRoleSelected(role);
+                        const roleIndet   = isRoleIndeterminate(role);
 
-                      // ── Employee rows ─────────────────────────────────────────
-                      ...(!expanded ? [] : role.employees.map((emp) => {
-                        const empChecked = selection.has(empKey(role.id, emp.id));
-                        return (
+                        const toggleExpand = () =>
+                          setExpandedRoles((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(role.id)) next.delete(role.id); else next.add(role.id);
+                            return next;
+                          });
+
+                        return [
                           <TableRow
-                            key={`emp-${role.id}-${emp.id}`}
-                            className="border-white/8 hover:bg-white/2 text-sm text-muted-foreground"
+                            key={`role-${role.id}`}
+                            className="border-white/8 cursor-pointer hover:bg-white/3 font-medium"
+                            onClick={toggleExpand}
                           >
-                            <TableCell className="pr-0">
+                            <TableCell className="pr-0" onClick={(e) => e.stopPropagation()}>
                               <Checkbox
-                                checked={empChecked}
-                                onCheckedChange={(c) => handleEmpCheck(role.id, emp.id, !!c)}
-                                aria-label={`Select ${emp.name}`}
+                                checked={roleIndet ? "indeterminate" : roleChecked}
+                                onCheckedChange={(c) => handleRoleCheck(role, !!c)}
+                                aria-label={`Select role ${role.name}`}
                               />
                             </TableCell>
                             <TableCell>
-                              <span className="ml-6 text-foreground/70">{emp.name}</span>
+                              <div className="flex items-center gap-1.5">
+                                {expanded
+                                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                }
+                                <span>{role.name}</span>
+                              </div>
                             </TableCell>
-                            <TableCell />
-                            <TableCell />
-                            <TableCell className="text-right tabular-nums">{eur(emp.logged)}</TableCell>
-                            <TableCell><StatusBadge status={emp.billingStatus} /></TableCell>
-                            <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
-                              {eur(emp.unbilled)}
+                            <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                              {eurDayRate(role.dayrate)}
                             </TableCell>
+                            <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                              {fmtDays(role.loggedHours / 8)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                              {fmtHours(role.loggedHours)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {role.budget != null ? eur(role.budget) : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">{eur(role.logged)}</TableCell>
                             <TableCell />
-                          </TableRow>
-                        );
-                      })),
-                    ];
-                  })}
+                            <TableCell className={cn("text-right tabular-nums", unbilledColour(role.unbilled))}>
+                              {eur(role.unbilled)}
+                            </TableCell>
+                            <TableCell className={cn("text-right tabular-nums", remainingColour(role.remaining, role.budget))}>
+                              {role.remaining != null ? eur(role.remaining) : <span className="text-muted-foreground">—</span>}
+                            </TableCell>
+                          </TableRow>,
 
-                  {/* Totals row */}
-                  <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
-                    <TableCell />
-                    <TableCell>Total</TableCell>
-                    <TableCell />
-                    <TableCell className="text-right tabular-nums">{eur(data.totals.budget)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{eur(data.totals.logged)}</TableCell>
-                    <TableCell />
-                    <TableCell className={cn("text-right tabular-nums", unbilledColour(data.totals.unbilled))}>
-                      {eur(data.totals.unbilled)}
-                    </TableCell>
-                    <TableCell className={cn("text-right tabular-nums", totalsRemainingColour)}>
-                      {eur(data.totals.remaining)}
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
+                          ...(!expanded ? [] : role.employees.map((emp) => {
+                            const empChecked = selection.has(empKey(role.id, emp.id));
+                            const empDays    = emp.loggedHours / 8;
+                            return (
+                              <TableRow
+                                key={`emp-${role.id}-${emp.id}`}
+                                className="border-white/8 hover:bg-white/2 text-sm text-muted-foreground"
+                              >
+                                <TableCell className="pr-0">
+                                  <Checkbox
+                                    checked={empChecked}
+                                    onCheckedChange={(c) => handleEmpCheck(role.id, emp.id, !!c)}
+                                    aria-label={`Select ${emp.name}`}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <span className="ml-6 text-foreground/70">{emp.name}</span>
+                                </TableCell>
+                                <TableCell />
+                                <TableCell className="text-right tabular-nums">{fmtDays(empDays)}</TableCell>
+                                <TableCell className="text-right tabular-nums">{fmtHours(emp.loggedHours)}</TableCell>
+                                <TableCell />
+                                <TableCell className="text-right tabular-nums">{eur(emp.logged)}</TableCell>
+                                <TableCell><StatusBadge status={emp.billingStatus} /></TableCell>
+                                <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
+                                  {eur(emp.unbilled)}
+                                </TableCell>
+                                <TableCell />
+                              </TableRow>
+                            );
+                          })),
+                        ];
+                      })}
+
+                      {/* Totals row */}
+                      <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
+                        <TableCell />
+                        <TableCell>Total</TableCell>
+                        <TableCell />
+                        <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                          {fmtDays(data.totals.logged > 0 ? data.roles.reduce((s, r) => s + r.loggedHours, 0) / 8 : 0)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                          {fmtHours(data.roles.reduce((s, r) => s + r.loggedHours, 0))}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(data.totals.budget)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(data.totals.logged)}</TableCell>
+                        <TableCell />
+                        <TableCell className={cn("text-right tabular-nums", unbilledColour(data.totals.unbilled))}>
+                          {eur(data.totals.unbilled)}
+                        </TableCell>
+                        <TableCell className={cn("text-right tabular-nums", totalsRemainingColour)}>
+                          {eur(data.totals.remaining)}
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
 
-      {/* Invoice history panel */}
+      {/* Invoice history panel — single project only */}
       {projectId != null && (
         <div className="mt-8">
           <button
