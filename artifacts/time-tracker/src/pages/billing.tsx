@@ -230,7 +230,11 @@ function eur(n: number | null | undefined): string {
 }
 
 function eurDayRate(n: number): string {
-  return `${eur(n)}/d`;
+  const formatted =
+    n % 1 === 0
+      ? n.toLocaleString("de-DE")
+      : n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${formatted} €/d`;
 }
 
 function fmtDays(n: number): string {
@@ -274,12 +278,31 @@ function StatusBadge({ status }: { status: BillingStatusVal }) {
 // ─── All Projects Table ───────────────────────────────────────────────────────
 
 function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
-  const [expandedClients,  setExpandedClients]  = useState<Set<number>>(() => new Set(allData.clients.map((c) => c.id)));
+  // Strip out any clients / projects / roles / employees with 0 logged hours
+  // so the "All Projects" view only shows rows that actually have activity.
+  const filteredClients = allData.clients
+    .map((client) => ({
+      ...client,
+      projects: client.projects
+        .map((project) => ({
+          ...project,
+          roles: project.roles
+            .map((role) => ({
+              ...role,
+              employees: role.employees.filter((emp) => emp.hours > 0),
+            }))
+            .filter((role) => role.loggedHours > 0),
+        }))
+        .filter((project) => project.roles.length > 0),
+    }))
+    .filter((client) => client.projects.length > 0);
+
+  const [expandedClients,  setExpandedClients]  = useState<Set<number>>(() => new Set(filteredClients.map((c) => c.id)));
   const [expandedProjects, setExpandedProjects] = useState<Set<number>>(() =>
-    new Set(allData.clients.flatMap((c) => c.projects.filter((p) => p.totals.unbilled > 0).map((p) => p.id))),
+    new Set(filteredClients.flatMap((c) => c.projects.filter((p) => p.totals.unbilled > 0).map((p) => p.id))),
   );
   const [expandedRoles, setExpandedRoles] = useState<Set<number>>(() =>
-    new Set(allData.clients.flatMap((c) => c.projects.flatMap((p) => p.roles.filter((r) => r.unbilled > 0).map((r) => r.id)))),
+    new Set(filteredClients.flatMap((c) => c.projects.flatMap((p) => p.roles.filter((r) => r.unbilled > 0).map((r) => r.id)))),
   );
 
   const toggleClient  = (id: number) => setExpandedClients((p)  => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -290,7 +313,7 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
     return unbilled > 0 ? "text-yellow-400" : "text-green-400";
   }
 
-  const hasAnyData = allData.clients.some((c) => c.projects.some((p) => p.roles.length > 0));
+  const hasAnyData = filteredClients.some((c) => c.projects.some((p) => p.roles.length > 0));
 
   if (!hasAnyData) {
     return (
@@ -315,7 +338,7 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {allData.clients.map((client) => {
+          {filteredClients.map((client) => {
             if (client.projects.length === 0) return null;
             const clientExpanded = expandedClients.has(client.id);
 
@@ -445,10 +468,10 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
             <TableCell>Total</TableCell>
             <TableCell />
             <TableCell className="text-right tabular-nums">
-              {fmtDays(allData.clients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedDays, 0))}
+              {fmtDays(filteredClients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedDays, 0))}
             </TableCell>
             <TableCell className="text-right tabular-nums">
-              {fmtHours(allData.clients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedHours, 0))}
+              {fmtHours(filteredClients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedHours, 0))}
             </TableCell>
             <TableCell className="text-right tabular-nums">{eur(allData.totals.budget)}</TableCell>
             <TableCell className="text-right tabular-nums">{eur(allData.totals.logged)}</TableCell>
@@ -668,6 +691,11 @@ export default function Billing() {
 
   // ── CSV export ────────────────────────────────────────────────────────────────
 
+  function csvCell(value: string | number): string {
+    if (typeof value === "number") return value.toFixed(2);
+    return value.includes(",") ? `"${value}"` : value;
+  }
+
   function exportCSV() {
     const periodStr = startDate ?? "all";
     const header = "Client,Project,Role,Employee,Dayrate,Days,Hours,Revenue";
@@ -678,15 +706,16 @@ export default function Billing() {
         for (const project of client.projects) {
           for (const role of project.roles) {
             for (const emp of role.employees) {
+              if (emp.hours === 0) continue;
               rows.push([
-                `"${client.name}"`,
-                `"${project.name}"`,
-                `"${role.name}"`,
-                `"${emp.name}"`,
-                role.dayrate,
+                csvCell(client.name),
+                csvCell(project.name),
+                csvCell(role.name),
+                csvCell(emp.name),
+                role.dayrate.toFixed(2),
                 emp.days.toFixed(2),
                 emp.hours.toFixed(2),
-                emp.revenue,
+                emp.revenue.toFixed(2),
               ].join(","));
             }
           }
@@ -710,14 +739,14 @@ export default function Billing() {
           const days    = emp.loggedHours / 8;
           const revenue = emp.logged;
           rows.push([
-            `"${data.project.name}"`,
-            `"${data.project.name}"`,
-            `"${role.name}"`,
-            `"${emp.name}"`,
-            role.dayrate,
+            csvCell(data.project.name),
+            csvCell(data.project.name),
+            csvCell(role.name),
+            csvCell(emp.name),
+            role.dayrate.toFixed(2),
             days.toFixed(2),
             emp.loggedHours.toFixed(2),
-            revenue,
+            revenue.toFixed(2),
           ].join(","));
         }
       }
