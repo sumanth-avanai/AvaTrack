@@ -16,18 +16,15 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-runStartupMigrations()
-  .then(() => {
-    app.listen(port, (err) => {
-      if (err) {
-        logger.error({ err }, "Error listening on port");
-        process.exit(1);
-      }
-
-      logger.info({ port }, "Server listening");
-    });
-  })
-  .catch((err) => {
-    logger.error({ err }, "Startup migrations failed");
+app.listen(port, (err) => {
+  if (err) {
+    logger.error({ err }, "Error listening on port");
     process.exit(1);
-  });
+  }
+
+  logger.info({ port }, "Server listening");
+});
+
+runStartupMigrations().catch((err) => {
+  logger.error({ err }, "Startup migrations failed");
+});
