@@ -7,7 +7,7 @@ import {
   subMonths, subQuarters,
 } from "date-fns";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useListProjects, useListClients } from "@workspace/api-client-react";
+import { useListProjects } from "@workspace/api-client-react";
 import {
   Select,
   SelectContent,
@@ -277,12 +277,10 @@ function StatusBadge({ status }: { status: BillingStatusVal }) {
 
 // ─── All Projects Table ───────────────────────────────────────────────────────
 
-function AllProjectsTable({ allData, clientId }: { allData: AllBillingResponse; clientId?: number | null }) {
+function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
   // Strip out any clients / projects / roles / employees with 0 logged hours
   // so the "All Projects" view only shows rows that actually have activity.
-  // Also filter by clientId when one is selected.
   const filteredClients = allData.clients
-    .filter((client) => clientId == null || client.id === clientId)
     .map((client) => ({
       ...client,
       projects: client.projects
@@ -465,28 +463,22 @@ function AllProjectsTable({ allData, clientId }: { allData: AllBillingResponse; 
             ];
           })}
 
-          {/* Totals row — computed from filtered clients so client filter is reflected */}
-          {(() => {
-            const allRoles = filteredClients.flatMap((c) => c.projects.flatMap((p) => p.roles));
-            const totalDays    = allRoles.reduce((s, r) => s + r.loggedDays, 0);
-            const totalHours   = allRoles.reduce((s, r) => s + r.loggedHours, 0);
-            const totalBudget  = filteredClients.flatMap((c) => c.projects).reduce((s, p) => s + (p.totals.budget ?? 0), 0);
-            const totalLogged  = filteredClients.reduce((s, c) => s + c.totals.logged, 0);
-            const totalUnbilled = filteredClients.reduce((s, c) => s + c.totals.unbilled, 0);
-            return (
-              <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
-                <TableCell>Total</TableCell>
-                <TableCell />
-                <TableCell className="text-right tabular-nums">{fmtDays(totalDays)}</TableCell>
-                <TableCell className="text-right tabular-nums">{fmtHours(totalHours)}</TableCell>
-                <TableCell className="text-right tabular-nums">{eur(totalBudget)}</TableCell>
-                <TableCell className="text-right tabular-nums">{eur(totalLogged)}</TableCell>
-                <TableCell className={cn("text-right tabular-nums", totalUnbilled > 0 ? "text-yellow-400" : "text-green-400")}>
-                  {eur(totalUnbilled)}
-                </TableCell>
-              </TableRow>
-            );
-          })()}
+          {/* Totals row */}
+          <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
+            <TableCell>Total</TableCell>
+            <TableCell />
+            <TableCell className="text-right tabular-nums">
+              {fmtDays(filteredClients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedDays, 0))}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">
+              {fmtHours(filteredClients.flatMap((c) => c.projects.flatMap((p) => p.roles)).reduce((s, r) => s + r.loggedHours, 0))}
+            </TableCell>
+            <TableCell className="text-right tabular-nums">{eur(allData.totals.budget)}</TableCell>
+            <TableCell className="text-right tabular-nums">{eur(allData.totals.logged)}</TableCell>
+            <TableCell className={cn("text-right tabular-nums", allData.totals.unbilled > 0 ? "text-yellow-400" : "text-green-400")}>
+              {eur(allData.totals.unbilled)}
+            </TableCell>
+          </TableRow>
         </TableBody>
       </Table>
     </div>
@@ -502,7 +494,6 @@ export default function Billing() {
 
   // ── Selectors state ──────────────────────────────────────────────────────────
   // projectId: null = nothing selected, "all" = all projects, number = specific project
-  const [clientSel,  setClientSel]  = useState<number | null>(null);
   const [projectSel, setProjectSel] = useState<"all" | number | null>(null);
   const [preset, setPreset]         = useState<BillingPreset>("this_month");
   const [customStart, setCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
@@ -534,12 +525,6 @@ export default function Billing() {
 
   // ── Data ─────────────────────────────────────────────────────────────────────
   const { data: projects } = useListProjects();
-  const { data: clients }  = useListClients();
-
-  const filteredProjects = useMemo(
-    () => clientSel != null ? (projects ?? []).filter((p) => p.clientId === clientSel) : (projects ?? []),
-    [projects, clientSel],
-  );
 
   const billingQuery = useQuery<BillingResponse>({
     queryKey: ["billing", projectId, startDate, endDate],
@@ -586,16 +571,6 @@ export default function Billing() {
     const pid = params.get("project");
     if (pid && !isNaN(Number(pid))) setProjectSel(Number(pid));
   }, []);
-
-  // When client changes, reset project if it no longer belongs to the selected client
-  useEffect(() => {
-    if (clientSel == null) return;
-    if (projectSel === "all") return;
-    if (projectSel != null) {
-      const belongs = (projects ?? []).some((p) => p.id === projectSel && p.clientId === clientSel);
-      if (!belongs) setProjectSel(null);
-    }
-  }, [clientSel, projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-expand roles with unbilled hours after each load
   useEffect(() => {
@@ -727,8 +702,7 @@ export default function Billing() {
 
     if (isAllProjects && allData) {
       const rows: string[] = [header];
-      const exportClients = clientSel != null ? allData.clients.filter((c) => c.id === clientSel) : allData.clients;
-      for (const client of exportClients) {
+      for (const client of allData.clients) {
         for (const project of client.projects) {
           for (const role of project.roles) {
             for (const emp of role.employees) {
@@ -800,21 +774,7 @@ export default function Billing() {
     return unbilled > 0 ? "text-yellow-400" : "text-green-400";
   }
 
-  const filteredAllTotals = useMemo(() => {
-    if (!allData) return undefined;
-    if (clientSel == null) return allData.totals;
-    const fc = allData.clients.filter((c) => c.id === clientSel);
-    return {
-      budget:    fc.reduce((s, c) => s + (c.totals.budget ?? 0), 0),
-      logged:    fc.reduce((s, c) => s + c.totals.logged,    0),
-      invoiced:  fc.reduce((s, c) => s + c.totals.invoiced,  0),
-      invest:    fc.reduce((s, c) => s + (c.totals.invest ?? 0),   0),
-      unbilled:  fc.reduce((s, c) => s + c.totals.unbilled,  0),
-      remaining: fc.reduce((s, c) => s + (c.totals.remaining ?? 0), 0),
-    };
-  }, [allData, clientSel]);
-
-  const activeTotals = isAllProjects ? filteredAllTotals : data?.totals;
+  const activeTotals = isAllProjects ? allData?.totals : data?.totals;
 
   const totalsRemainingColour = activeTotals
     ? remainingColour(activeTotals.remaining, activeTotals.budget)
@@ -838,25 +798,8 @@ export default function Billing() {
         </Button>
       </div>
 
-      {/* Client + Project + Period selectors */}
+      {/* Project + Period selectors */}
       <div className="flex flex-wrap gap-3 mb-6">
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">Client</Label>
-          <Select
-            value={clientSel != null ? String(clientSel) : "all"}
-            onValueChange={(v) => setClientSel(v === "all" ? null : Number(v))}
-          >
-            <SelectTrigger className="w-48"><SelectValue placeholder="All Clients" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Clients</SelectItem>
-              <div className="my-1 border-t border-white/10" />
-              {(clients ?? []).map((c) => (
-                <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">Project</Label>
           <Select
@@ -870,7 +813,7 @@ export default function Billing() {
             <SelectContent>
               <SelectItem value="all">All Projects</SelectItem>
               <div className="my-1 border-t border-white/10" />
-              {filteredProjects.map((p) => (
+              {(projects ?? []).map((p) => (
                 <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
               ))}
             </SelectContent>
@@ -952,7 +895,7 @@ export default function Billing() {
 
           {/* All Projects view */}
           {isAllProjects && allData && (
-            <AllProjectsTable allData={allData} clientId={clientSel} />
+            <AllProjectsTable allData={allData} />
           )}
 
           {/* Single project view */}
