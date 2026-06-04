@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   format,
@@ -6,8 +6,8 @@ import {
   startOfQuarter, endOfQuarter,
   subMonths, subQuarters,
 } from "date-fns";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useListProjects } from "@workspace/api-client-react";
+import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useListProjects, useListClients } from "@workspace/api-client-react";
 import {
   Select,
   SelectContent,
@@ -40,7 +40,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Download, ChevronDown, ChevronRight, Receipt, X, History } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Download, ChevronDown, ChevronRight, Receipt, X, History, ChevronsUpDown, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -245,6 +250,22 @@ function fmtHours(n: number): string {
   return n.toFixed(2);
 }
 
+// ─── Merge helpers ────────────────────────────────────────────────────────────
+
+function mergeTotals(responses: BillingResponse[]): BillingTotals {
+  return responses.reduce(
+    (acc, r) => ({
+      budget:    acc.budget    + r.totals.budget,
+      logged:    acc.logged    + r.totals.logged,
+      invoiced:  acc.invoiced  + r.totals.invoiced,
+      invest:    acc.invest    + r.totals.invest,
+      unbilled:  acc.unbilled  + r.totals.unbilled,
+      remaining: acc.remaining + r.totals.remaining,
+    }),
+    { budget: 0, logged: 0, invoiced: 0, invest: 0, unbilled: 0, remaining: 0 },
+  );
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function KpiCard({ label, value, accent, subLabel }: { label: string; value: string; accent?: string; subLabel?: string }) {
@@ -278,8 +299,6 @@ function StatusBadge({ status }: { status: BillingStatusVal }) {
 // ─── All Projects Table ───────────────────────────────────────────────────────
 
 function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
-  // Strip out any clients / projects / roles / employees with 0 logged hours
-  // so the "All Projects" view only shows rows that actually have activity.
   const filteredClients = allData.clients
     .map((client) => ({
       ...client,
@@ -343,7 +362,6 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
             const clientExpanded = expandedClients.has(client.id);
 
             return [
-              // Client row
               <TableRow
                 key={`client-${client.id}`}
                 className="border-white/8 cursor-pointer hover:bg-white/3 font-semibold bg-white/2"
@@ -380,7 +398,6 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
                 const projectHours = project.roles.reduce((s, r) => s + r.loggedHours, 0);
 
                 return [
-                  // Project row
                   <TableRow
                     key={`project-${project.id}`}
                     className="border-white/8 cursor-pointer hover:bg-white/3 font-medium"
@@ -411,7 +428,6 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
                     const roleExpanded = expandedRoles.has(role.id);
 
                     return [
-                      // Role row
                       <TableRow
                         key={`role-${role.id}`}
                         className="border-white/8 cursor-pointer hover:bg-white/2 text-sm"
@@ -485,6 +501,305 @@ function AllProjectsTable({ allData }: { allData: AllBillingResponse }) {
   );
 }
 
+// ─── Multi-project table (per-project sections) ───────────────────────────────
+
+function MultiProjectTable({ responses }: { responses: BillingResponse[] }) {
+  const activeResponses = responses.filter((r) => r.roles.some((ro) => ro.loggedHours > 0));
+
+  const [expandedProjects, setExpandedProjects] = useState<Set<number>>(
+    () => new Set(activeResponses.map((r) => r.project.id)),
+  );
+  const [expandedRoles, setExpandedRoles] = useState<Set<string>>(
+    () => new Set(
+      activeResponses.flatMap((r) =>
+        r.roles.filter((ro) => ro.unbilled > 0).map((ro) => `${r.project.id}-${ro.id}`),
+      ),
+    ),
+  );
+
+  const toggleProject = (id: number) =>
+    setExpandedProjects((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleRole = (key: string) =>
+    setExpandedRoles((p) => { const n = new Set(p); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  function unbilledColour(unbilled: number): string {
+    return unbilled > 0 ? "text-yellow-400" : "text-green-400";
+  }
+  function remainingColour(remaining: number | null, budget: number | null): string {
+    if (remaining == null || budget == null || budget === 0) return "text-foreground";
+    const pct = remaining / budget;
+    if (pct > 0.2)  return "text-green-400";
+    if (pct > 0.05) return "text-yellow-400";
+    return "text-red-400";
+  }
+
+  if (activeResponses.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-12 text-center">
+        No roles or time entries found for this period.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-white/8 overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow className="border-white/8 hover:bg-transparent">
+            <TableHead className="w-full">Project / Role / Employee</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Day Rate</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Days</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Hours</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Budget</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Logged</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Unbilled</TableHead>
+            <TableHead className="text-right whitespace-nowrap">Remaining</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {responses.map((resp) => {
+            const activeRoles = resp.roles.filter((r) => r.loggedHours > 0);
+            const projectExpanded = expandedProjects.has(resp.project.id);
+            const projectDays  = activeRoles.reduce((s, r) => s + r.loggedHours / 8, 0);
+            const projectHours = activeRoles.reduce((s, r) => s + r.loggedHours,     0);
+
+            return [
+              // Project row
+              <TableRow
+                key={`proj-${resp.project.id}`}
+                className="border-white/8 cursor-pointer hover:bg-white/3 font-semibold bg-white/2"
+                onClick={() => toggleProject(resp.project.id)}
+              >
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    {projectExpanded
+                      ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    }
+                    <span className="text-sm">{resp.project.name}</span>
+                  </div>
+                </TableCell>
+                <TableCell />
+                <TableCell className="text-right tabular-nums text-sm text-muted-foreground">{fmtDays(projectDays)}</TableCell>
+                <TableCell className="text-right tabular-nums text-sm text-muted-foreground">{fmtHours(projectHours)}</TableCell>
+                <TableCell className="text-right tabular-nums text-sm">
+                  {resp.totals.budget > 0 ? eur(resp.totals.budget) : <span className="text-muted-foreground">—</span>}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-sm">{eur(resp.totals.logged)}</TableCell>
+                <TableCell className={cn("text-right tabular-nums text-sm", unbilledColour(resp.totals.unbilled))}>
+                  {eur(resp.totals.unbilled)}
+                </TableCell>
+                <TableCell className={cn("text-right tabular-nums text-sm", remainingColour(resp.totals.remaining, resp.totals.budget))}>
+                  {resp.totals.remaining != null ? eur(resp.totals.remaining) : <span className="text-muted-foreground">—</span>}
+                </TableCell>
+              </TableRow>,
+
+              ...(!projectExpanded ? [] : activeRoles.map((role) => {
+                const roleKey = `${resp.project.id}-${role.id}`;
+                const roleExpanded = expandedRoles.has(roleKey);
+                const activeEmps = role.employees.filter((e) => e.loggedHours > 0);
+
+                return [
+                  <TableRow
+                    key={`role-${roleKey}`}
+                    className="border-white/8 cursor-pointer hover:bg-white/2 text-sm font-medium"
+                    onClick={() => toggleRole(roleKey)}
+                  >
+                    <TableCell>
+                      <div className="flex items-center gap-1.5 ml-5">
+                        {roleExpanded
+                          ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        }
+                        <span className="text-foreground/80">{role.name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground text-xs">{eurDayRate(role.dayrate)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{fmtDays(role.loggedHours / 8)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{fmtHours(role.loggedHours)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {role.budget != null ? eur(role.budget) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{eur(role.logged)}</TableCell>
+                    <TableCell className={cn("text-right tabular-nums", unbilledColour(role.unbilled))}>
+                      {eur(role.unbilled)}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular-nums", remainingColour(role.remaining, role.budget))}>
+                      {role.remaining != null ? eur(role.remaining) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                  </TableRow>,
+
+                  ...(!roleExpanded ? [] : activeEmps.map((emp) => (
+                    <TableRow
+                      key={`emp-${roleKey}-${emp.id}`}
+                      className="border-white/8 hover:bg-white/2 text-sm text-muted-foreground"
+                    >
+                      <TableCell>
+                        <span className="ml-[56px] text-foreground/60">{emp.name}</span>
+                      </TableCell>
+                      <TableCell />
+                      <TableCell className="text-right tabular-nums">{fmtDays(emp.loggedHours / 8)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{fmtHours(emp.loggedHours)}</TableCell>
+                      <TableCell />
+                      <TableCell className="text-right tabular-nums">{eur(emp.logged)}</TableCell>
+                      <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
+                        {eur(emp.unbilled)}
+                      </TableCell>
+                      <TableCell />
+                    </TableRow>
+                  ))),
+                ];
+              })),
+            ];
+          })}
+
+          {/* Totals row */}
+          {(() => {
+            const merged = mergeTotals(responses);
+            const totalDays  = responses.flatMap((r) => r.roles).reduce((s, ro) => s + ro.loggedHours / 8, 0);
+            const totalHours = responses.flatMap((r) => r.roles).reduce((s, ro) => s + ro.loggedHours,     0);
+            return (
+              <TableRow className="border-white/8 border-t-2 border-t-white/15 font-semibold bg-white/2 hover:bg-white/2">
+                <TableCell>Total</TableCell>
+                <TableCell />
+                <TableCell className="text-right tabular-nums text-muted-foreground text-sm">{fmtDays(totalDays)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground text-sm">{fmtHours(totalHours)}</TableCell>
+                <TableCell className="text-right tabular-nums">{eur(merged.budget)}</TableCell>
+                <TableCell className="text-right tabular-nums">{eur(merged.logged)}</TableCell>
+                <TableCell className={cn("text-right tabular-nums", merged.unbilled > 0 ? "text-yellow-400" : "text-green-400")}>
+                  {eur(merged.unbilled)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{eur(merged.remaining)}</TableCell>
+              </TableRow>
+            );
+          })()}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+// ─── Project multi-select dropdown ───────────────────────────────────────────
+
+interface ProjectSelectProps {
+  projectSels: Set<number>;
+  isAllProjects: boolean;
+  filteredProjects: { id: number; name: string }[];
+  onToggle: (id: number) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+}
+
+function ProjectMultiSelect({
+  projectSels,
+  isAllProjects,
+  filteredProjects,
+  onToggle,
+  onSelectAll,
+  onClear,
+}: ProjectSelectProps) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const visible = filteredProjects.filter((p) =>
+    !search || p.name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 10);
+  }, [open]);
+
+  function label(): string {
+    if (isAllProjects) return "All Projects";
+    if (projectSels.size === 0) return "Select projects…";
+    if (projectSels.size === 1) {
+      const found = filteredProjects.find((p) => projectSels.has(p.id))
+        ?? { name: "1 project" };
+      return found.name;
+    }
+    return `${projectSels.size} projects`;
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          className="w-72 justify-between font-normal text-left"
+        >
+          <span className="truncate">{label()}</span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        {/* Search */}
+        <div className="p-2 border-b border-white/8">
+          <Input
+            ref={inputRef}
+            placeholder="Search projects…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 text-sm"
+          />
+        </div>
+
+        <div className="max-h-64 overflow-y-auto">
+          {/* All Projects option */}
+          {!search && (
+            <button
+              className={cn(
+                "flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-white/5 text-left",
+                isAllProjects && "text-violet-400",
+              )}
+              onClick={() => { onSelectAll(); setOpen(false); }}
+            >
+              <Check className={cn("h-3.5 w-3.5 shrink-0", isAllProjects ? "opacity-100" : "opacity-0")} />
+              All Projects
+            </button>
+          )}
+
+          {!search && <div className="my-1 border-t border-white/10" />}
+
+          {visible.length === 0 && (
+            <p className="py-6 text-center text-sm text-muted-foreground">No projects found.</p>
+          )}
+
+          {visible.map((p) => {
+            const checked = projectSels.has(p.id);
+            return (
+              <button
+                key={p.id}
+                className={cn(
+                  "flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-white/5 text-left",
+                  checked && !isAllProjects && "text-violet-400",
+                )}
+                onClick={() => { onToggle(p.id); }}
+              >
+                <Check className={cn("h-3.5 w-3.5 shrink-0", checked && !isAllProjects ? "opacity-100" : "opacity-0")} />
+                <span className="truncate">{p.name}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        {(projectSels.size > 0 || isAllProjects) && (
+          <div className="border-t border-white/8 p-2">
+            <button
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => { onClear(); setOpen(false); }}
+            >
+              Clear selection
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Billing() {
@@ -493,29 +808,34 @@ export default function Billing() {
   const queryClient = useQueryClient();
 
   // ── Selectors state ──────────────────────────────────────────────────────────
-  // projectId: null = nothing selected, "all" = all projects, number = specific project
-  const [projectSel, setProjectSel] = useState<"all" | number | null>(null);
-  const [preset, setPreset]         = useState<BillingPreset>("this_month");
+  const [clientSel,     setClientSel]     = useState<number | null>(null);
+  const [projectSels,   setProjectSels]   = useState<Set<number>>(new Set());
+  const [isAllProjects, setIsAllProjects] = useState(false);
+
+  const [preset, setPreset]           = useState<BillingPreset>("this_month");
   const [customStart, setCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
   const [customEnd,   setCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
-  const [filter, setFilter]         = useState<FilterMode>("all");
+  const [filter, setFilter]           = useState<FilterMode>("all");
 
-  const projectId = typeof projectSel === "number" ? projectSel : null;
-  const isAllProjects = projectSel === "all";
+  // Derived selection flags
+  const projectSelsArray  = useMemo(() => Array.from(projectSels), [projectSels]);
+  const singleProjectId   = !isAllProjects && projectSels.size === 1 ? projectSelsArray[0] : null;
+  const isMultiProject    = !isAllProjects && projectSels.size > 1;
+  const hasSelection      = isAllProjects || projectSels.size > 0;
 
   // ── Table state ──────────────────────────────────────────────────────────────
   const [expandedRoles, setExpandedRoles] = useState<Set<number>>(new Set());
   const [initialised,   setInitialised]   = useState(false);
 
-  // ── Selection state ──────────────────────────────────────────────────────────
-  const [selection, setSelection]     = useState<Set<string>>(new Set());
+  // ── Selection state (for mark-as-invoiced, single project only) ──────────────
+  const [selection, setSelection] = useState<Set<string>>(new Set());
 
   // ── Modal state ──────────────────────────────────────────────────────────────
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceRef, setInvoiceRef]             = useState("");
 
   // ── History panel state ───────────────────────────────────────────────────────
-  const [historyOpen,    setHistoryOpen]    = useState(false);
+  const [historyOpen,     setHistoryOpen]     = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
 
   const { startDate, endDate } = useMemo(
@@ -524,21 +844,54 @@ export default function Billing() {
   );
 
   // ── Data ─────────────────────────────────────────────────────────────────────
-  const { data: projects } = useListProjects();
+  const { data: projects }       = useListProjects();
+  const { data: clients }        = useListClients();
 
+  // Filter project list by selected client
+  const filteredProjects = useMemo(() => {
+    if (!projects) return [];
+    if (clientSel == null) return projects;
+    return projects.filter((p) => (p as { clientId?: number }).clientId === clientSel);
+  }, [projects, clientSel]);
+
+  // Single-project billing query (enabled when exactly one project selected)
   const billingQuery = useQuery<BillingResponse>({
-    queryKey: ["billing", projectId, startDate, endDate],
+    queryKey: ["billing", singleProjectId, startDate, endDate],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (startDate) params.set("startDate", startDate);
       if (endDate)   params.set("endDate", endDate);
-      const res = await fetch(`/api/projects/${projectId}/billing?${params}`, { credentials: "include" });
+      const res = await fetch(`/api/projects/${singleProjectId}/billing?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load billing data");
       return res.json();
     },
-    enabled: projectId != null,
+    enabled: singleProjectId != null,
   });
 
+  // Multi-project billing queries (parallel)
+  const multiQueries = useQueries({
+    queries: isMultiProject
+      ? projectSelsArray.map((id) => ({
+          queryKey: ["billing", id, startDate, endDate] as const,
+          queryFn: async (): Promise<BillingResponse> => {
+            const params = new URLSearchParams();
+            if (startDate) params.set("startDate", startDate);
+            if (endDate)   params.set("endDate", endDate);
+            const res = await fetch(`/api/projects/${id}/billing?${params}`, { credentials: "include" });
+            if (!res.ok) throw new Error("Failed to load billing data");
+            return res.json();
+          },
+        }))
+      : [],
+  });
+
+  const multiLoading = multiQueries.some((q) => q.isLoading);
+  const multiError   = multiQueries.some((q) => q.isError);
+  const multiData    = isMultiProject && !multiLoading && !multiError
+    ? (multiQueries.map((q) => q.data).filter(Boolean) as BillingResponse[])
+    : null;
+
+  // All-projects billing query
   const allBillingQuery = useQuery<AllBillingResponse>({
     queryKey: ["billing-all", startDate, endDate],
     queryFn: async () => {
@@ -552,46 +905,70 @@ export default function Billing() {
     enabled: isAllProjects,
   });
 
-  const data    = billingQuery.data;
-  const allData = allBillingQuery.data;
+  const singleData = billingQuery.data;
+  const allData    = allBillingQuery.data;
 
   const historyQuery = useQuery<HistoryResponse>({
-    queryKey: ["billing-history", projectId],
+    queryKey: ["billing-history", singleProjectId],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/billing/history`, { credentials: "include" });
+      const res = await fetch(`/api/projects/${singleProjectId}/billing/history`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load invoice history");
       return res.json();
     },
-    enabled: projectId != null,
+    enabled: singleProjectId != null,
   });
 
-  // Pre-select project from ?project= query param
+  // ── Pre-select project from ?project= query param ─────────────────────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const pid = params.get("project");
-    if (pid && !isNaN(Number(pid))) setProjectSel(Number(pid));
+    if (pid && !isNaN(Number(pid))) {
+      setProjectSels(new Set([Number(pid)]));
+      setIsAllProjects(false);
+    }
   }, []);
 
-  // Auto-expand roles with unbilled hours after each load
+  // ── Auto-expand roles with unbilled hours (single project) ───────────────────
   useEffect(() => {
-    if (data && !initialised) {
-      setExpandedRoles(new Set(data.roles.filter((r) => r.unbilled > 0).map((r) => r.id)));
+    if (singleData && !initialised) {
+      setExpandedRoles(new Set(singleData.roles.filter((r) => r.unbilled > 0).map((r) => r.id)));
       setInitialised(true);
     }
-  }, [data, initialised]);
+  }, [singleData, initialised]);
 
-  // Clear selection and reset on project/period change
+  // ── Clear selection + reset on project/period change ─────────────────────────
   useEffect(() => {
     setInitialised(false);
     setSelection(new Set());
-  }, [projectSel, startDate, endDate]);
+  }, [projectSels, isAllProjects, startDate, endDate]);
+
+  // ── Project selection handlers ────────────────────────────────────────────────
+
+  const handleToggleProject = useCallback((id: number) => {
+    setIsAllProjects(false);
+    setProjectSels((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAllProjects = useCallback(() => {
+    setIsAllProjects(true);
+    setProjectSels(new Set());
+  }, []);
+
+  const handleClearProjectSelection = useCallback(() => {
+    setIsAllProjects(false);
+    setProjectSels(new Set());
+  }, []);
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ status, invoiceReference }: { status: "invoiced" | "invest"; invoiceReference?: string }) => {
       const items = parseSelection(selection);
-      const body: Record<string, unknown> = { projectId, items, status };
+      const body: Record<string, unknown> = { projectId: singleProjectId, items, status };
       if (startDate)        body.startDate = startDate;
       if (endDate)          body.endDate   = endDate;
       if (invoiceReference) body.invoiceReference = invoiceReference;
@@ -619,14 +996,14 @@ export default function Billing() {
   // ── Filtered roles ────────────────────────────────────────────────────────────
 
   const filteredRoles = useMemo<BillingRole[]>(() => {
-    if (!data) return [];
-    return data.roles.filter((r) => {
+    if (!singleData) return [];
+    return singleData.roles.filter((r) => {
       if (filter === "unbilled") return r.unbilled > 0;
       if (filter === "invoiced") return r.invoiced > 0;
       if (filter === "invest")   return r.invest > 0;
       return true;
     });
-  }, [data, filter]);
+  }, [singleData, filter]);
 
   // ── Selection helpers ─────────────────────────────────────────────────────────
 
@@ -679,15 +1056,24 @@ export default function Billing() {
   // ── Selected amount ───────────────────────────────────────────────────────────
 
   const selectedAmount = useMemo(() => {
-    if (!data) return 0;
+    if (!singleData) return 0;
     let total = 0;
-    for (const role of data.roles) {
+    for (const role of singleData.roles) {
       for (const emp of role.employees) {
         if (selection.has(empKey(role.id, emp.id))) total += emp.unbilled;
       }
     }
     return Math.round(total * 100) / 100;
-  }, [data, selection]);
+  }, [singleData, selection]);
+
+  // ── Active totals (for KPI cards) ────────────────────────────────────────────
+
+  const activeTotals = useMemo((): BillingTotals | null => {
+    if (isAllProjects)    return allData?.totals ?? null;
+    if (singleProjectId)  return singleData?.totals ?? null;
+    if (isMultiProject && multiData) return mergeTotals(multiData);
+    return null;
+  }, [isAllProjects, allData, singleProjectId, singleData, isMultiProject, multiData]);
 
   // ── CSV export ────────────────────────────────────────────────────────────────
 
@@ -731,30 +1117,37 @@ export default function Billing() {
       return;
     }
 
-    if (data) {
-      const projectName = data.project.name.replace(/[^a-z0-9]/gi, "-").toLowerCase();
+    const exportResponses: BillingResponse[] = singleData
+      ? [singleData]
+      : (multiData ?? []);
+
+    if (exportResponses.length > 0) {
       const rows: string[] = [header];
-      for (const role of data.roles) {
-        for (const emp of role.employees) {
-          const days    = emp.loggedHours / 8;
-          const revenue = emp.logged;
-          rows.push([
-            csvCell(data.project.name),
-            csvCell(data.project.name),
-            csvCell(role.name),
-            csvCell(emp.name),
-            role.dayrate.toFixed(2),
-            days.toFixed(2),
-            emp.loggedHours.toFixed(2),
-            revenue.toFixed(2),
-          ].join(","));
+      for (const resp of exportResponses) {
+        for (const role of resp.roles) {
+          for (const emp of role.employees) {
+            if (emp.loggedHours === 0) continue;
+            rows.push([
+              csvCell(resp.project.name),
+              csvCell(resp.project.name),
+              csvCell(role.name),
+              csvCell(emp.name),
+              role.dayrate.toFixed(2),
+              (emp.loggedHours / 8).toFixed(2),
+              emp.loggedHours.toFixed(2),
+              emp.logged.toFixed(2),
+            ].join(","));
+          }
         }
       }
+      const fileLabel = exportResponses.length === 1
+        ? exportResponses[0].project.name.replace(/[^a-z0-9]/gi, "-").toLowerCase()
+        : "multi";
       const blob = new Blob([rows.join("\n")], { type: "text/csv" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `billing-${projectName}-${periodStr}.csv`;
+      a.download = `billing-${fileLabel}-${periodStr}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -774,15 +1167,23 @@ export default function Billing() {
     return unbilled > 0 ? "text-yellow-400" : "text-green-400";
   }
 
-  const activeTotals = isAllProjects ? allData?.totals : data?.totals;
-
   const totalsRemainingColour = activeTotals
     ? remainingColour(activeTotals.remaining, activeTotals.budget)
     : "text-foreground";
 
   const periodLabel = getPeriodLabel(preset, customStart, customEnd);
 
-  const canExport = (isAllProjects && !!allData) || (!isAllProjects && !!data);
+  const canExport = (isAllProjects && !!allData) || (!!singleData) || (isMultiProject && !!multiData && multiData.length > 0);
+
+  // ── Loading / error state ─────────────────────────────────────────────────────
+
+  const isLoading = (isAllProjects && allBillingQuery.isLoading)
+    || (singleProjectId != null && billingQuery.isLoading)
+    || (isMultiProject && multiLoading);
+
+  const isError = (isAllProjects && allBillingQuery.isError)
+    || (singleProjectId != null && billingQuery.isError)
+    || (isMultiProject && multiError);
 
   return (
     <AdminLayout>
@@ -798,28 +1199,42 @@ export default function Billing() {
         </Button>
       </div>
 
-      {/* Project + Period selectors */}
+      {/* Selectors toolbar */}
       <div className="flex flex-wrap gap-3 mb-6">
+        {/* Client filter */}
         <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">Project</Label>
+          <Label className="text-xs text-muted-foreground">Client</Label>
           <Select
-            value={projectSel != null ? String(projectSel) : ""}
-            onValueChange={(v) => {
-              if (v === "all") setProjectSel("all");
-              else setProjectSel(Number(v));
-            }}
+            value={clientSel != null ? String(clientSel) : "all"}
+            onValueChange={(v) => setClientSel(v === "all" ? null : Number(v))}
           >
-            <SelectTrigger className="w-64"><SelectValue placeholder="Select a project…" /></SelectTrigger>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="All Clients" />
+            </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Projects</SelectItem>
+              <SelectItem value="all">All Clients</SelectItem>
               <div className="my-1 border-t border-white/10" />
-              {(projects ?? []).map((p) => (
-                <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+              {(clients ?? []).map((c) => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
+        {/* Project multi-select */}
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs text-muted-foreground">Project</Label>
+          <ProjectMultiSelect
+            projectSels={projectSels}
+            isAllProjects={isAllProjects}
+            filteredProjects={filteredProjects}
+            onToggle={handleToggleProject}
+            onSelectAll={handleSelectAllProjects}
+            onClear={handleClearProjectSelection}
+          />
+        </div>
+
+        {/* Period */}
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">Period</Label>
           <Select value={preset} onValueChange={(v) => setPreset(v as BillingPreset)}>
@@ -847,30 +1262,24 @@ export default function Billing() {
       </div>
 
       {/* No project selected */}
-      {projectSel == null && (
+      {!hasSelection && (
         <div className="flex flex-col items-center justify-center py-32 text-muted-foreground gap-2">
           <Receipt className="h-10 w-10 opacity-30" strokeWidth={1} />
           <p className="text-sm">Select a project to view billing</p>
         </div>
       )}
 
-      {/* Single project loading / error */}
-      {!isAllProjects && projectId != null && billingQuery.isLoading && (
+      {/* Loading */}
+      {hasSelection && isLoading && (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
       )}
-      {!isAllProjects && projectId != null && billingQuery.isError && (
+
+      {/* Error */}
+      {hasSelection && isError && (
         <div className="text-sm text-destructive py-12 text-center">Failed to load billing data.</div>
       )}
 
-      {/* All projects loading / error */}
-      {isAllProjects && allBillingQuery.isLoading && (
-        <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
-      )}
-      {isAllProjects && allBillingQuery.isError && (
-        <div className="text-sm text-destructive py-12 text-center">Failed to load billing data.</div>
-      )}
-
-      {/* KPI Cards — shown for both modes */}
+      {/* KPI Cards */}
       {activeTotals && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
@@ -898,8 +1307,13 @@ export default function Billing() {
             <AllProjectsTable allData={allData} />
           )}
 
+          {/* Multi-project view */}
+          {isMultiProject && multiData && multiData.length > 0 && (
+            <MultiProjectTable responses={multiData} />
+          )}
+
           {/* Single project view */}
-          {!isAllProjects && data && (
+          {singleProjectId != null && singleData && (
             <>
               {/* Toolbar */}
               <div className="flex items-center gap-2 mb-3">
@@ -952,7 +1366,7 @@ export default function Billing() {
               </div>
 
               {/* Table */}
-              {data.roles.length === 0 ? (
+              {singleData.roles.length === 0 ? (
                 <div className="text-sm text-muted-foreground py-12 text-center">
                   No roles defined for this project.
                 </div>
@@ -1076,19 +1490,19 @@ export default function Billing() {
                         <TableCell>Total</TableCell>
                         <TableCell />
                         <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                          {fmtDays(data.totals.logged > 0 ? data.roles.reduce((s, r) => s + r.loggedHours, 0) / 8 : 0)}
+                          {fmtDays(singleData.totals.logged > 0 ? singleData.roles.reduce((s, r) => s + r.loggedHours, 0) / 8 : 0)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
-                          {fmtHours(data.roles.reduce((s, r) => s + r.loggedHours, 0))}
+                          {fmtHours(singleData.roles.reduce((s, r) => s + r.loggedHours, 0))}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">{eur(data.totals.budget)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{eur(data.totals.logged)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(singleData.totals.budget)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(singleData.totals.logged)}</TableCell>
                         <TableCell />
-                        <TableCell className={cn("text-right tabular-nums", unbilledColour(data.totals.unbilled))}>
-                          {eur(data.totals.unbilled)}
+                        <TableCell className={cn("text-right tabular-nums", unbilledColour(singleData.totals.unbilled))}>
+                          {eur(singleData.totals.unbilled)}
                         </TableCell>
                         <TableCell className={cn("text-right tabular-nums", totalsRemainingColour)}>
-                          {eur(data.totals.remaining)}
+                          {eur(singleData.totals.remaining)}
                         </TableCell>
                       </TableRow>
                     </TableBody>
@@ -1101,7 +1515,7 @@ export default function Billing() {
       )}
 
       {/* Invoice history panel — single project only */}
-      {projectId != null && (
+      {singleProjectId != null && (
         <div className="mt-8">
           <button
             className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full text-left group"
@@ -1226,7 +1640,7 @@ export default function Billing() {
           <div className="space-y-2.5 py-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Project</span>
-              <span className="font-medium">{data?.project.name}</span>
+              <span className="font-medium">{singleData?.project.name}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Period</span>
