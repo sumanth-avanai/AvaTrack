@@ -487,9 +487,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   );
   const [notes, setNotes] = useState(isEdit ? (state.booking.notes ?? "") : "");
 
-  // Weekday mode state
+  // Weekday mode state — new bookings default to weekday-only mode
   const [weekdayMode, setWeekdayMode] = useState(
-    isEdit && state.booking.weekdayHours != null
+    isEdit ? state.booking.weekdayHours != null : true
   );
   const [weekdayHours, setWeekdayHours] = useState<Record<string, number>>(
     isEdit && state.booking.weekdayHours != null
@@ -1348,6 +1348,20 @@ export default function ResourcePlannerPage() {
   const [filterProjects, setFilterProjects] = useState<number[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
 
+  const dragStateRef = useRef<{
+    bookingId: number;
+    mode: "move" | "resize-start" | "resize-end";
+    originX: number;
+    originalStartDate: string;
+    originalEndDate: string;
+    dayWidth: number;
+  } | null>(null);
+  const [dragGhost, setDragGhost] = useState<{
+    bookingId: number;
+    startDate: string;
+    endDate: string;
+  } | null>(null);
+
   const cellWidth = CELL_WIDTH[zoom];
   const numWeeks = NUM_WEEKS[zoom];
 
@@ -1443,6 +1457,123 @@ export default function ResourcePlannerPage() {
       workingDaysMask: Array.isArray(emp?.workingDaysMask) ? emp.workingDaysMask : [1,1,1,1,1,0,0],
       holidayCalendarCode: emp?.holidayCalendarCode ?? null,
     });
+  }
+
+  const updateBookingMut = useUpdateBooking();
+  const { toast } = useToast();
+
+  function startBookingDrag(
+    e: React.MouseEvent,
+    booking: ResourceBookingFull,
+    mode: "move" | "resize-start" | "resize-end",
+    dayWidth: number
+  ) {
+    e.stopPropagation();
+    e.preventDefault();
+
+    dragStateRef.current = {
+      bookingId: booking.id,
+      mode,
+      originX: e.clientX,
+      originalStartDate: booking.startDate,
+      originalEndDate: booking.endDate,
+      dayWidth,
+    };
+
+    function computeNewDates(ds: NonNullable<typeof dragStateRef.current>, deltaDays: number) {
+      // Planner window boundaries (inclusive end = last visible day)
+      const winStart = windowStart;
+      const winEnd = addDays(windowStart, numWeeks * 7 - 1);
+
+      let newStart = ds.originalStartDate;
+      let newEnd = ds.originalEndDate;
+
+      if (ds.mode === "move") {
+        let rawStart = addDays(parseISO(ds.originalStartDate), deltaDays);
+        let rawEnd = addDays(parseISO(ds.originalEndDate), deltaDays);
+        // Soft-clamp to planner window, preserving booking duration
+        if (rawStart < winStart) {
+          const shift = differenceInDays(winStart, rawStart);
+          rawStart = winStart;
+          rawEnd = addDays(rawEnd, shift);
+        }
+        if (rawEnd > winEnd) {
+          const shift = differenceInDays(rawEnd, winEnd);
+          rawEnd = winEnd;
+          rawStart = addDays(rawStart, -shift);
+        }
+        newStart = format(rawStart, "yyyy-MM-dd");
+        newEnd = format(rawEnd, "yyyy-MM-dd");
+      } else if (ds.mode === "resize-start") {
+        // Minimum 1 day: start can equal end (inclusive dates, startDate === endDate is valid)
+        let rawStart = addDays(parseISO(ds.originalStartDate), deltaDays);
+        if (rawStart < winStart) rawStart = winStart;
+        if (rawStart > parseISO(ds.originalEndDate)) rawStart = parseISO(ds.originalEndDate);
+        newStart = format(rawStart, "yyyy-MM-dd");
+      } else {
+        // Minimum 1 day: end can equal start (inclusive dates, startDate === endDate is valid)
+        let rawEnd = addDays(parseISO(ds.originalEndDate), deltaDays);
+        if (rawEnd > winEnd) rawEnd = winEnd;
+        if (rawEnd < parseISO(ds.originalStartDate)) rawEnd = parseISO(ds.originalStartDate);
+        newEnd = format(rawEnd, "yyyy-MM-dd");
+      }
+
+      return { newStart, newEnd };
+    }
+
+    function onMouseMove(ev: MouseEvent) {
+      const ds = dragStateRef.current;
+      if (!ds) return;
+      const delta = Math.round((ev.clientX - ds.originX) / ds.dayWidth);
+      const { newStart, newEnd } = computeNewDates(ds, delta);
+      setDragGhost({ bookingId: ds.bookingId, startDate: newStart, endDate: newEnd });
+    }
+
+    function onMouseUp(ev: MouseEvent) {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      const ds = dragStateRef.current;
+      dragStateRef.current = null;
+      if (!ds) { setDragGhost(null); return; }
+      const delta = Math.round((ev.clientX - ds.originX) / ds.dayWidth);
+      if (delta === 0) {
+        // Plain click — clear ghost and open edit modal
+        setDragGhost(null);
+        openEditModal(booking);
+        return;
+      }
+      const { newStart, newEnd } = computeNewDates(ds, delta);
+      // Keep ghost alive (optimistic UI) until mutation settles
+      updateBookingMut.mutate(
+        {
+          id: ds.bookingId,
+          data: {
+            employeeId: booking.employeeId,
+            projectId: booking.projectId,
+            projectRoleId: booking.projectRoleId,
+            startDate: newStart,
+            endDate: newEnd,
+            hoursPerDay: booking.hoursPerDay,
+            weekdayHours: booking.weekdayHours,
+            notes: booking.notes,
+          },
+        },
+        {
+          onSuccess: () => {
+            // Query invalidation will load fresh server data; clear ghost now
+            setDragGhost(null);
+          },
+          onError: () => {
+            // Revert to server position
+            setDragGhost(null);
+            toast({ title: "Failed to move booking", variant: "destructive" });
+          },
+        }
+      );
+    }
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
   }
 
   function openCreateVacationModal(emp: any, defaultStartDate?: string, defaultEndDate?: string) {
@@ -2024,9 +2155,10 @@ export default function ResourcePlannerPage() {
                   {/* Booking bars — stacked by lane */}
                   {laned.map((b) => {
                     if (b.lane >= MAX_VISIBLE_LANES) return null;
+                    const ghost = dragGhost?.bookingId === b.id ? dragGhost : null;
                     const bounds = getBarBounds(
-                      b.startDate,
-                      b.endDate,
+                      ghost ? ghost.startDate : b.startDate,
+                      ghost ? ghost.endDate : b.endDate,
                       windowStart,
                       numWeeks,
                       cellWidth
@@ -2041,30 +2173,63 @@ export default function ResourcePlannerPage() {
                       `${hpd}h/d`,
                     ].filter(Boolean).join(" | ");
                     const charBudget = Math.max(1, Math.floor(bounds.width / 7) - 1);
+                    const isDragging = ghost !== null;
+                    const bDayWidth = cellWidth / 7;
+
+                    const barDiv = (
+                      <div
+                        className={`absolute rounded-sm flex items-center px-2 overflow-hidden shadow-sm${isDragging ? "" : " hover:brightness-90 transition-all"}`}
+                        style={{
+                          top: barTop,
+                          height: barH,
+                          left: bounds.left,
+                          width: bounds.width,
+                          backgroundColor: color,
+                          borderLeft: `3px solid ${darkenColor(color)}`,
+                          opacity: isDragging ? 0.75 : 0.9,
+                          cursor: isDragging ? "grabbing" : "grab",
+                          zIndex: isDragging ? 5 : 4,
+                          userSelect: "none",
+                        }}
+                        onMouseDown={(e) => startBookingDrag(e, b, "move", bDayWidth)}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Left resize handle */}
+                        <div
+                          className="absolute top-0 left-0 h-full"
+                          style={{ width: 7, cursor: "ew-resize", zIndex: 1 }}
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            startBookingDrag(e, b, "resize-start", bDayWidth);
+                          }}
+                        />
+                        {bounds.width > 16 && (
+                          <div className="text-white text-[10px] font-semibold leading-none truncate select-none">
+                            {isDragging
+                              ? `${format(parseISO(ghost!.startDate), "MMM d")} – ${format(parseISO(ghost!.endDate), "MMM d")}`
+                              : (label.length <= charBudget ? label : label.slice(0, charBudget) + "…")}
+                          </div>
+                        )}
+                        {/* Right resize handle */}
+                        <div
+                          className="absolute top-0 right-0 h-full"
+                          style={{ width: 7, cursor: "ew-resize", zIndex: 1 }}
+                          onMouseDown={(e) => {
+                            e.stopPropagation();
+                            startBookingDrag(e, b, "resize-end", bDayWidth);
+                          }}
+                        />
+                      </div>
+                    );
+
+                    if (isDragging) {
+                      return <div key={b.id} style={{ display: "contents" }}>{barDiv}</div>;
+                    }
 
                     return (
                       <Tooltip key={b.id}>
                         <TooltipTrigger asChild>
-                          <div
-                            className="absolute cursor-pointer rounded-sm flex items-center px-2 overflow-hidden shadow-sm hover:brightness-90 transition-all"
-                            style={{
-                              top: barTop,
-                              height: barH,
-                              left: bounds.left,
-                              width: bounds.width,
-                              backgroundColor: color,
-                              borderLeft: `3px solid ${darkenColor(color)}`,
-                              opacity: 0.9,
-                              zIndex: 4,
-                            }}
-                            onClick={(e) => { e.stopPropagation(); openEditModal(b); }}
-                          >
-                            {bounds.width > 16 && (
-                              <div className="text-white text-[10px] font-semibold leading-none truncate">
-                                {label.length <= charBudget ? label : label.slice(0, charBudget) + "…"}
-                              </div>
-                            )}
-                          </div>
+                          {barDiv}
                         </TooltipTrigger>
                         <TooltipContent
                           side="top"
