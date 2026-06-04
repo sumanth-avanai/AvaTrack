@@ -191,19 +191,24 @@ router.get("/billing", async (req, res): Promise<void> => {
             })
             .sort((a, b) => b.revenue - a.revenue);
 
-          const roleLoggedHours   = employees.reduce((s, e) => s + e.hours,    0);
+          const roleLoggedHours   = empRows.reduce((s, e) => s + e.totalHours,    0);
+          const roleInvoicedHours = empRows.reduce((s, e) => s + e.invoicedHours, 0);
+          const roleInvestHours   = empRows.reduce((s, e) => s + e.investHours,   0);
           const roleLoggedDays    = round2(roleLoggedHours / 8);
-          const logged            = round2((roleLoggedHours / 8) * dayRate);
-          const invoiced          = round2(employees.reduce((s, e) => s + e.invoiced, 0));
-          const invest            = round2(employees.reduce((s, e) => s + e.invest,   0));
+          const loggedRaw         = (roleLoggedHours / 8) * dayRate;
+          const invoicedRaw       = (roleInvoicedHours / 8) * dayRate;
+          const investRaw         = (roleInvestHours / 8) * dayRate;
+          const logged            = round2(loggedRaw);
+          const invoiced          = round2(invoicedRaw);
+          const invest            = round2(investRaw);
           const unbilled          = round2(logged - invoiced - invest);
           const budget            = role.budgetedDays != null ? round2(role.budgetedDays * dayRate) : null;
           const remaining         = budget != null ? round2(budget - logged) : null;
 
           if (budget != null) projBudget += budget;
-          projLogged   += logged;
-          projInvoiced += invoiced;
-          projInvest   += invest;
+          projLogged   += loggedRaw;
+          projInvoiced += invoicedRaw;
+          projInvest   += investRaw;
 
           return {
             id: role.id, name: role.name,
@@ -402,17 +407,20 @@ router.get("/projects/:projectId/billing", async (req, res): Promise<void> => {
     const roleLoggedHours   = employees.reduce((s, e) => s + e.loggedHours,   0);
     const roleInvoicedHours = employees.reduce((s, e) => s + e.invoicedHours, 0);
     const roleInvestHours   = employees.reduce((s, e) => s + e.investHours,   0);
-    const logged            = round2((roleLoggedHours / 8) * dayRate);
-    const invoiced          = round2((roleInvoicedHours / 8) * dayRate);
-    const invest            = round2((roleInvestHours / 8) * dayRate);
+    const loggedRaw         = (roleLoggedHours / 8) * dayRate;
+    const invoicedRaw       = (roleInvoicedHours / 8) * dayRate;
+    const investRaw         = (roleInvestHours / 8) * dayRate;
+    const logged            = round2(loggedRaw);
+    const invoiced          = round2(invoicedRaw);
+    const invest            = round2(investRaw);
     const unbilled          = round2(logged - invoiced - invest);
     const budget            = role.budgetedDays != null ? round2(role.budgetedDays * dayRate) : null;
     const remaining         = budget != null ? round2(budget - logged) : null;
 
     if (budget != null) totalBudget += budget;
-    totalLogged   += logged;
-    totalInvoiced += invoiced;
-    totalInvest   += invest;
+    totalLogged   += loggedRaw;
+    totalInvoiced += invoicedRaw;
+    totalInvest   += investRaw;
 
     return {
       id:            role.id,
@@ -521,9 +529,9 @@ router.get("/projects/:projectId/billing/history", async (req, res): Promise<voi
     // Update invoicedAt to the latest timestamp within the group
     if (row.invoicedAt && row.invoicedAt > g.invoicedAt) g.invoicedAt = row.invoicedAt;
 
-    // Accumulate amount
+    // Accumulate amount unrounded; round2() is applied at output time
     if (row.dayRate != null) {
-      g.totalAmount += round2((Number(row.hours) / 8) * row.dayRate);
+      g.totalAmount += (Number(row.hours) / 8) * row.dayRate;
     }
 
     // Track unique roles
