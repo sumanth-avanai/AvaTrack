@@ -586,18 +586,23 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
   });
 
   // ── Role budget status (for live budget validation) ─────────────────────────
-  interface RoleBudgetBooking { employeeId: number; employeeName: string; days: number; }
+  interface RoleBudgetBooking { employeeId: number; employeeName: string; days: number; loggedDays: number; }
   interface RoleBudgetStatus {
     budgetedDays: number | null;
     plannedDays: number;
+    loggedDays: number;
     availableDays: number | null;
+    employeeLoggedDays: number | null;
     bookings: RoleBudgetBooking[];
   }
   const excludeBookingId = isEdit ? state.booking.id : undefined;
   const { data: roleBudgetStatus } = useQuery<RoleBudgetStatus>({
-    queryKey: ["role-budget-status", roleId, excludeBookingId ?? null],
+    queryKey: ["role-budget-status", roleId, excludeBookingId ?? null, employeeId],
     queryFn: async () => {
-      const qs = excludeBookingId != null ? `?excludeBookingId=${excludeBookingId}` : "";
+      const params = new URLSearchParams();
+      if (excludeBookingId != null) params.set("excludeBookingId", String(excludeBookingId));
+      if (employeeId != null) params.set("employeeId", String(employeeId));
+      const qs = params.toString() ? `?${params.toString()}` : "";
       const r = await fetch(`/api/project-roles/${roleId}/budget-status${qs}`, { credentials: "include" });
       if (!r.ok) throw new Error("Failed to fetch role budget");
       return r.json();
@@ -1030,8 +1035,9 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
 
           {/* Role budget status box */}
           {roleId && roleBudgetStatus && (() => {
-            const { budgetedDays, plannedDays, availableDays, bookings: roleBookings } = roleBudgetStatus;
+            const { budgetedDays, plannedDays, loggedDays, availableDays, employeeLoggedDays, bookings: roleBookings } = roleBudgetStatus;
             const thisDays = thisBookingBudgetDays ?? 0;
+            const r1 = (n: number) => Math.round(n * 10) / 10;
 
             if (budgetedDays == null) {
               return (
@@ -1042,67 +1048,128 @@ function BookingModal({ state, projects, allBookings, employees, onClose }: Book
               );
             }
 
-            const afterDays = availableDays != null ? Math.round((availableDays - thisDays) * 100) / 100 : null;
-            const isOver = availableDays != null && thisDays > availableDays;
+            const empBooking = roleBookings.find((b) => b.employeeId === employeeId);
+            const empPlannedDays = r1(empBooking?.days ?? 0);
+            const empLoggedDays = r1(employeeLoggedDays ?? 0);
+            const empAvailable = r1(budgetedDays - empPlannedDays - empLoggedDays);
+
+            const roleAvailable = availableDays ?? 0;
+            const empRemainingAfter = r1(empAvailable - thisDays);
+            const roleRemainingAfter = r1(roleAvailable - thisDays);
+
+            const statusColor = (val: number) => {
+              if (val > 10) return "text-green-700 dark:text-green-400";
+              if (val >= 0) return "text-yellow-700 dark:text-yellow-400";
+              return "text-destructive";
+            };
+            const borderSeverity = (val: number) => {
+              if (val > 10) return 0;
+              if (val >= 0) return 1;
+              return 2;
+            };
+            const worstSeverity = Math.max(borderSeverity(empRemainingAfter), borderSeverity(roleRemainingAfter));
+            const outerBorder = worstSeverity === 2
+              ? "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/20"
+              : worstSeverity === 1
+                ? "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-950/20"
+                : "border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-950/20";
+
+            const selectedRole = projectRoles?.find((r) => String(r.id) === roleId);
+            const empName = isEdit
+              ? (employees.find((e) => e.id === employeeId)?.name ?? "Employee")
+              : (state as ModalState).employeeName;
 
             return (
-              <div className={`rounded-md border px-3 py-2 text-sm space-y-1 ${
-                isOver
-                  ? "border-yellow-400 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-600"
-                  : "border-green-400 bg-green-50 dark:bg-green-950/30 dark:border-green-700"
-              }`}>
-                <div className="flex items-center gap-1.5 font-semibold mb-1">
-                  {isOver
-                    ? <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 dark:text-yellow-400 shrink-0" />
-                    : <span className="text-green-600 dark:text-green-400 text-base leading-none">✓</span>
-                  }
-                  <span className={isOver ? "text-yellow-800 dark:text-yellow-300" : "text-green-800 dark:text-green-300"}>
-                    Role budget
-                  </span>
+              <div className={`rounded-md border px-3 py-2.5 text-sm space-y-2 ${outerBorder}`}>
+                {/* Header */}
+                <div className="font-semibold text-foreground flex items-center gap-1.5">
+                  <span>Role Budget</span>
+                  {selectedRole && (
+                    <span className="text-muted-foreground font-normal">— {selectedRole.name}</span>
+                  )}
                 </div>
 
-                {/* Ledger */}
-                <div className="space-y-0.5 text-muted-foreground">
-                  <div className="flex justify-between">
-                    <span>Budgeted</span>
-                    <span className="font-medium text-foreground">{budgetedDays}d</span>
+                {/* Budgeted row (shared) */}
+                <div className="flex justify-between text-muted-foreground border-b border-border/40 pb-1.5">
+                  <span>Budgeted</span>
+                  <span className="font-medium text-foreground">{budgetedDays}d</span>
+                </div>
+
+                {/* THIS EMPLOYEE section */}
+                <div className="space-y-0.5">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                    👤 This employee: {empName}
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between text-muted-foreground pl-1">
                     <span>Already planned</span>
-                    <span>−{plannedDays}d</span>
+                    <span>−{empPlannedDays}d</span>
                   </div>
+                  <div className="flex justify-between text-muted-foreground pl-1">
+                    <span>Already logged</span>
+                    <span>−{empLoggedDays}d</span>
+                  </div>
+                  <div className={`flex justify-between font-medium pl-1 ${statusColor(empAvailable)}`}>
+                    <span>Available</span>
+                    <span>{empAvailable}d</span>
+                  </div>
+                </div>
+
+                {/* ENTIRE ROLE section */}
+                <div className="space-y-0.5 border-t border-border/40 pt-1.5">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                    👥 Entire role: All {selectedRole?.name ?? ""}
+                  </div>
+                  {/* Per-employee breakdown */}
                   {roleBookings.length > 0 && (
-                    <div className="pl-3 space-y-0.5 text-xs">
+                    <div className="pl-1 space-y-0.5 text-xs mb-1">
                       {roleBookings.map((rb) => (
-                        <div key={rb.employeeId} className="flex justify-between">
-                          <span className="text-muted-foreground/70">└ {rb.employeeName}</span>
-                          <span className="text-muted-foreground/70">{rb.days}d</span>
+                        <div key={rb.employeeId} className="flex justify-between text-muted-foreground/80">
+                          <span className="truncate max-w-[140px]">└ {rb.employeeName}</span>
+                          <span className="shrink-0 ml-2">{rb.days}d planned · {rb.loggedDays}d logged</span>
                         </div>
                       ))}
                     </div>
                   )}
-                  <div className="flex justify-between">
+                  <div className="flex justify-between text-muted-foreground pl-1">
+                    <span>Already planned</span>
+                    <span>−{plannedDays}d</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground pl-1">
+                    <span>Already logged</span>
+                    <span>−{loggedDays}d</span>
+                  </div>
+                  <div className={`flex justify-between font-medium pl-1 ${statusColor(roleAvailable)}`}>
                     <span>Available</span>
-                    <span className={availableDays != null && availableDays < 0 ? "text-destructive font-medium" : ""}>
-                      {availableDays ?? "—"}d
-                    </span>
+                    <span>{availableDays ?? "—"}d</span>
                   </div>
                 </div>
 
+                {/* This booking + Remaining */}
                 {thisDays > 0 && (
-                  <div className="border-t border-border/40 pt-1 space-y-0.5">
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>This booking</span>
-                      <span>{thisDays}d</span>
+                  <div className="border-t border-border/40 pt-1.5 space-y-0.5">
+                    <div className="flex justify-between text-muted-foreground font-medium">
+                      <span>📊 This booking</span>
+                      <span>+{thisDays}d</span>
                     </div>
-                    {afterDays != null && (
-                      <div className={`flex justify-between font-medium ${isOver ? "text-destructive" : "text-green-700 dark:text-green-400"}`}>
-                        {isOver
-                          ? <><span>Over budget by</span><span>{Math.abs(afterDays)}d</span></>
-                          : <><span>Remaining after</span><span>{afterDays}d</span></>
-                        }
-                      </div>
-                    )}
+                    <div className={`flex justify-between pl-1 ${statusColor(empRemainingAfter)}`}>
+                      <span>Remaining (individual)</span>
+                      <span className="font-medium">{empRemainingAfter}d</span>
+                    </div>
+                    <div className={`flex justify-between pl-1 ${statusColor(roleRemainingAfter)}`}>
+                      <span>Remaining (role)</span>
+                      <span className="font-medium">{roleRemainingAfter}d</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Red alert when role budget is exceeded */}
+                {roleRemainingAfter < 0 && (
+                  <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 px-2.5 py-2 text-destructive text-xs">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      This booking will exceed the role budget by {r1(Math.abs(roleRemainingAfter))}d.
+                      Consider: Reduce scope OR assign more staff.
+                    </span>
                   </div>
                 )}
               </div>

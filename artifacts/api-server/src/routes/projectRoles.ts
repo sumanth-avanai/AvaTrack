@@ -191,6 +191,10 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     ? parseInt(req.query.excludeBookingId as string, 10)
     : null;
 
+  const requestingEmployeeId = req.query.employeeId
+    ? parseInt(req.query.employeeId as string, 10)
+    : null;
+
   const [role] = await db.select().from(projectRolesTable).where(eq(projectRolesTable.id, id));
   if (!role) { res.status(404).json({ error: "Role not found" }); return; }
 
@@ -234,19 +238,59 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     }
   }
 
+  // ── Logged hours from time_entries ─────────────────────────────────────────
+  const loggedRows = await db
+    .select({
+      employeeId: timeEntriesTable.employeeId,
+      employeeName: employeesTable.name,
+      totalHours: sql<number>`coalesce(sum(${timeEntriesTable.hours}), 0)`,
+    })
+    .from(timeEntriesTable)
+    .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
+    .where(eq(timeEntriesTable.projectRoleId, id))
+    .groupBy(timeEntriesTable.employeeId, employeesTable.name);
+
+  const loggedMap = new Map<number, { employeeName: string; hours: number }>();
+  let totalLoggedHours = 0;
+  for (const row of loggedRows) {
+    loggedMap.set(row.employeeId, { employeeName: row.employeeName ?? "Unknown", hours: Number(row.totalHours) });
+    totalLoggedHours += Number(row.totalHours);
+  }
+
+  // Merge all employee ids that appear in either planned or logged
+  const allEmployeeIds = new Set([...employeeMap.keys(), ...loggedMap.keys()]);
+
   const round1 = (n: number) => Math.round(n * 10) / 10;
 
   const budgetedDays = role.budgetedDays ?? null;
   const plannedDays = round1(totalPlannedDays);
-  const availableDays = budgetedDays != null ? round1(budgetedDays - totalPlannedDays) : null;
+  const loggedDays = round1(totalLoggedHours / 8);
+  const availableDays = budgetedDays != null ? round1(budgetedDays - totalPlannedDays - totalLoggedHours / 8) : null;
+
+  const bookings = Array.from(allEmployeeIds)
+    .map((empId) => {
+      const planned = employeeMap.get(empId);
+      const logged = loggedMap.get(empId);
+      return {
+        employeeId: empId,
+        employeeName: planned?.employeeName ?? logged?.employeeName ?? "Unknown",
+        days: round1(planned?.days ?? 0),
+        loggedDays: round1((logged?.hours ?? 0) / 8),
+      };
+    })
+    .sort((a, b) => (b.days + b.loggedDays) - (a.days + a.loggedDays));
+
+  const employeeLoggedDays = requestingEmployeeId != null
+    ? round1((loggedMap.get(requestingEmployeeId)?.hours ?? 0) / 8)
+    : null;
 
   res.json({
     budgetedDays,
     plannedDays,
+    loggedDays,
     availableDays,
-    bookings: Array.from(employeeMap.entries())
-      .map(([employeeId, { employeeName, days }]) => ({ employeeId, employeeName, days: round1(days) }))
-      .sort((a, b) => b.days - a.days),
+    employeeLoggedDays,
+    bookings,
   });
 });
 
