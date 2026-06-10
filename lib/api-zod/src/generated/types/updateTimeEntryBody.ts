@@ -8,6 +8,8 @@
 
 export interface UpdateTimeEntryBody {
   projectId?: number;
+  /** @nullable */
+  projectRoleId?: number | null;
   entryDate?: Date;
   hours?: number;
   /** @nullable */

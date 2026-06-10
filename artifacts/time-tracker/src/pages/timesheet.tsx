@@ -14,9 +14,14 @@ import {
 import { Label } from "@/components/ui/label";
 import { TimesheetGrid } from "@/components/timesheet/timesheet-grid";
 import { ResourceBookingsPanel } from "@/components/timesheet/resource-bookings-panel";
+import { AdminTimesheetView } from "@/components/timesheet/admin-timesheet-view";
 import { startOfWeek, addWeeks, subWeeks } from "date-fns";
+import { useAppAuth } from "@/hooks/use-app-auth";
 
 export default function Timesheet() {
+  const auth = useAppAuth();
+  const isAdmin = auth === "authenticated";
+
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
   const [currentWeekStart, setCurrentWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
 
@@ -26,6 +31,17 @@ export default function Timesheet() {
   );
 
   const selectedEmployee = employees?.find(e => e.id === selectedEmployeeId);
+
+  if (isAdmin) {
+    return (
+      <AdminLayout>
+        <div className="space-y-6 max-w-7xl mx-auto">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Timesheets</h1>
+          <AdminTimesheetView />
+        </div>
+      </AdminLayout>
+    );
+  }
 
   return (
     <AdminLayout>

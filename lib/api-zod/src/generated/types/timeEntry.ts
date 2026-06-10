@@ -9,17 +9,27 @@
 export interface TimeEntry {
   id: number;
   employeeId: number;
+  /** @nullable */
+  employeeName: string | null;
   projectId: number;
+  /** @nullable */
+  projectRoleId: number | null;
   /** @nullable */
   projectName: string | null;
   /** @nullable */
   clientName: string | null;
   /** @nullable */
   isBillable: boolean | null;
+  /** @nullable */
+  roleName: string | null;
   entryDate: Date;
   hours: number;
   /** @nullable */
   note: string | null;
+  /** @nullable */
+  invoicedAt: Date | null;
+  /** @nullable */
+  billingStatus: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

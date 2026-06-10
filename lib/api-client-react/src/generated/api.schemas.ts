@@ -191,17 +191,27 @@ export interface CreateHolidayBody {
 export interface TimeEntry {
   id: number;
   employeeId: number;
+  /** @nullable */
+  employeeName: string | null;
   projectId: number;
+  /** @nullable */
+  projectRoleId: number | null;
   /** @nullable */
   projectName: string | null;
   /** @nullable */
   clientName: string | null;
   /** @nullable */
   isBillable: boolean | null;
+  /** @nullable */
+  roleName: string | null;
   entryDate: string;
   hours: number;
   /** @nullable */
   note: string | null;
+  /** @nullable */
+  invoicedAt: string | null;
+  /** @nullable */
+  billingStatus: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -217,6 +227,8 @@ export interface CreateTimeEntryBody {
 
 export interface UpdateTimeEntryBody {
   projectId?: number;
+  /** @nullable */
+  projectRoleId?: number | null;
   entryDate?: string;
   hours?: number;
   /** @nullable */

@@ -25,19 +25,29 @@ const router: IRouter = Router();
 
 async function enrichEntries(entries: (typeof timeEntriesTable.$inferSelect)[]) {
   if (entries.length === 0) return [];
+
   const projectIds = [...new Set(entries.map((e) => e.projectId))];
-  const projects = await db
-    .select({
-      id: projectsTable.id,
-      name: projectsTable.name,
-      isBillable: projectsTable.isBillable,
-      clientName: clientsTable.name,
-    })
-    .from(projectsTable)
-    .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))
-    .where(inArray(projectsTable.id, projectIds));
+  const employeeIds = [...new Set(entries.map((e) => e.employeeId))];
+
+  const [projects, employees] = await Promise.all([
+    db
+      .select({
+        id: projectsTable.id,
+        name: projectsTable.name,
+        isBillable: projectsTable.isBillable,
+        clientName: clientsTable.name,
+      })
+      .from(projectsTable)
+      .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))
+      .where(inArray(projectsTable.id, projectIds)),
+    db
+      .select({ id: employeesTable.id, name: employeesTable.name })
+      .from(employeesTable)
+      .where(inArray(employeesTable.id, employeeIds)),
+  ]);
 
   const projectMap = new Map(projects.map((p) => [p.id, p]));
+  const employeeMap = new Map(employees.map((e) => [e.id, e.name]));
 
   // Enrich role names if any entries have projectRoleId
   const roleIds = [...new Set(entries.map((e) => e.projectRoleId).filter((id): id is number => id != null))];
@@ -55,6 +65,7 @@ async function enrichEntries(entries: (typeof timeEntriesTable.$inferSelect)[]) 
     const role = e.projectRoleId != null ? roleMap.get(e.projectRoleId) : undefined;
     return {
       ...e,
+      employeeName: employeeMap.get(e.employeeId) ?? null,
       projectName: project?.name ?? null,
       clientName: project?.clientName ?? null,
       isBillable: project?.isBillable ?? null,
@@ -344,10 +355,19 @@ router.patch("/time-entries/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const { entryDate, ...rest } = parsed.data;
+  const rawBody = req.body as Record<string, unknown>;
+  const projectRoleIdPatch = "projectRoleId" in rawBody
+    ? (typeof rawBody.projectRoleId === "number" ? rawBody.projectRoleId : null)
+    : undefined;
+
+  const { entryDate, projectRoleId: _prid, ...rest } = parsed.data;
   const [entry] = await db
     .update(timeEntriesTable)
-    .set({ ...rest, ...(entryDate ? { entryDate: entryDate.toISOString().split("T")[0] } : {}) })
+    .set({
+      ...rest,
+      ...(entryDate ? { entryDate: entryDate.toISOString().split("T")[0] } : {}),
+      ...(projectRoleIdPatch !== undefined ? { projectRoleId: projectRoleIdPatch } : {}),
+    })
     .where(eq(timeEntriesTable.id, params.data.id))
     .returning();
 

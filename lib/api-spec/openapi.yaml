@@ -1064,20 +1064,31 @@ components:
           type: integer
         employeeId:
           type: integer
+        employeeName:
+          type: ["string", "null"]
         projectId:
           type: integer
+        projectRoleId:
+          type: ["integer", "null"]
         projectName:
           type: ["string", "null"]
         clientName:
           type: ["string", "null"]
         isBillable:
           type: ["boolean", "null"]
+        roleName:
+          type: ["string", "null"]
         entryDate:
           type: string
           format: date
         hours:
           type: number
         note:
+          type: ["string", "null"]
+        invoicedAt:
+          type: ["string", "null"]
+          format: date-time
+        billingStatus:
           type: ["string", "null"]
         createdAt:
           type: string
@@ -1088,13 +1099,18 @@ components:
       required:
         - id
         - employeeId
+        - employeeName
         - projectId
+        - projectRoleId
         - projectName
         - clientName
         - isBillable
+        - roleName
         - entryDate
         - hours
         - note
+        - invoicedAt
+        - billingStatus
         - createdAt
         - updatedAt
 
@@ -1123,6 +1139,8 @@ components:
       properties:
         projectId:
           type: integer
+        projectRoleId:
+          type: ["integer", "null"]
         entryDate:
           type: string
           format: date
