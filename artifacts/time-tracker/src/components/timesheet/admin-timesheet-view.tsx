@@ -173,7 +173,7 @@ export function AdminTimesheetView() {
     setEditState({
       id: entry.id,
       projectId: String(entry.projectId),
-      projectRoleId: entry.projectRoleId != null ? String(entry.projectRoleId) : "",
+      projectRoleId: entry.projectRoleId != null ? String(entry.projectRoleId) : "__none__",
       hours: String(entry.hours),
       entryDate: date,
       note: entry.note ?? "",
@@ -191,7 +191,7 @@ export function AdminTimesheetView() {
 
   async function onProjectChange(projectId: string) {
     if (!editState) return;
-    setEditState({ ...editState, projectId, projectRoleId: "" });
+    setEditState({ ...editState, projectId, projectRoleId: "__none__" });
     setEditRoles([]);
     setEditRoleLoading(true);
     try {
@@ -212,7 +212,7 @@ export function AdminTimesheetView() {
 
     const body: Record<string, unknown> = {
       projectId: Number(editState.projectId),
-      projectRoleId: editState.projectRoleId ? Number(editState.projectRoleId) : null,
+      projectRoleId: editState.projectRoleId && editState.projectRoleId !== "__none__" ? Number(editState.projectRoleId) : null,
       hours,
       entryDate: editState.entryDate,
       note: editState.note || null,
@@ -474,7 +474,7 @@ export function AdminTimesheetView() {
                     <SelectValue placeholder={editRoleLoading ? "Loading roles…" : "No role"} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">— No role —</SelectItem>
+                    <SelectItem value="__none__">— No role —</SelectItem>
                     {editRoles.map((r) => (
                       <SelectItem key={r.id} value={String(r.id)}>{r.name}</SelectItem>
                     ))}
