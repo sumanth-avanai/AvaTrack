@@ -103,6 +103,8 @@ export function AdminTimesheetView() {
   const [editRoleLoading, setEditRoleLoading] = useState(false);
   const [editRoles, setEditRoles] = useState<ProjectRole[]>([]);
   const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<number | null>(null);
 
   // ── Bulk edit state ──────────────────────────────────────────────────────────
   const [bulkAction, setBulkAction] = useState<BulkActionType | null>(null);
@@ -143,11 +145,8 @@ export function AdminTimesheetView() {
     }
   }, [datePreset, customFrom, customTo]);
 
-  // Whether prev/next month navigation should be shown
-  const showMonthNav =
-    datePreset === "this_month" ||
-    datePreset === "last_month" ||
-    (datePreset === "custom" && isFullCalendarMonth(customFrom, customTo));
+  // Whether prev/next month navigation should be shown (month presets only)
+  const showMonthNav = datePreset === "this_month" || datePreset === "last_month";
 
   // The reference month used for prev/next navigation
   const navMonthDate = useMemo(() => {
@@ -323,12 +322,13 @@ export function AdminTimesheetView() {
   }
 
   async function handleSave() {
-    if (!editState) return;
+    if (!editState || isSaving) return;
     const hours = parseFloat(editState.hours);
     if (isNaN(hours) || hours <= 0 || hours > 24) {
       toast({ title: "Hours must be between 0 and 24", variant: "destructive" });
       return;
     }
+    setIsSaving(true);
     try {
       await patchEntry(editState.id, {
         projectId: Number(editState.projectId),
@@ -349,10 +349,14 @@ export function AdminTimesheetView() {
         description: (err as Error).message,
         variant: "destructive",
       });
+    } finally {
+      setIsSaving(false);
     }
   }
 
   async function handleDelete(id: number) {
+    if (isDeleting === id) return;
+    setIsDeleting(id);
     try {
       await deleteEntry(id);
       qc.invalidateQueries({ queryKey: getListTimeEntriesQueryKey(teParams) });
@@ -361,6 +365,8 @@ export function AdminTimesheetView() {
       toast({ title: "Entry deleted" });
     } catch {
       toast({ title: "Delete failed", variant: "destructive" });
+    } finally {
+      setIsDeleting(null);
     }
   }
 
@@ -394,39 +400,48 @@ export function AdminTimesheetView() {
       return;
     }
     const ids = Array.from(selectedIds);
-    const errors: number[] = [];
-    await Promise.all(
-      ids.map(async (id) => {
-        try {
-          const body: Record<string, unknown> = {};
-          if (bulkAction === "change_project") {
-            body.projectId = Number(bulkProjectId);
-            body.projectRoleId = null;
-          } else {
-            if (bulkProjectId) body.projectId = Number(bulkProjectId);
-            body.projectRoleId =
-              bulkRoleId && bulkRoleId !== "__none__" ? Number(bulkRoleId) : null;
-          }
-          const res = await fetch(`/api/time-entries/${id}`, {
-            method: "PATCH",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          if (!res.ok) errors.push(id);
-        } catch {
-          errors.push(id);
+    const failedIds: number[] = [];
+
+    // Sequential to avoid hammering the server and to get reliable ordered errors
+    for (const id of ids) {
+      try {
+        const body: Record<string, unknown> = {};
+        if (bulkAction === "change_project") {
+          body.projectId = Number(bulkProjectId);
+          body.projectRoleId = null;
+        } else {
+          if (bulkProjectId) body.projectId = Number(bulkProjectId);
+          body.projectRoleId =
+            bulkRoleId && bulkRoleId !== "__none__" ? Number(bulkRoleId) : null;
         }
-      }),
-    );
+        const res = await fetch(`/api/time-entries/${id}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) failedIds.push(id);
+      } catch {
+        failedIds.push(id);
+      }
+    }
+
     qc.invalidateQueries({ queryKey: getListTimeEntriesQueryKey(teParams) });
-    setSelectedIds(new Set());
     resetBulk();
-    if (errors.length === 0) {
+
+    if (failedIds.length === 0) {
+      setSelectedIds(new Set());
       toast({ title: `Updated ${ids.length} ${ids.length === 1 ? "entry" : "entries"}` });
     } else {
+      // Keep failed entries selected so the user can retry or inspect them
+      setSelectedIds(new Set(failedIds));
+      const failedEntries = filtered
+        .filter((e) => failedIds.includes(e.id))
+        .map((e) => `${formatDate(e.entryDate)} – ${e.employeeName ?? "?"}`)
+        .join(", ");
       toast({
-        title: `${errors.length} of ${ids.length} updates failed`,
+        title: `${failedIds.length} of ${ids.length} updates failed`,
+        description: failedEntries || undefined,
         variant: "destructive",
       });
     }
@@ -926,7 +941,9 @@ export function AdminTimesheetView() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditState(null)}>Cancel</Button>
-            <Button onClick={handleSave}>Save</Button>
+            <Button onClick={handleSave} disabled={isSaving}>
+              {isSaving ? "Saving…" : "Save"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
