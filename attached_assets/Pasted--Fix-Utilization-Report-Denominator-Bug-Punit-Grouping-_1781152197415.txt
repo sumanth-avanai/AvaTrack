@@ -1,0 +1,134 @@
+# Fix: Utilization Report – Denominator Bug + Punit + Grouping + Column Sorting
+
+Follow-up to previous prompt. Three issues remain, plus two new features.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No schema changes, no data loss.
+
+---
+
+## Bug 1: Team TARGET denominator still includes 0%-target employees (CORE BUG)
+
+### Current behavior (still wrong)
+TARGET KPI card shows **1906.6h** = 173.3h × ALL 12 employees.
+Team goal shows **46%** instead of 63%.
+Team Util% shows **35.7%** = 681.5h / 1906.6h.
+
+This means employees with `utilizationTarget = 0` (Christian Voigt, Veekshith
+Sumanth Gurram, Punit Kumar) are still counted in the denominator — which is
+wrong and dilutes both the Util% and the team goal %.
+
+### Correct behavior
+
+The denominator for TARGET, Util%, Alloc% KPI cards, and team Total row must
+only include employees with `utilizationTarget > 0`.
+
+```
+targetHours      = SUM(availableHours) for employees WHERE utilizationTarget > 0
+teamUtil%        = SUM(loggedHours, ALL employees with any hours) / targetHours
+teamAlloc%       = SUM(plannedHours, ALL employees) / targetHours
+teamGoal%        = SUM(availableHours × utilizationTarget/100, WHERE target > 0)
+                   / targetHours
+```
+
+Employees with `utilizationTarget = 0` contribute their logged/planned hours
+to the numerator ONLY if they have any hours. They never contribute to the
+denominator.
+
+### Expected result after fix (Last Month data)
+
+| KPI | Current (wrong) | Expected (correct) |
+|-----|----------------|-------------------|
+| TARGET | 1906.6h | 1386.5h |
+| Team Util% | 35.7% | 49.1% |
+| Team goal | 46% | 63% |
+
+Team Util% = 681.5h (all logged) ÷ 1386.5h (target>0 employees only) = **49.1%**
+
+---
+
+## Bug 2: Punit Kumar – hoursPerWeek must be settable to 0
+
+Punit Kumar is an external freelancer with no fixed weekly hours.
+His TARGET should show **—** and Util% should show **—**.
+
+Currently his TARGET shows 173.3h, meaning hoursPerWeek is not 0.
+
+### Fix
+In the Employee settings, allow `hoursPerWeek = 0` to be saved (min value
+should be 0, not 1). Set Punit Kumar's hoursPerWeek to 0.
+
+When `hoursPerWeek = 0`:
+- TARGET column in reports → show `—`
+- Util% column → show `—` (no denominator)
+- His logged hours still count toward team numerator if > 0
+
+---
+
+## Feature 1: Visual grouping of 0%-target employees in the table
+
+Add a visual separator in the Team Overview table to distinguish employees
+without a utilization target from those with one.
+
+### Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  NAME          TARGET   PLANNED   ALLOC%   LOGGED   UTIL%  │
+├─────────────────────────────────────────────────────────────┤
+│  [regular employees with utilizationTarget > 0]             │
+│  Midhun Jose   86.7h    —         0%       —        0%     │
+│  Rohan ...     173.3h   144.0h    83.1%    144.0h   83.1%  │
+│  ...                                                        │
+├─────────────────────────────────────────────────────────────┤
+│  Kein Uti-Ziel                                   (muted label) │
+│  Christian V.  173.3h   —         —        —        0%     │  ← muted/gray text
+│  Veekshith     173.3h   —         —        —        0%     │  ← muted/gray text
+│  Punit Kumar   —        40.0h     —        40.0h    —      │  ← muted/gray text
+├─────────────────────────────────────────────────────────────┤
+│  Total         1386.5h  639.0h    45.7%    681.5h   49.1%  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- Employees with `utilizationTarget = 0` appear in a separate section below
+  the regular employees, visually separated by a thin divider and a small
+  muted section label (e.g. "Kein Uti-Ziel" or "Nicht gewertet").
+- Their row text is muted/gray to indicate they don't count toward team targets.
+- ALLOC% and UTIL% cells for these rows show `—` (no target to compare against).
+- Total row reflects corrected values (denominator = target>0 employees only).
+
+---
+
+## Feature 2: Sortable columns
+
+All columns in the Team Overview table should be sortable by clicking the
+column header.
+
+### Behavior
+- Click column header → sort ascending
+- Click again → sort descending
+- Click again → reset to default order (default: employees with
+  `utilizationTarget > 0` first, then 0%-target employees; within each group,
+  alphabetical by name)
+- Show a small sort arrow indicator (↑ / ↓) next to the active sort column
+- Sorting applies within each group separately (the "Kein Uti-Ziel" section
+  always stays below the main section)
+
+### Sortable columns
+TARGET, PLANNED, ALLOC%, LOGGED, UTIL%, TARGET% (the last column)
+
+---
+
+## Acceptance Criteria
+
+- [ ] TARGET KPI card = 1386.5h (only employees with utilizationTarget > 0).
+- [ ] Team Util% = 49.1% for Last Month data.
+- [ ] Team goal = 63% for Last Month data.
+- [ ] Punit Kumar: TARGET column shows `—`, Util% shows `—`.
+- [ ] hoursPerWeek = 0 can be saved in Employee settings (min value = 0).
+- [ ] 0%-target employees appear in a visually separate section below the
+      main table, with muted text and a section label.
+- [ ] Total row uses corrected denominator (1386.5h, not 1906.6h).
+- [ ] Clicking any column header sorts that column; clicking again reverses;
+      third click resets. Sort arrow is visible.
+- [ ] Sorting keeps the two groups (with/without Uti-Ziel) separate.
+- [ ] All existing data preserved — no regressions.
