@@ -397,13 +397,31 @@ function MetricChips({ active, onChange }: MetricChipsProps) {
 
 function getCellValue(row: EmployeeRow, key: string): number | null {
   switch (key) {
-    case "target":          return row.target > 0 ? row.target : null;
-    case "planned":         return row.planned > 0 ? row.planned : null;
-    case "logged":          return row.logged  > 0 ? row.logged  : null;
-    case "allocation_pct":  return row.allocationPct;
-    case "utilization_pct": return row.utilizationPct;
+    case "target":           return row.target > 0 ? row.target : null;
+    case "planned":          return row.planned > 0 ? row.planned : null;
+    case "logged":           return row.logged  > 0 ? row.logged  : null;
+    case "allocation_pct":   return row.allocationPct;
+    case "utilization_pct":  return row.utilizationPct;
+    case "util_target_pct":  return (row.utilizationTarget !== null && row.utilizationTarget > 0)
+      ? row.utilizationTarget : null;
     default: return null;
   }
+}
+
+function sortRows(
+  rows: EmployeeRow[],
+  col: string | null,
+  dir: "asc" | "desc" | null,
+): EmployeeRow[] {
+  if (!col || !dir) return [...rows].sort((a, b) => a.name.localeCompare(b.name));
+  return [...rows].sort((a, b) => {
+    const av = getCellValue(a, col);
+    const bv = getCellValue(b, col);
+    if (av === null && bv === null) return a.name.localeCompare(b.name);
+    if (av === null) return 1;  // nulls always sink to the bottom
+    if (bv === null) return -1;
+    return dir === "asc" ? av - bv : bv - av;
+  });
 }
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
@@ -440,6 +458,9 @@ export default function Reports() {
   const [saveName, setSaveName]             = useState("");
   const [saveError, setSaveError]           = useState("");
   const queryClient = useQueryClient();
+
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc" | null>(null);
 
   const { data: employees } = useListEmployees();
   const { data: projects }  = useListProjects({ includeInactive: false });
@@ -580,13 +601,13 @@ export default function Reports() {
     };
   }, [employeeRows]);
 
-  // Weighted average utilization target across employees who have a target set.
-  // Weight = each employee's target hours (capacity-adjusted).
+  // Weighted average utilization target across employees with utilizationTarget > 0.
+  // Employees with target = 0 or null are excluded so they don't dilute the team goal %.
   const teamUtilTarget = useMemo<number | null>(() => {
     let weightedSum = 0;
     let totalWeight = 0;
     for (const row of employeeRows) {
-      if (row.utilizationTarget !== null) {
+      if (row.utilizationTarget !== null && row.utilizationTarget > 0) {
         weightedSum += row.utilizationTarget * row.target;
         totalWeight += row.target;
       }
@@ -608,6 +629,34 @@ export default function Reports() {
   const kpiTargetHrs = teamTotals.target;
 
   const hasData = employeeRows.length > 0;
+
+  const trackedRows = useMemo(
+    () => sortRows(
+      employeeRows.filter((r) => r.utilizationTarget !== null && r.utilizationTarget > 0),
+      sortCol, sortDir,
+    ),
+    [employeeRows, sortCol, sortDir],
+  );
+
+  const untrackedRows = useMemo(
+    () => sortRows(
+      employeeRows.filter((r) => r.utilizationTarget === null || r.utilizationTarget === 0),
+      sortCol, sortDir,
+    ),
+    [employeeRows, sortCol, sortDir],
+  );
+
+  function handleSortClick(col: string) {
+    if (sortCol !== col) {
+      setSortCol(col);
+      setSortDir("asc");
+    } else if (sortDir === "asc") {
+      setSortDir("desc");
+    } else {
+      setSortCol(null);
+      setSortDir(null);
+    }
+  }
 
   return (
     <AdminLayout>
@@ -810,13 +859,23 @@ export default function Reports() {
                   {metricsVisible.map((m) => (
                     <Fragment key={m.key}>
                       <TableHead
-                        className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4"
+                        className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4 cursor-pointer select-none hover:text-foreground"
+                        onClick={() => handleSortClick(m.key)}
                       >
                         {m.short}
+                        {sortCol === m.key && (
+                          <span className="ml-1 opacity-60">{sortDir === "asc" ? "↑" : "↓"}</span>
+                        )}
                       </TableHead>
                       {m.key === "utilization_pct" && (
-                        <TableHead className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4 text-muted-foreground">
+                        <TableHead
+                          className="text-right text-xs uppercase tracking-wide font-semibold whitespace-nowrap px-4 text-muted-foreground cursor-pointer select-none hover:text-foreground"
+                          onClick={() => handleSortClick("util_target_pct")}
+                        >
                           TARGET
+                          {sortCol === "util_target_pct" && (
+                            <span className="ml-1 opacity-60">{sortDir === "asc" ? "↑" : "↓"}</span>
+                          )}
                         </TableHead>
                       )}
                     </Fragment>
@@ -835,26 +894,28 @@ export default function Reports() {
                   </TableRow>
                 ) : (
                   <>
-                    {employeeRows.map((row) => (
+                    {/* ── Tracked rows (utilizationTarget > 0) ──────────────── */}
+                    {trackedRows.map((row) => (
                       <TableRow key={row.id} className="hover:bg-muted/20">
                         <TableCell className="font-medium py-3">{row.name}</TableCell>
                         {metricsVisible.map((m) => {
                           const val = getCellValue(row, m.key);
                           const isPct = PCT_METRICS.has(m.key);
-                          const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct") && row.utilizationTarget !== null && val !== null;
+                          const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct")
+                            && row.utilizationTarget !== null && row.utilizationTarget > 0 && val !== null;
                           const colorClass = isTargetPct
-                            ? (val >= row.utilizationTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
+                            ? (val! >= row.utilizationTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
                             : isPct ? pctCellClass(val) : "";
                           return (
                             <Fragment key={m.key}>
-                              <TableCell
-                                className={`text-right tabular-nums whitespace-nowrap px-4 py-3 ${colorClass}`}
-                              >
+                              <TableCell className={`text-right tabular-nums whitespace-nowrap px-4 py-3 ${colorClass}`}>
                                 {fmtMetric(m.key, val)}
                               </TableCell>
                               {m.key === "utilization_pct" && (
                                 <TableCell className="text-right tabular-nums whitespace-nowrap px-4 py-3 text-muted-foreground text-sm">
-                                  {row.utilizationTarget !== null ? `${row.utilizationTarget}%` : "—"}
+                                  {row.utilizationTarget !== null && row.utilizationTarget > 0
+                                    ? `${row.utilizationTarget}%`
+                                    : "—"}
                                 </TableCell>
                               )}
                             </Fragment>
@@ -863,7 +924,48 @@ export default function Reports() {
                       </TableRow>
                     ))}
 
-                    {/* Totals row */}
+                    {/* ── Untracked section (utilizationTarget = 0 | null) ──── */}
+                    {untrackedRows.length > 0 && (() => {
+                      const colSpan = 1 + metricsVisible.length
+                        + (metricsVisible.some((m) => m.key === "utilization_pct") ? 1 : 0);
+                      return (
+                        <>
+                          <TableRow className="border-t border-border/60">
+                            <TableCell
+                              colSpan={colSpan}
+                              className="py-1.5 px-4 text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest bg-muted/20"
+                            >
+                              Kein Uti-Ziel
+                            </TableCell>
+                          </TableRow>
+                          {untrackedRows.map((row) => (
+                            <TableRow key={row.id} className="hover:bg-muted/20 text-muted-foreground">
+                              <TableCell className="font-medium py-3">{row.name}</TableCell>
+                              {metricsVisible.map((m) => {
+                                // ALLOC% and UTIL% always show — for untracked employees
+                                const val = (m.key === "allocation_pct" || m.key === "utilization_pct")
+                                  ? null
+                                  : getCellValue(row, m.key);
+                                return (
+                                  <Fragment key={m.key}>
+                                    <TableCell className="text-right tabular-nums whitespace-nowrap px-4 py-3">
+                                      {fmtMetric(m.key, val)}
+                                    </TableCell>
+                                    {m.key === "utilization_pct" && (
+                                      <TableCell className="text-right tabular-nums whitespace-nowrap px-4 py-3 text-sm">
+                                        —
+                                      </TableCell>
+                                    )}
+                                  </Fragment>
+                                );
+                              })}
+                            </TableRow>
+                          ))}
+                        </>
+                      );
+                    })()}
+
+                    {/* ── Totals row ──────────────────────────────────────────── */}
                     <TableRow className="border-t-2 border-border bg-muted/30 font-semibold">
                       <TableCell className="py-3 text-sm">Total</TableCell>
                       {metricsVisible.map((m) => {
@@ -871,13 +973,11 @@ export default function Reports() {
                         const isPct = PCT_METRICS.has(m.key);
                         const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct") && teamUtilTarget !== null && val !== null;
                         const colorClass = isTargetPct
-                          ? (val >= teamUtilTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
+                          ? (val! >= teamUtilTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
                           : isPct ? pctCellClass(val) : "";
                         return (
                           <Fragment key={m.key}>
-                            <TableCell
-                              className={`text-right tabular-nums whitespace-nowrap px-4 py-3 text-sm ${colorClass}`}
-                            >
+                            <TableCell className={`text-right tabular-nums whitespace-nowrap px-4 py-3 text-sm ${colorClass}`}>
                               {fmtMetric(m.key, val)}
                             </TableCell>
                             {m.key === "utilization_pct" && (
