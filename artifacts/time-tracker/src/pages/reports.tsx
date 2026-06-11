@@ -234,13 +234,15 @@ function fmtMetric(key: string, value: number | null): string {
 }
 
 // ─── Color coding ─────────────────────────────────────────────────────────────
-// grey=0%/—, yellow=1-69%, green=70-100%, red=>100%
+// Ratio-based three-tier: actual/target ≥0.75 → green, ≥0.50 → orange, <0.50 → red
+// Returns "" when there is no target to compare against.
 
-function pctCellClass(pct: number | null): string {
-  if (pct === null || pct === 0) return "text-muted-foreground/50";
-  if (pct > 100) return "text-red-500 font-semibold";
-  if (pct >= 70) return "text-emerald-600 font-semibold";
-  return "text-amber-500 font-medium";
+function pctRatioClass(actual: number | null, target: number | null): string {
+  if (actual === null || target === null || target === 0) return "";
+  const ratio = actual / target;
+  if (ratio >= 0.75) return "text-emerald-600 font-semibold";
+  if (ratio >= 0.50) return "text-orange-500 font-semibold";
+  return "text-red-500 font-semibold";
 }
 
 // ─── CSV export ───────────────────────────────────────────────────────────────
@@ -413,12 +415,29 @@ function sortRows(
   col: string | null,
   dir: "asc" | "desc" | null,
 ): EmployeeRow[] {
-  if (!col || !dir) return [...rows].sort((a, b) => a.name.localeCompare(b.name));
+  // Reset / no sort: default to UTIL% descending, then alpha by name
+  if (!col || !dir) {
+    return [...rows].sort((a, b) => {
+      const av = a.utilizationPct ?? -1;
+      const bv = b.utilizationPct ?? -1;
+      if (av !== bv) return bv - av;
+      return a.name.localeCompare(b.name);
+    });
+  }
+  // Name column: alphabetical
+  if (col === "name") {
+    return [...rows].sort((a, b) =>
+      dir === "asc"
+        ? a.name.localeCompare(b.name)
+        : b.name.localeCompare(a.name),
+    );
+  }
+  // Numeric columns: nulls always sink to the bottom
   return [...rows].sort((a, b) => {
     const av = getCellValue(a, col);
     const bv = getCellValue(b, col);
     if (av === null && bv === null) return a.name.localeCompare(b.name);
-    if (av === null) return 1;  // nulls always sink to the bottom
+    if (av === null) return 1;
     if (bv === null) return -1;
     return dir === "asc" ? av - bv : bv - av;
   });
@@ -770,11 +789,9 @@ export default function Reports() {
             value={kpiAllocPct !== null && hasData ? fmtPct(kpiAllocPct) : "—"}
             sub={teamUtilTarget !== null ? `Planned ÷ Target · Team goal: ${Math.round(teamUtilTarget)}%` : "Planned ÷ Target"}
             valueClass={
-              kpiAllocPct === null || !hasData ? "text-muted-foreground"
-              : teamUtilTarget !== null
-                ? (kpiAllocPct >= teamUtilTarget ? "text-emerald-600" : "text-amber-500")
-                : kpiAllocPct >= 70 ? "text-emerald-600"
-                : "text-amber-500"
+              kpiAllocPct === null || !hasData
+                ? "text-muted-foreground"
+                : pctRatioClass(kpiAllocPct, teamUtilTarget) || "text-foreground"
             }
           />
           <KpiCard
@@ -782,12 +799,9 @@ export default function Reports() {
             value={kpiUtilPct !== null && hasData ? fmtPct(kpiUtilPct) : "—"}
             sub={teamUtilTarget !== null ? `Logged ÷ Target · Team goal: ${Math.round(teamUtilTarget)}%` : "Logged ÷ Target"}
             valueClass={
-              kpiUtilPct === null || !hasData ? "text-muted-foreground"
-              : teamUtilTarget !== null
-                ? (kpiUtilPct >= teamUtilTarget ? "text-emerald-600" : "text-red-500")
-                : kpiUtilPct > 100 ? "text-red-500"
-                : kpiUtilPct >= 70 ? "text-emerald-600"
-                : "text-amber-500"
+              kpiUtilPct === null || !hasData
+                ? "text-muted-foreground"
+                : pctRatioClass(kpiUtilPct, teamUtilTarget) || "text-foreground"
             }
           />
           <KpiCard
@@ -853,8 +867,14 @@ export default function Reports() {
             <Table>
               <TableHeader className="bg-muted/30">
                 <TableRow>
-                  <TableHead className="min-w-[200px] font-semibold text-xs uppercase tracking-wide">
+                  <TableHead
+                    className="min-w-[200px] font-semibold text-xs uppercase tracking-wide cursor-pointer select-none hover:text-foreground"
+                    onClick={() => handleSortClick("name")}
+                  >
                     Name
+                    {sortCol === "name" && (
+                      <span className="ml-1 opacity-60">{sortDir === "asc" ? "↑" : "↓"}</span>
+                    )}
                   </TableHead>
                   {metricsVisible.map((m) => (
                     <Fragment key={m.key}>
@@ -900,12 +920,11 @@ export default function Reports() {
                         <TableCell className="font-medium py-3">{row.name}</TableCell>
                         {metricsVisible.map((m) => {
                           const val = getCellValue(row, m.key);
-                          const isPct = PCT_METRICS.has(m.key);
                           const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct")
                             && row.utilizationTarget !== null && row.utilizationTarget > 0 && val !== null;
                           const colorClass = isTargetPct
-                            ? (val! >= row.utilizationTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
-                            : isPct ? pctCellClass(val) : "";
+                            ? pctRatioClass(val, row.utilizationTarget)
+                            : "";
                           return (
                             <Fragment key={m.key}>
                               <TableCell className={`text-right tabular-nums whitespace-nowrap px-4 py-3 ${colorClass}`}>
@@ -935,7 +954,7 @@ export default function Reports() {
                               colSpan={colSpan}
                               className="py-1.5 px-4 text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest bg-muted/20"
                             >
-                              Kein Uti-Ziel
+                              NO UTILIZATION TARGET
                             </TableCell>
                           </TableRow>
                           {untrackedRows.map((row) => (
@@ -970,11 +989,10 @@ export default function Reports() {
                       <TableCell className="py-3 text-sm">Total</TableCell>
                       {metricsVisible.map((m) => {
                         const val = getCellValue(teamTotals, m.key);
-                        const isPct = PCT_METRICS.has(m.key);
                         const isTargetPct = (m.key === "utilization_pct" || m.key === "allocation_pct") && teamUtilTarget !== null && val !== null;
                         const colorClass = isTargetPct
-                          ? (val! >= teamUtilTarget! ? "text-emerald-600 font-semibold" : "text-amber-500 font-semibold")
-                          : isPct ? pctCellClass(val) : "";
+                          ? pctRatioClass(val, teamUtilTarget)
+                          : "";
                         return (
                           <Fragment key={m.key}>
                             <TableCell className={`text-right tabular-nums whitespace-nowrap px-4 py-3 text-sm ${colorClass}`}>
