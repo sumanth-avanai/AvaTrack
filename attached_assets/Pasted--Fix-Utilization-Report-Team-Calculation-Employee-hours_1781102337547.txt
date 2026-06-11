@@ -1,0 +1,111 @@
+# Fix: Utilization Report – Team Calculation & Employee hoursPerWeek
+
+Three related bugs to fix. All fixes are logic/validation changes only.
+
+⚠️ IMPORTANT: Preserve ALL existing data. No schema migrations, no data loss.
+
+---
+
+## Bug 1: Team Util% – denominator excludes employees with utilizationTarget = 0
+
+### Current behavior (wrong)
+The team-level Util% denominator uses the available hours of ALL employees,
+including those with `utilizationTarget = 0`.
+
+### Correct behavior
+```
+teamUtil% = sumLoggedHours / sumAvailableHours
+```
+Where:
+- **sumAvailableHours (denominator)** = available hours of employees with
+  `utilizationTarget > 0` only
+- **sumLoggedHours (numerator)** = logged hours of ALL employees,
+  including those with `utilizationTarget = 0` IF they have logged hours
+
+Employees with `utilizationTarget = 0` AND `loggedHours = 0` are excluded
+entirely (neither numerator nor denominator).
+
+### Example (Last Month)
+
+| Employee              | hoursPerWeek | utilizationTarget | Available h | Logged h | In denominator? | In numerator? |
+|-----------------------|-------------|-------------------|------------|---------|-----------------|---------------|
+| Rohan Dhanawade       | 40          | 80%               | 173.3h     | 144.0h  | ✅ yes          | ✅ yes        |
+| Keshav Reddy          | 40          | 50%               | 173.3h     | 112.0h  | ✅ yes          | ✅ yes        |
+| Midhun Jose           | 20          | 80%               | 86.7h      | 0h      | ✅ yes          | ❌ no (0h)   |
+| Christian Voigt       | 40          | 0%                | 173.3h     | 0h      | ❌ no           | ❌ no (0h)   |
+| Veekshith S. Gurram   | 40          | 0%                | 173.3h     | 0h      | ❌ no           | ❌ no (0h)   |
+| Punit Kumar           | 0           | 0%                | 0h         | 40.0h   | ❌ no           | ✅ yes (has hours) |
+
+Correct team Util% = (all logged including Punit) / (available of target>0 only)
+= 681.5h / 1386.5h = **49.1%**
+
+The TARGET KPI card should also reflect only the sum of available hours of
+employees with `utilizationTarget > 0`: **1386.5h** (not 1399.6h).
+
+---
+
+## Bug 2: Individual Util% for employees with utilizationTarget = 0
+
+Individual Util% stays as-is: `loggedHours / availableHours` (unchanged formula).
+
+However, if an employee has `hoursPerWeek = 0` (see Bug 3), they have no
+available hours → show `—` instead of a percentage in the Util% column.
+
+For employees with `utilizationTarget = 0` but `hoursPerWeek > 0`
+(e.g. Christian Voigt, Veekshith), show their individual Util% normally
+(e.g. 0% if no hours logged). They just don't count toward the team denominator.
+
+---
+
+## Bug 3: Employee view – hoursPerWeek = 0 must be allowed
+
+### Current behavior (wrong)
+The hoursPerWeek input in the Employee view does not accept 0. External
+freelancers (e.g. Punit Kumar) have no fixed weekly hours, so 0 is a valid
+value. Currently workaround is to enter 1, which causes a wrong available
+hours calculation (4.3h instead of 0h) and inflated Util%.
+
+### Fix
+- Allow `hoursPerWeek = 0` to be saved in the Employee form
+- Validation: allow values from 0 to 60 (currently likely min=1, change to min=0)
+- When `hoursPerWeek = 0`: available hours = 0, TARGET column shows `—`
+- These employees are treated as external/no-capacity for planning purposes
+
+---
+
+## What does NOT change
+
+- Individual Util% formula: `loggedHours / availableHours` — unchanged
+- Allocation % formula — unchanged
+- Color logic (green ≥ target, red < target) — unchanged
+- All existing data — no migrations, no deletions
+- The team Target % (goal %) calculation — still a weighted average of
+  utilizationTarget across employees with target > 0, unchanged
+
+---
+
+## Acceptance Criteria
+
+- [ ] Team Util% denominator = sum of availableHours for employees with
+      `utilizationTarget > 0` only.
+- [ ] Team Util% numerator = sum of loggedHours for all employees (incl.
+      `utilizationTarget = 0` employees who have logged hours).
+- [ ] Employees with `utilizationTarget = 0` AND `loggedHours = 0` are
+      excluded from both numerator and denominator.
+- [ ] TARGET KPI card reflects only the available hours sum of employees
+      with `utilizationTarget > 0`.
+- [ ] `hoursPerWeek = 0` can be saved in the Employee form.
+- [ ] Employees with `hoursPerWeek = 0` show `—` in the TARGET column and
+      `—` in the Util% column (no divide-by-zero).
+- [ ] Employees with `utilizationTarget = 0` and `hoursPerWeek > 0` still
+      show their individual Util% (e.g. 0%) in the table row.
+- [ ] Punit Kumar: after setting hoursPerWeek to 0, his row shows TARGET `—`,
+      Util% `—`, but his 40h logged still contribute to the team numerator.
+
+---
+
+## Worked Example (Last Month, for verification)
+
+Team Util% = 681.5h ÷ 1386.5h = **49.1%**
+TARGET card = **1386.5h**
+Team goal = **63%** (unchanged)
