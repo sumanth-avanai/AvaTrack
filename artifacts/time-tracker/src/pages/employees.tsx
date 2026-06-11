@@ -162,7 +162,7 @@ export default function Employees() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="weeklyCapacityHours">Weekly Capacity (hrs)</Label>
-                    <Input id="weeklyCapacityHours" name="weeklyCapacityHours" type="number" required defaultValue="40" min="1" max="60" step="0.5" />
+                    <Input id="weeklyCapacityHours" name="weeklyCapacityHours" type="number" required defaultValue="40" min="0" max="60" step="0.5" />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="holidayCalendarCode">Holiday Calendar</Label>
@@ -303,7 +303,7 @@ export default function Employees() {
                   </div>
                   <div className="space-y-2">
                     <Label>Weekly Capacity (hrs)</Label>
-                    <Input name="weeklyCapacityHours" type="number" required defaultValue={selectedEmployee.weeklyCapacityHours} min="1" max="60" step="0.5" />
+                    <Input name="weeklyCapacityHours" type="number" required defaultValue={selectedEmployee.weeklyCapacityHours} min="0" max="60" step="0.5" />
                   </div>
                   <div className="space-y-2">
                     <Label>Holiday Calendar</Label>

@@ -397,7 +397,7 @@ function MetricChips({ active, onChange }: MetricChipsProps) {
 
 function getCellValue(row: EmployeeRow, key: string): number | null {
   switch (key) {
-    case "target":          return row.target;
+    case "target":          return row.target > 0 ? row.target : null;
     case "planned":         return row.planned > 0 ? row.planned : null;
     case "logged":          return row.logged  > 0 ? row.logged  : null;
     case "allocation_pct":  return row.allocationPct;
@@ -560,17 +560,22 @@ export default function Reports() {
   }, [pivotData, baseTarget, employeeCapacityMap, employeeUtilTargetMap]);
 
   const teamTotals = useMemo<EmployeeRow>(() => {
-    const totalTarget  = employeeRows.reduce((s, r) => s + r.target,  0);
+    // Denominator: available hours of employees with utilizationTarget > 0 only.
+    // Numerator: logged/planned hours of all employees (target=0 employees who
+    // logged 0h contribute 0 to the sum, so no explicit exclusion needed).
+    const denomTarget  = employeeRows
+      .filter((r) => r.utilizationTarget !== null && r.utilizationTarget > 0)
+      .reduce((s, r) => s + r.target, 0);
     const totalPlanned = employeeRows.reduce((s, r) => s + r.planned, 0);
     const totalLogged  = employeeRows.reduce((s, r) => s + r.logged,  0);
     return {
       id:               "total",
       name:             "TOTAL",
-      target:           totalTarget,
+      target:           denomTarget,
       planned:          totalPlanned,
       logged:           totalLogged,
-      allocationPct:    totalTarget > 0 ? Math.round((totalPlanned / totalTarget) * 1000) / 10 : null,
-      utilizationPct:   totalTarget > 0 ? Math.round((totalLogged  / totalTarget) * 1000) / 10 : null,
+      allocationPct:    denomTarget > 0 ? Math.round((totalPlanned / denomTarget) * 1000) / 10 : null,
+      utilizationPct:   denomTarget > 0 ? Math.round((totalLogged  / denomTarget) * 1000) / 10 : null,
       utilizationTarget: null,
     };
   }, [employeeRows]);
