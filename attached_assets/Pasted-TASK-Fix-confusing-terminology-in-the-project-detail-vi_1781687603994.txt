@@ -1,0 +1,52 @@
+TASK: Fix confusing terminology in the project detail views (Roles, Budget,
+Allocations tabs). This is a LABEL/DISPLAY change only. Do NOT change any
+calculation, query, or budget formula in this step.
+
+BACKGROUND (why):
+The word "Booked" currently means "logged actual hours" (from time_entries),
+but "booking" in the resource planner means a future PLAN (resource_bookings).
+Same word, opposite meanings — this is the core confusion. Also "Planned" and
+"Allocated" are two names for the same thing, and "Remaining" means different
+things in different tabs.
+
+CANONICAL VOCABULARY — apply everywhere in these views:
+- "Budgeted"  = approved total days (unchanged)
+- "Planned"   = future allocations from resource_bookings
+- "Logged"    = actual work from time_entries
+(Reserve "Invoiced" for later — don't add it now.)
+
+CHANGES:
+
+1. Rename the column/label "Booked" -> "Logged" in BOTH the Budget tab and the
+   Allocations tab. This includes day columns AND value labels
+   (e.g. "Booked Value" -> "Logged value", "Booked 58d" -> "Logged 58d").
+
+2. In the Allocations tab per-employee table, rename the "Allocated" column
+   -> "Planned". (It already maps to the same resource_bookings value.)
+
+3. In the Budget tab, replace the single ambiguous "Remaining" with TWO
+   explicitly named columns, using numbers that already exist:
+   - "Open to plan"        = Budgeted - Planned
+   - "Remaining to deliver" = Budgeted - Logged
+   Do not invent new math — these are existing subtractions. Just label them
+   clearly and show both.
+
+4. Make the Project Total footer IDENTICAL on the Budget tab and the
+   Allocations tab. Both footers must show the same fields with the same
+   definitions:
+     Budgeted | Planned | Logged | Open to plan (Budgeted-Planned) |
+     Remaining to deliver (Budgeted-Logged)
+   Right now the two footers show different "Remaining" numbers (one is
+   Budgeted-Logged = 222d, the other Budgeted-Planned = 162.5d). Unify them
+   so the same project never shows two different "Remaining" totals.
+
+5. Rename the Allocations "Status" progress bar label -> "Logged vs planned"
+   (it is logged / planned). Keep the percentage as-is.
+
+CONSTRAINTS:
+- No backend calculation changes. No DB changes. No new endpoints.
+- Only display labels, column headers, footer labels, and surfacing the second
+  remaining column from values already returned by the API.
+- Keep colors/thresholds as they are.
+
+When done, list every file you changed and every label string you renamed.

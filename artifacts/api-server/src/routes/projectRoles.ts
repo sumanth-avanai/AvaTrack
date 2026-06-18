@@ -240,7 +240,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
 
   // ── Logged hours from time_entries ─────────────────────────────────────────
   const loggedRows = await db
-    .select({
+    .select({ 
       employeeId: timeEntriesTable.employeeId,
       employeeName: employeesTable.name,
       totalHours: sql<number>`coalesce(sum(${timeEntriesTable.hours}), 0)`,

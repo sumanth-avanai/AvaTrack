@@ -1,0 +1,143 @@
+### Current Issue
+The resource planner overbooking detection has a hardcoded assumption that all employees work 5 days/week:
+
+```javascript
+const dailyCapacity = capacity / 5;  // ❌ WRONG for varied schedules
+```
+
+This breaks for:
+- Part-time employees (3-4 days/week)
+- Employees with specific off-days
+- Non-standard schedules
+
+### What Needs to Change
+
+**File:** `artifacts/time-tracker/src/pages/ResourcePlanner.tsx` (or similar)
+
+**Current Hook:**
+```javascript
+const isOverbooked = useMemo(() => {
+  if (!startDate || !endDate) return false;
+  if (!weekdayMode && hoursPerDay <= 0) return false;
+  const excludeId = isEdit ? state.booking.id : undefined;
+  const empBookings = allBookings.filter(
+    (b) => b.employeeId === employeeId && b.id !== excludeId
+  );
+  const s = parseISO(startDate);
+  const e = parseISO(endDate);
+  const dailyCapacity = capacity / 5;  // ← FIX THIS LINE
+  // ... rest of logic
+```
+
+**Required Change:**
+1. Replace `capacity / 5` with logic that respects `workingDaysMask`
+2. Make sure `isWorkingDay()` checks the mask, not just Sat/Sun
+3. Pass `workingDaysMask` from employee record (it should be available)
+4. Update the deps array to include `workingDaysMask`
+
+### Expected workingDaysMask Format
+From your AvaTrack DB: `"1,1,1,1,1,0,0"` (Mon-Sun, 1=working, 0=off)
+
+### Implementation Requirements
+
+**DO:**
+- ✅ Calculate active days from mask: `mask.split(',').filter(d => d === '1').length`
+- ✅ Use that for daily capacity: `capacity / activeDays`
+- ✅ Check individual dates against the mask
+- ✅ Handle ISO day conversion (JS getDay vs ISO format)
+- ✅ Support part-time, shift work, weekend-only
+
+**DON'T:**
+- ❌ Hardcode 5 (Mon-Fri)
+- ❌ Always skip Sat/Sun
+- ❌ Break existing logic
+- ❌ Forget to update the deps array
+
+### Tests to Verify
+
+After implementation, these should work:
+
+```javascript
+// Test 1: Standard Mon-Fri, 40h
+// Employee: 40h/week, mask="1,1,1,1,1,0,0"
+// Booking: 8h/day → Should NOT trigger warning
+
+// Test 2: Part-time, Mon/Wed/Fri, 20h
+// Employee: 20h/week, mask="1,0,1,0,1,0,0"
+// Booking: 7h/day × 3 days = 21h → SHOULD trigger warning (overbooked)
+
+// Test 3: Consultant, Mon-Thu, 32h
+// Employee: 32h/week, mask="1,1,1,1,0,0,0"
+// Booking: 8h/day → Should NOT trigger warning
+
+// Test 4: Weekend shift, Sat-Sun, 16h
+// Employee: 16h/week, mask="0,0,0,0,0,1,1"
+// Booking: 8h/day × 2 = 16h → Should NOT trigger warning
+```
+
+### Files to Check
+- Does the employee record have `working_days_mask` field? ✓
+- Is it passed to the ResourcePlanner component? (Check props)
+- What's the exact schema for workingDaysMask? (Confirm format)
+
+### Acceptance Criteria
+- [  ] Overbooking detection works for 4-day/week employees
+- [  ] Overbooking detection works for 3-day/week employees
+- [  ] Warnings show correct week breakdown
+- [  ] No false positives for standard Mon-Fri
+- [  ] Existing tests still pass
+- [  ] UI shows which weeks are overbooked
+
+---
+
+## 🎬 ACTION: Run This Prompt in Replit
+
+**If using Claude in Replit IDE:**
+
+1. Open Claude in your IDE
+2. Copy this entire message
+3. Ask: "Fix the overbooking logic to support varied employee schedules as described above"
+4. Claude will provide the exact code changes needed
+
+**Or paste directly:**
+
+"I'm building AvaTrack resource planner. The overbooking detection assumes all employees work 5 days (capacity / 5). This breaks for part-time staff with different schedules.
+
+Current issue: `const dailyCapacity = capacity / 5;`
+
+The employee record has `working_days_mask` (format: "1,1,1,1,1,0,0" for Mon-Sun).
+
+Update the overbooking logic to:
+1. Calculate active working days from the mask
+2. Use that for daily capacity calculation
+3. Respect the mask when checking if a date is a working day
+4. Handle all edge cases (part-time, shift work, weekend-only)
+
+The logic is in the ResourcePlanner useMemo hook. Keep everything else the same, just fix the capacity calculation to be dynamic instead of hardcoded /5."
+
+---
+
+## 📋 Exact File Location Pattern
+
+Look for this pattern in your codebase:
+
+```typescript
+const isOverbooked = useMemo(() => {
+  // ... validation
+  const dailyCapacity = capacity / 5;  // ← THIS LINE
+  const nw = Math.ceil((differenceInDays(e, s) + 1) / 7) + 1;
+  for (let i = 0; i < nw; i++) {
+    // ... weekly iteration
+    const used = empBookings.reduce((sum, b) => {
+      // ... existing bookings calculation
+      if (isWorkingDay(d)) {  // ← CHECK THIS TOO
+        // ... 
+      }
+    })
+  }
+}, [startDate, endDate, hoursPerDay, weekdayMode, weekdayHours, allBookings, employeeId, capacity, isEdit, state]);
+```
+
+**Replace with:** Dynamic calculation based on `workingDaysMask`
+
+---
