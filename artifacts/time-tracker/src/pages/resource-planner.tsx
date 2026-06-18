@@ -285,47 +285,6 @@ function useUnreleaseBooking() {
   });
 }
 
-interface BulkReleasedItem {
-  id: number;
-  employeeId: number;
-  employeeName: string | null;
-  projectId: number;
-  projectName: string;
-  projectRoleId: number | null;
-  projectRoleName: string | null;
-  startDate: string;
-  endDate: string;
-  pastReleasedAt: string | null;
-  pastUndeliveredDays: number;
-}
-
-async function fetchReleasePastBulk(body: {
-  projectId?: number;
-  employeeId?: number;
-  dryRun?: boolean;
-}): Promise<{ released: BulkReleasedItem[] }> {
-  const res = await fetch(`/api/resource-bookings/release-past-bulk`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error("Failed to bulk release past plan");
-  return res.json();
-}
-
-function useReleasePastBulk() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { projectId?: number; employeeId?: number }) =>
-      fetchReleasePastBulk({ ...body, dryRun: false }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
-      qc.invalidateQueries({ queryKey: ["project-budget"] });
-      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
-    },
-  });
-}
 
 function useCreateVacation() {
   const qc = useQueryClient();
@@ -626,6 +585,7 @@ interface EditModalState {
   capacity: number;
   workingDaysMask: number[];
   holidayCalendarCode: string | null;
+  openInConfirmRelease?: boolean;
 }
 
 type AnyModalState = ModalState | EditModalState;
@@ -641,6 +601,8 @@ interface BookingModalProps {
   allBookings: ResourceBookingFull[];
   employees: Array<{ id: number; name: string; weeklyCapacityHours: number }>;
   onClose: () => void;
+  onBookingUpdated?: (booking: ResourceBookingFull) => void;
+  initialConfirmRelease?: boolean;
 }
 
 function BookingModal({
@@ -649,6 +611,8 @@ function BookingModal({
   allBookings,
   employees,
   onClose,
+  onBookingUpdated,
+  initialConfirmRelease,
 }: BookingModalProps) {
   const { toast } = useToast();
   const createMut = useCreateBooking();
@@ -657,7 +621,7 @@ function BookingModal({
   const releaseMut = useReleasePastBooking();
   const unreleaseMut = useUnreleaseBooking();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [confirmRelease, setConfirmRelease] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(initialConfirmRelease ?? false);
 
   const isEdit = state.mode === "edit";
   const defaultProject = isEdit ? String(state.booking.projectId) : "";
@@ -1680,9 +1644,14 @@ function BookingModal({
                 disabled={releaseMut.isPending}
                 onClick={async () => {
                   try {
-                    await releaseMut.mutateAsync((state as EditModalState).booking.id);
+                    const updated = await releaseMut.mutateAsync((state as EditModalState).booking.id);
                     toast({ title: "Past plan released" });
-                    onClose();
+                    if (onBookingUpdated) {
+                      setConfirmRelease(false);
+                      onBookingUpdated(updated);
+                    } else {
+                      onClose();
+                    }
                   } catch {
                     toast({ title: "Failed to release past plan", variant: "destructive" });
                   }
@@ -1964,142 +1933,6 @@ function VacationDialog({ state, onClose }: VacationDialogProps) {
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
-// ── Bulk Release Dialog ────────────────────────────────────────────────────────
-function BulkReleaseDialog({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const { toast } = useToast();
-  const bulkReleaseMut = useReleasePastBulk();
-  const [preview, setPreview] = useState<BulkReleasedItem[] | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-
-  // Fetch preview list when dialog opens
-  useEffect(() => {
-    if (!open) {
-      setPreview(null);
-      setPreviewError(null);
-      return;
-    }
-    setPreviewLoading(true);
-    setPreviewError(null);
-    fetchReleasePastBulk({ dryRun: true })
-      .then((r) => setPreview(r.released))
-      .catch(() => setPreviewError("Failed to load preview. Please try again."))
-      .finally(() => setPreviewLoading(false));
-  }, [open]);
-
-  async function handleConfirm() {
-    try {
-      const result = await bulkReleaseMut.mutateAsync({});
-      toast({
-        title: `Released ${result.released.length} booking${result.released.length !== 1 ? "s" : ""}`,
-        description: "Past undelivered plan freed. Future days and logged work unchanged.",
-      });
-      onClose();
-    } catch {
-      toast({ title: "Failed to release past plan", variant: "destructive" });
-    }
-  }
-
-  const hasItems = preview != null && preview.length > 0;
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-[560px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5 text-muted-foreground" />
-            Release past undelivered plan
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-3 py-1 text-sm">
-          <p className="text-muted-foreground">
-            Reviews bookings with undelivered past days. Future planned days and all logged work are kept.
-            The action is reversible per booking.
-          </p>
-
-          {previewLoading && (
-            <div className="flex items-center justify-center py-6 text-muted-foreground text-xs gap-2">
-              <span className="animate-spin h-3.5 w-3.5 border border-current border-t-transparent rounded-full inline-block" />
-              Calculating…
-            </div>
-          )}
-
-          {previewError && (
-            <div className="text-destructive text-xs rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2">
-              {previewError}
-            </div>
-          )}
-
-          {!previewLoading && preview != null && preview.length === 0 && (
-            <div className="text-muted-foreground text-xs rounded-md border px-3 py-4 text-center">
-              Nothing to release — no bookings have undelivered past days.
-            </div>
-          )}
-
-          {!previewLoading && hasItems && (
-            <div className="rounded-md border overflow-hidden">
-              <table className="w-full text-xs">
-                <thead className="bg-muted/50 text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium">Employee</th>
-                    <th className="px-3 py-2 text-left font-medium">Project / Role</th>
-                    <th className="px-3 py-2 text-left font-medium">Period</th>
-                    <th className="px-3 py-2 text-right font-medium">Undelivered</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {preview.map((item) => (
-                    <tr key={item.id} className="hover:bg-muted/30">
-                      <td className="px-3 py-2">{item.employeeName ?? "—"}</td>
-                      <td className="px-3 py-2">
-                        <span className="font-medium">{item.projectName}</span>
-                        {item.projectRoleName && (
-                          <span className="text-muted-foreground"> · {item.projectRoleName}</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
-                        {item.startDate} – {item.endDate}
-                      </td>
-                      <td className="px-3 py-2 text-right font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap">
-                        {Math.round(item.pastUndeliveredDays * 10) / 10}d
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            onClick={handleConfirm}
-            disabled={!hasItems || bulkReleaseMut.isPending || previewLoading}
-            className="gap-1.5"
-          >
-            <Clock className="h-4 w-4" />
-            {bulkReleaseMut.isPending
-              ? "Releasing…"
-              : hasItems
-                ? `Release ${preview!.length} booking${preview!.length !== 1 ? "s" : ""}`
-                : "Release"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export default function ResourcePlannerPage() {
   const today = useMemo(() => {
     const d = new Date();
@@ -2115,7 +1948,6 @@ export default function ResourcePlannerPage() {
   const [filterClients, setFilterClients] = useState<string[]>([]);
   const [filterProjects, setFilterProjects] = useState<number[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
-  const [bulkReleaseOpen, setBulkReleaseOpen] = useState(false);
 
   const dragStateRef = useRef<{
     bookingId: number;
@@ -2248,6 +2080,27 @@ export default function ResourcePlannerPage() {
         ? emp.workingDaysMask
         : [1, 1, 1, 1, 1, 0, 0],
       holidayCalendarCode: emp?.holidayCalendarCode ?? null,
+    });
+  }
+
+  function openCloseOutModal(b: ResourceBookingFull) {
+    const emp = (employees as any[]).find((e) => e.id === b.employeeId);
+    setModal({
+      mode: "edit",
+      booking: b,
+      capacity: b.weeklyCapacityHours,
+      workingDaysMask: Array.isArray(emp?.workingDaysMask)
+        ? emp.workingDaysMask
+        : [1, 1, 1, 1, 1, 0, 0],
+      holidayCalendarCode: emp?.holidayCalendarCode ?? null,
+      openInConfirmRelease: true,
+    });
+  }
+
+  function handleBookingUpdated(updatedBooking: ResourceBookingFull) {
+    setModal((prev) => {
+      if (!prev || prev.mode !== "edit") return prev;
+      return { ...prev, booking: updatedBooking, openInConfirmRelease: false };
     });
   }
 
@@ -2402,6 +2255,7 @@ export default function ResourcePlannerPage() {
     });
   }
 
+  const todayStr = format(today, "yyyy-MM-dd");
   const contentWidth = numWeeks * cellWidth;
 
   const allActiveEmployees = useMemo(
@@ -2790,16 +2644,6 @@ export default function ResourcePlannerPage() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Bulk release past plan */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={() => setBulkReleaseOpen(true)}
-            >
-              <Clock className="h-3.5 w-3.5" />
-              Release past
-            </Button>
           </div>
 
           {/* Zoom toggle */}
@@ -3126,9 +2970,15 @@ export default function ResourcePlannerPage() {
                       const isDragging = ghost !== null;
                       const bDayWidth = cellWidth / 7;
 
+                      const showCloseOut =
+                        !isDragging &&
+                        !b.pastReleasedAt &&
+                        b.startDate < todayStr &&
+                        bounds.width > 32;
+
                       const barDiv = (
                         <div
-                          className={`absolute rounded-sm flex items-center px-2 overflow-hidden shadow-sm${isDragging ? "" : " hover:brightness-90 transition-all"}`}
+                          className={`absolute rounded-sm flex items-center px-2 overflow-hidden shadow-sm group/bar${isDragging ? "" : " hover:brightness-90 transition-all"}`}
                           style={{
                             top: barTop,
                             height: barH,
@@ -3172,6 +3022,25 @@ export default function ResourcePlannerPage() {
                             >
                               <Clock className="h-3 w-3 text-white/70" />
                             </div>
+                          )}
+                          {/* Close Out button — visible on bar hover when past days exist */}
+                          {showCloseOut && (
+                            <button
+                              type="button"
+                              className="absolute top-0.5 right-2 opacity-0 group-hover/bar:opacity-100 transition-opacity rounded p-0.5 hover:bg-white/20 focus:outline-none focus:bg-white/20"
+                              style={{ zIndex: 6, cursor: "pointer" }}
+                              title="Close Out — release undelivered past days"
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openCloseOutModal(b);
+                              }}
+                            >
+                              <Clock className="h-3 w-3 text-white/90" />
+                            </button>
                           )}
                           {/* Right resize handle */}
                           <div
@@ -3311,6 +3180,12 @@ export default function ResourcePlannerPage() {
             allBookings={bookings}
             employees={activeEmployees}
             onClose={() => setModal(null)}
+            onBookingUpdated={handleBookingUpdated}
+            initialConfirmRelease={
+              modal.mode === "edit"
+                ? (modal as EditModalState).openInConfirmRelease
+                : false
+            }
           />
         )}
 
@@ -3321,12 +3196,6 @@ export default function ResourcePlannerPage() {
             onClose={() => setVacationModal(null)}
           />
         )}
-
-        {/* Bulk release past plan dialog */}
-        <BulkReleaseDialog
-          open={bulkReleaseOpen}
-          onClose={() => setBulkReleaseOpen(false)}
-        />
       </div>
     </AdminLayout>
   );
