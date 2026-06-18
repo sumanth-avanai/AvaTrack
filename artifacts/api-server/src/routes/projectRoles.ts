@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { fetchEmpAvailabilityMap, type EmpAvailability } from "../lib/employee-availability";
 import { calcBookingHours } from "../lib/booking-hours";
+import { calcRoleBudgetReconciliation, type ReconciliationBooking } from "../lib/budget-reconciliation";
 
 const router: IRouter = Router();
 
@@ -198,7 +199,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
   const [role] = await db.select().from(projectRolesTable).where(eq(projectRolesTable.id, id));
   if (!role) { res.status(404).json({ error: "Role not found" }); return; }
 
-  const roleBookings = await db
+  const roleBookingRows = await db
     .select({
       id: resourceBookingsTable.id,
       employeeId: resourceBookingsTable.employeeId,
@@ -212,24 +213,40 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
     .where(eq(resourceBookingsTable.projectRoleId, id));
 
-  const employeeMap = new Map<number, { employeeName: string; days: number }>();
-  let totalPlannedDays = 0;
-
-  const availMap = await getAvailMapForBookings(
-    roleBookings.filter((b) => excludeBookingId == null || b.id !== excludeBookingId)
+  // Exclude the booking being edited (for live budget validation in the modal)
+  const activeBookingRows = roleBookingRows.filter(
+    (b) => excludeBookingId == null || b.id !== excludeBookingId
   );
 
-  for (const b of roleBookings) {
-    if (excludeBookingId != null && b.id === excludeBookingId) continue;
+  const availMap = await getAvailMapForBookings(activeBookingRows);
+
+  // Build per-employee planned-days map for the response bookings array
+  const employeeMap = new Map<number, { employeeName: string; days: number }>();
+
+  const reconciliationBookings: ReconciliationBooking[] = activeBookingRows.map((b) => {
+    const avail = availMap.get(b.employeeId);
+    return {
+      startDate: b.startDate,
+      endDate: b.endDate,
+      hoursPerDay: b.hoursPerDay,
+      weekdayHours: b.weekdayHours as Record<string, number> | null,
+      employeeId: b.employeeId,
+      avail: {
+        holidayDates: avail?.holidayDates ?? [],
+        vacationDateSet: avail?.vacationDateSet ?? new Set(),
+        compDayDateSet: avail?.compDayDateSet ?? new Set(),
+      },
+    };
+  });
+
+  // Also populate employeeMap for per-employee day totals in the response
+  for (const b of activeBookingRows) {
     const avail = availMap.get(b.employeeId);
     const { budgetDays: days } = calcBookingHours(
       b.startDate, b.endDate, b.hoursPerDay,
       b.weekdayHours as Record<string, number> | null,
       avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
     );
-
-    totalPlannedDays += days;
-
     const emp = employeeMap.get(b.employeeId);
     if (emp) {
       emp.days += days;
@@ -238,34 +255,55 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     }
   }
 
-  // ── Logged hours from time_entries ─────────────────────────────────────────
-  const loggedRows = await db
-    .select({ 
+  // ── Time entries: logged + invoiced hours ────────────────────────────────────
+  const timeEntryRows = await db
+    .select({
       employeeId: timeEntriesTable.employeeId,
       employeeName: employeesTable.name,
-      totalHours: sql<number>`coalesce(sum(${timeEntriesTable.hours}), 0)`,
+      entryDate: timeEntriesTable.entryDate,
+      hours: timeEntriesTable.hours,
+      billingStatus: timeEntriesTable.billingStatus,
+      invoicedAt: timeEntriesTable.invoicedAt,
     })
     .from(timeEntriesTable)
     .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
-    .where(eq(timeEntriesTable.projectRoleId, id))
-    .groupBy(timeEntriesTable.employeeId, employeesTable.name);
+    .where(eq(timeEntriesTable.projectRoleId, id));
 
   const loggedMap = new Map<number, { employeeName: string; hours: number }>();
   let totalLoggedHours = 0;
-  for (const row of loggedRows) {
-    loggedMap.set(row.employeeId, { employeeName: row.employeeName ?? "Unknown", hours: Number(row.totalHours) });
-    totalLoggedHours += Number(row.totalHours);
-  }
+  const reconciliationEntries = timeEntryRows.map((row) => {
+    const hours = Number(row.hours);
+    const isInvoiced =
+      row.billingStatus === "invoiced" ||
+      (row.billingStatus == null && row.invoicedAt != null);
 
-  // Merge all employee ids that appear in either planned or logged
-  const allEmployeeIds = new Set([...employeeMap.keys(), ...loggedMap.keys()]);
+    // Accumulate per-employee totals for the response
+    const empEntry = loggedMap.get(row.employeeId);
+    if (empEntry) {
+      empEntry.hours += hours;
+    } else {
+      loggedMap.set(row.employeeId, { employeeName: row.employeeName ?? "Unknown", hours });
+    }
+    totalLoggedHours += hours;
+
+    return {
+      entryDate: typeof row.entryDate === "string" ? row.entryDate : (row.entryDate as Date).toISOString().slice(0, 10),
+      hours,
+      isInvoiced,
+    };
+  });
+
+  const budgetedDays = role.budgetedDays ?? null;
+  const reconciliation = calcRoleBudgetReconciliation(
+    budgetedDays,
+    reconciliationBookings,
+    reconciliationEntries,
+  );
 
   const round1 = (n: number) => Math.round(n * 10) / 10;
 
-  const budgetedDays = role.budgetedDays ?? null;
-  const plannedDays = round1(totalPlannedDays);
-  const loggedDays = round1(totalLoggedHours / 8);
-  const availableDays = budgetedDays != null ? round1(budgetedDays - totalPlannedDays - totalLoggedHours / 8) : null;
+  // Merge all employee ids
+  const allEmployeeIds = new Set([...employeeMap.keys(), ...loggedMap.keys()]);
 
   const bookings = Array.from(allEmployeeIds)
     .map((empId) => {
@@ -286,9 +324,14 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
 
   res.json({
     budgetedDays,
-    plannedDays,
-    loggedDays,
-    availableDays,
+    plannedDays: reconciliation.plannedDays,
+    loggedDays: reconciliation.loggedDays,
+    invoicedDays: reconciliation.invoicedDays,
+    reservedDays: reconciliation.reservedDays,
+    unplannedDays: reconciliation.unplannedDays,
+    freeDays: reconciliation.freeDays,
+    remainingBudgetDays: reconciliation.remainingBudgetDays,
+    loggedNotInvoicedDays: reconciliation.loggedNotInvoicedDays,
     employeeLoggedDays,
     bookings,
   });
@@ -301,31 +344,16 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
 
   const roles = await getRolesForProject(projectId);
   if (roles.length === 0) {
-    res.json({ roles: [], totals: { budgetedDays: 0, budgetedHours: 0, budgetValue: 0, bookedHours: 0, bookedValue: 0 } });
+    res.json({ roles: [], totals: { budgetedDays: 0, budgetedHours: 0, budgetValue: 0, bookedHours: 0, bookedValue: 0, invoicedDays: 0, reservedDays: 0, unplannedDays: 0, freeDays: 0, remainingBudgetDays: 0, loggedNotInvoicedDays: 0 } });
     return;
   }
 
   const roleIds = roles.map((r) => r.id);
 
-  // Sum booked hours per role from time_entries
-  const bookedRows = await db
-    .select({
-      projectRoleId: timeEntriesTable.projectRoleId,
-      totalHours: sql<number>`COALESCE(SUM(${timeEntriesTable.hours}), 0)`,
-    })
-    .from(timeEntriesTable)
-    .where(
-      and(
-        eq(timeEntriesTable.projectId, projectId),
-        sql`${timeEntriesTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
-      )
-    )
-    .groupBy(timeEntriesTable.projectRoleId);
-
-  // Fetch individual bookings to compute planned days using bookable-day formula:
-  // plannedDays = sum over bookings of (bookableDays(minus holidays+vacations) * hoursPerDay / 8)
+  // Fetch individual bookings to compute planned days using bookable-day formula
   const plannedBookings = await db
     .select({
+      id:            resourceBookingsTable.id,
       projectRoleId: resourceBookingsTable.projectRoleId,
       employeeId:    resourceBookingsTable.employeeId,
       startDate:     resourceBookingsTable.startDate,
@@ -341,21 +369,42 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
       )
     );
 
-  const bookedMap = new Map<number, number>(bookedRows.map((r) => [r.projectRoleId!, r.totalHours]));
+  // Fetch time entries with invoiced status for reconciliation
+  const timeEntryRows = await db
+    .select({
+      projectRoleId: timeEntriesTable.projectRoleId,
+      entryDate:     timeEntriesTable.entryDate,
+      hours:         timeEntriesTable.hours,
+      billingStatus: timeEntriesTable.billingStatus,
+      invoicedAt:    timeEntriesTable.invoicedAt,
+    })
+    .from(timeEntriesTable)
+    .where(
+      and(
+        eq(timeEntriesTable.projectId, projectId),
+        sql`${timeEntriesTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
+      )
+    );
 
-  const plannedAvailMap = await getAvailMapForBookings(plannedBookings);
+  const plannedAvailMap = await getAvailMapForBookings(
+    plannedBookings.filter((b) => b.projectRoleId != null)
+  );
 
-  // Compute planned hours per role (supports both flat and weekday-mode bookings)
-  const plannedMap = new Map<number, number>();
+  // Group bookings and time entries by roleId
+  const bookingsByRole = new Map<number, typeof plannedBookings>();
   for (const b of plannedBookings) {
     if (b.projectRoleId == null) continue;
-    const avail = plannedAvailMap.get(b.employeeId);
-    const { totalHours: hours } = calcBookingHours(
-      b.startDate, b.endDate, b.hoursPerDay,
-      b.weekdayHours as Record<string, number> | null,
-      avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
-    );
-    plannedMap.set(b.projectRoleId, (plannedMap.get(b.projectRoleId) ?? 0) + hours);
+    const arr = bookingsByRole.get(b.projectRoleId) ?? [];
+    arr.push(b);
+    bookingsByRole.set(b.projectRoleId, arr);
+  }
+
+  const entriesByRole = new Map<number, typeof timeEntryRows>();
+  for (const e of timeEntryRows) {
+    if (e.projectRoleId == null) continue;
+    const arr = entriesByRole.get(e.projectRoleId) ?? [];
+    arr.push(e);
+    entriesByRole.set(e.projectRoleId, arr);
   }
 
   let totalBudgetedDays = 0;
@@ -363,18 +412,51 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
   let totalBudgetValue = 0;
   let totalBookedHours = 0;
   let totalBookedValue = 0;
+  let totalInvoicedDays = 0;
+  let totalReservedDays = 0;
+  let totalUnplannedDays = 0;
+  let totalFreeDays = 0;
+  let totalRemainingBudgetDays = 0;
+  let totalLoggedNotInvoicedDays = 0;
 
   const rolesWithBudget = roles.map((role) => {
-    const bookedHours = bookedMap.get(role.id) ?? 0;
-    const bookedDays = bookedHours / 8;
-    const plannedHoursRaw = plannedMap.get(role.id) ?? 0;
-    const plannedDays = Math.round((plannedHoursRaw / 8) * 10) / 10;
-    const plannedHours = Math.round(plannedHoursRaw * 10) / 10;
+    const roleBookings = bookingsByRole.get(role.id) ?? [];
+    const roleEntries = entriesByRole.get(role.id) ?? [];
+
+    const reconciliationBookings: ReconciliationBooking[] = roleBookings.map((b) => {
+      const avail = plannedAvailMap.get(b.employeeId);
+      return {
+        startDate: b.startDate,
+        endDate: b.endDate,
+        hoursPerDay: b.hoursPerDay,
+        weekdayHours: b.weekdayHours as Record<string, number> | null,
+        employeeId: b.employeeId,
+        avail: {
+          holidayDates: avail?.holidayDates ?? [],
+          vacationDateSet: avail?.vacationDateSet ?? new Set(),
+          compDayDateSet: avail?.compDayDateSet ?? new Set(),
+        },
+      };
+    });
+
+    const reconciliationEntries = roleEntries.map((e) => ({
+      entryDate: typeof e.entryDate === "string" ? e.entryDate : (e.entryDate as Date).toISOString().slice(0, 10),
+      hours: Number(e.hours),
+      isInvoiced:
+        e.billingStatus === "invoiced" ||
+        (e.billingStatus == null && e.invoicedAt != null),
+    }));
+
     const budgetedDays = role.budgetedDays ?? null;
+    const recon = calcRoleBudgetReconciliation(budgetedDays, reconciliationBookings, reconciliationEntries);
+
+    const bookedHours = recon.loggedDays * 8;
+    const bookedDays = recon.loggedDays;
+    const plannedHours = Math.round(recon.plannedDays * 8 * 10) / 10;
+    const plannedDays = recon.plannedDays;
     const budgetedHours = role.budgetedHours ?? (budgetedDays != null ? budgetedDays * 8 : null);
     const budgetValue = budgetedDays != null ? budgetedDays * role.dayRate : null;
     const bookedValue = bookedDays * role.dayRate;
-    const remainingDays = budgetedDays != null ? budgetedDays - bookedDays : null;
     const utilization = budgetedDays != null && budgetedDays > 0 ? bookedDays / budgetedDays : null;
 
     if (budgetedDays != null) totalBudgetedDays += budgetedDays;
@@ -382,6 +464,12 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
     if (budgetValue != null) totalBudgetValue += budgetValue;
     totalBookedHours += bookedHours;
     totalBookedValue += bookedValue;
+    totalInvoicedDays += recon.invoicedDays;
+    totalReservedDays += recon.reservedDays;
+    if (recon.unplannedDays != null) totalUnplannedDays += recon.unplannedDays;
+    if (recon.freeDays != null) totalFreeDays += recon.freeDays;
+    if (recon.remainingBudgetDays != null) totalRemainingBudgetDays += recon.remainingBudgetDays;
+    totalLoggedNotInvoicedDays += recon.loggedNotInvoicedDays;
 
     return {
       ...role,
@@ -393,20 +481,32 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
       budgetedHours,
       budgetValue,
       bookedValue,
-      remainingDays,
       utilization,
+      invoicedDays: recon.invoicedDays,
+      reservedDays: recon.reservedDays,
+      unplannedDays: recon.unplannedDays,
+      freeDays: recon.freeDays,
+      remainingBudgetDays: recon.remainingBudgetDays,
+      loggedNotInvoicedDays: recon.loggedNotInvoicedDays,
     };
   });
+
+  const round1 = (n: number) => Math.round(n * 10) / 10;
 
   res.json({
     roles: rolesWithBudget,
     totals: {
-      budgetedDays: totalBudgetedDays,
-      budgetedHours: totalBudgetedHours,
-      budgetValue: totalBudgetValue,
-      bookedHours: totalBookedHours,
-      bookedValue: totalBookedValue,
-      remainingDays: totalBudgetedDays - totalBookedHours / 8,
+      budgetedDays: round1(totalBudgetedDays),
+      budgetedHours: round1(totalBudgetedHours),
+      budgetValue: Math.round(totalBudgetValue * 100) / 100,
+      bookedHours: round1(totalBookedHours),
+      bookedValue: Math.round(totalBookedValue * 100) / 100,
+      invoicedDays: round1(totalInvoicedDays),
+      reservedDays: round1(totalReservedDays),
+      unplannedDays: round1(totalUnplannedDays),
+      freeDays: round1(totalFreeDays),
+      remainingBudgetDays: round1(totalRemainingBudgetDays),
+      loggedNotInvoicedDays: round1(totalLoggedNotInvoicedDays),
     },
   });
 });
@@ -418,7 +518,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
 
   const roles = await getRolesForProject(projectId);
   if (roles.length === 0) {
-    res.json({ projectId, roles: [], totals: { budgetedDays: 0, plannedDays: 0, bookedDays: 0, remainingDays: 0, budgetValue: 0, bookedValue: 0 } });
+    res.json({ projectId, roles: [], totals: { budgetedDays: 0, plannedDays: 0, bookedDays: 0, invoicedDays: 0, reservedDays: 0, unplannedDays: 0, freeDays: 0, remainingBudgetDays: 0, budgetValue: 0, bookedValue: 0 } });
     return;
   }
 
@@ -441,13 +541,16 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
       sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
     );
 
-  // Fetch time entries booked hours per employee per role
-  const timeRows = await db
+  // Fetch time entries with invoiced status for reconciliation + per-employee booked days
+  const timeEntryRows = await db
     .select({
       projectRoleId: timeEntriesTable.projectRoleId,
       employeeId: timeEntriesTable.employeeId,
       employeeName: employeesTable.name,
-      totalHours: sql<number>`COALESCE(SUM(${timeEntriesTable.hours}), 0)`,
+      entryDate:     timeEntriesTable.entryDate,
+      hours:         timeEntriesTable.hours,
+      billingStatus: timeEntriesTable.billingStatus,
+      invoicedAt:    timeEntriesTable.invoicedAt,
     })
     .from(timeEntriesTable)
     .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
@@ -456,11 +559,8 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
         eq(timeEntriesTable.projectId, projectId),
         sql`${timeEntriesTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
       )
-    )
-    .groupBy(timeEntriesTable.projectRoleId, timeEntriesTable.employeeId, employeesTable.name);
+    );
 
-  // Build per-role, per-employee allocation map
-  // key: `${roleId}:${employeeId}` → { allocatedDays, startDate, endDate, employeeName }
   const round1 = (n: number) => Math.round(n * 10) / 10;
 
   interface AllocationAccum {
@@ -501,15 +601,38 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
   }
 
   // Build per-role, per-employee booked-days map from time entries
-  const bookedMap = new Map<string, { employeeId: number; employeeName: string; bookedDays: number }>();
-  for (const t of timeRows) {
+  const bookedEmpMap = new Map<string, { employeeId: number; employeeName: string; bookedDays: number }>();
+  for (const t of timeEntryRows) {
     if (t.projectRoleId == null) continue;
     const key = `${t.projectRoleId}:${t.employeeId}`;
-    bookedMap.set(key, {
-      employeeId: t.employeeId,
-      employeeName: t.employeeName ?? "Unknown",
-      bookedDays: Number(t.totalHours) / 8,
-    });
+    const hours = Number(t.hours);
+    const ex = bookedEmpMap.get(key);
+    if (ex) {
+      ex.bookedDays += hours / 8;
+    } else {
+      bookedEmpMap.set(key, {
+        employeeId: t.employeeId,
+        employeeName: t.employeeName ?? "Unknown",
+        bookedDays: hours / 8,
+      });
+    }
+  }
+
+  // Group bookings and time entries by roleId for reconciliation
+  const bookingsByRole = new Map<number, typeof bookingRows>();
+  for (const b of bookingRows) {
+    if (b.projectRoleId == null) continue;
+    const arr = bookingsByRole.get(b.projectRoleId) ?? [];
+    arr.push(b);
+    bookingsByRole.set(b.projectRoleId, arr);
+  }
+
+  const entriesByRole = new Map<number, typeof timeEntryRows>();
+  for (const e of timeEntryRows) {
+    if (e.projectRoleId == null) continue;
+    const arr = entriesByRole.get(e.projectRoleId) ?? [];
+    arr.push(e);
+    entriesByRole.set(e.projectRoleId, arr);
   }
 
   let totalBudgetedDays = 0;
@@ -517,15 +640,51 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
   let totalBookedDays = 0;
   let totalBudgetValue = 0;
   let totalBookedValue = 0;
+  let totalInvoicedDays = 0;
+  let totalReservedDays = 0;
+  let totalUnplannedDays = 0;
+  let totalFreeDays = 0;
+  let totalRemainingBudgetDays = 0;
 
   const rolesOut = roles.map((role) => {
-    // Collect all employees who appear in either allocations or time entries for this role
+    // Build reconciliation inputs for this role
+    const roleBookings = bookingsByRole.get(role.id) ?? [];
+    const roleEntries = entriesByRole.get(role.id) ?? [];
+
+    const reconciliationBookings: ReconciliationBooking[] = roleBookings.map((b) => {
+      const avail = allocAvailMap.get(b.employeeId);
+      return {
+        startDate: b.startDate,
+        endDate: b.endDate,
+        hoursPerDay: b.hoursPerDay,
+        weekdayHours: b.weekdayHours as Record<string, number> | null,
+        employeeId: b.employeeId,
+        avail: {
+          holidayDates: avail?.holidayDates ?? [],
+          vacationDateSet: avail?.vacationDateSet ?? new Set(),
+          compDayDateSet: avail?.compDayDateSet ?? new Set(),
+        },
+      };
+    });
+
+    const reconciliationEntries = roleEntries.map((e) => ({
+      entryDate: typeof e.entryDate === "string" ? e.entryDate : (e.entryDate as Date).toISOString().slice(0, 10),
+      hours: Number(e.hours),
+      isInvoiced:
+        e.billingStatus === "invoiced" ||
+        (e.billingStatus == null && e.invoicedAt != null),
+    }));
+
+    const budgetedDays = role.budgetedDays ?? null;
+    const recon = calcRoleBudgetReconciliation(budgetedDays, reconciliationBookings, reconciliationEntries);
+
+    // Collect all employees for this role
     const empIds = new Set<number>();
     for (const [key] of allocMap) {
       const [rId] = key.split(":");
       if (parseInt(rId, 10) === role.id) empIds.add(parseInt(key.split(":")[1], 10));
     }
-    for (const [key] of bookedMap) {
+    for (const [key] of bookedEmpMap) {
       const [rId] = key.split(":");
       if (parseInt(rId, 10) === role.id) empIds.add(parseInt(key.split(":")[1], 10));
     }
@@ -536,7 +695,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
     const allocations = Array.from(empIds).map((empId) => {
       const aKey = `${role.id}:${empId}`;
       const alloc = allocMap.get(aKey);
-      const booked = bookedMap.get(aKey);
+      const booked = bookedEmpMap.get(aKey);
       const allocatedDays = round1(alloc?.allocatedDays ?? 0);
       const bookedDays = round1(booked?.bookedDays ?? 0);
       rolePlannedDays += allocatedDays;
@@ -557,8 +716,6 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
 
     rolePlannedDays = round1(rolePlannedDays);
     roleBookedDays = round1(roleBookedDays);
-    const budgetedDays = role.budgetedDays ?? null;
-    const remainingDays = budgetedDays != null ? round1(budgetedDays - rolePlannedDays) : null;
     const budgetValue = budgetedDays != null ? budgetedDays * role.dayRate : null;
     const bookedValue = round1(roleBookedDays * role.dayRate);
 
@@ -567,6 +724,11 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
     totalBookedDays += roleBookedDays;
     if (budgetValue != null) totalBudgetValue += budgetValue;
     totalBookedValue += bookedValue;
+    totalInvoicedDays += recon.invoicedDays;
+    totalReservedDays += recon.reservedDays;
+    if (recon.unplannedDays != null) totalUnplannedDays += recon.unplannedDays;
+    if (recon.freeDays != null) totalFreeDays += recon.freeDays;
+    if (recon.remainingBudgetDays != null) totalRemainingBudgetDays += recon.remainingBudgetDays;
 
     return {
       roleId: role.id,
@@ -575,7 +737,11 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
       budgetedDays,
       plannedDays: rolePlannedDays,
       bookedDays: roleBookedDays,
-      remainingDays,
+      invoicedDays: recon.invoicedDays,
+      reservedDays: recon.reservedDays,
+      unplannedDays: recon.unplannedDays,
+      freeDays: recon.freeDays,
+      remainingBudgetDays: recon.remainingBudgetDays,
       budgetValue,
       bookedValue,
       allocations,
@@ -589,7 +755,11 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
       budgetedDays: round1(totalBudgetedDays),
       plannedDays: round1(totalPlannedDays),
       bookedDays: round1(totalBookedDays),
-      remainingDays: round1(totalBudgetedDays - totalPlannedDays),
+      invoicedDays: round1(totalInvoicedDays),
+      reservedDays: round1(totalReservedDays),
+      unplannedDays: round1(totalUnplannedDays),
+      freeDays: round1(totalFreeDays),
+      remainingBudgetDays: round1(totalRemainingBudgetDays),
       budgetValue: round1(totalBudgetValue),
       bookedValue: round1(totalBookedValue),
     },

@@ -56,8 +56,13 @@ interface BudgetRole extends ProjectRole {
   plannedDays: number;
   budgetValue: number | null;
   bookedValue: number;
-  remainingDays: number | null;
   utilization: number | null;
+  invoicedDays: number;
+  reservedDays: number;
+  unplannedDays: number | null;
+  freeDays: number | null;
+  remainingBudgetDays: number | null;
+  loggedNotInvoicedDays: number;
 }
 interface BudgetResponse {
   roles: BudgetRole[];
@@ -67,7 +72,12 @@ interface BudgetResponse {
     budgetValue: number;
     bookedHours: number;
     bookedValue: number;
-    remainingDays: number;
+    invoicedDays: number;
+    reservedDays: number;
+    unplannedDays: number;
+    freeDays: number;
+    remainingBudgetDays: number;
+    loggedNotInvoicedDays: number;
   };
 }
 
@@ -86,7 +96,11 @@ interface AllocationRole {
   budgetedDays: number | null;
   plannedDays: number;
   bookedDays: number;
-  remainingDays: number | null;
+  invoicedDays: number;
+  reservedDays: number;
+  unplannedDays: number | null;
+  freeDays: number | null;
+  remainingBudgetDays: number | null;
   budgetValue: number | null;
   bookedValue: number;
   allocations: AllocationEntry[];
@@ -98,7 +112,11 @@ interface AllocationsResponse {
     budgetedDays: number;
     plannedDays: number;
     bookedDays: number;
-    remainingDays: number;
+    invoicedDays: number;
+    reservedDays: number;
+    unplannedDays: number;
+    freeDays: number;
+    remainingBudgetDays: number;
     budgetValue: number;
     bookedValue: number;
   };
@@ -491,11 +509,11 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Role</TableHead>
-                          <TableHead className="text-right">Budgeted</TableHead>
-                          <TableHead className="text-right">Planned</TableHead>
-                          <TableHead className="text-right">Logged</TableHead>
-                          <TableHead className="min-w-[140px]">Utilization</TableHead>
-                          <TableHead className="text-right">Logged value</TableHead>
+                          <TableHead className="text-right">Budget</TableHead>
+                          <TableHead className="text-right">Invoiced</TableHead>
+                          <TableHead className="text-right">Re-plannable</TableHead>
+                          <TableHead className="text-right">Unplanned</TableHead>
+                          <TableHead className="text-right">Free (not logged)</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -503,25 +521,34 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                           <TableRow key={role.id}>
                             <TableCell className="font-medium">{role.name}</TableCell>
                             <TableCell className="text-right text-sm text-muted-foreground">
-                              {role.budgetedDays != null
-                                ? `${fmtDays(role.budgetedDays)}`
-                                : "—"}
+                              {role.budgetedDays != null ? fmtDays(role.budgetedDays) : "—"}
                               {role.budgetValue != null && (
                                 <div className="text-xs text-muted-foreground/70">{fmt(role.budgetValue)}</div>
                               )}
                             </TableCell>
-                            <TableCell className="text-right text-sm text-muted-foreground">
-                              {fmtDays(role.plannedDays)}
+                            <TableCell className="text-right text-sm">
+                              <span className="text-foreground">{fmtDays(role.invoicedDays)}</span>
                             </TableCell>
                             <TableCell className="text-right text-sm">
-                              {fmtDays(role.bookedDays)}
-                              <div className="text-xs text-muted-foreground/70">{fmt(role.bookedValue)}</div>
+                              <span className="text-blue-600 dark:text-blue-400">{fmtDays(role.reservedDays)}</span>
                             </TableCell>
-                            <TableCell>
-                              <UtilBar pct={role.utilization} />
+                            <TableCell className="text-right text-sm">
+                              {role.unplannedDays != null ? (
+                                <span className={role.unplannedDays < 0 ? "text-destructive font-medium" : "text-muted-foreground"}>
+                                  {fmtDays(role.unplannedDays)}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
                             </TableCell>
-                            <TableCell className="text-right font-mono text-sm">
-                              {fmt(role.bookedValue)}
+                            <TableCell className="text-right text-sm">
+                              {role.freeDays != null ? (
+                                <span className={role.freeDays < 0 ? "text-destructive font-medium" : "text-green-700 dark:text-green-400"}>
+                                  {fmtDays(role.freeDays)}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -529,31 +556,90 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                     </Table>
                   </div>
 
-                  {/* Totals summary card */}
-                  {(() => {
-                    const totalPlannedDays = budget.roles.reduce((s, r) => s + r.plannedDays, 0);
-                    return (
-                      <div className="rounded-lg border bg-muted/30 p-4 text-sm space-y-2">
-                        <div className="font-semibold text-foreground">Project Total</div>
-                        <div className="grid grid-cols-3 gap-3">
-                          <div>
-                            <div className="text-xs text-muted-foreground">Budgeted</div>
-                            <div className="font-medium">{fmtDays(budget.totals.budgetedDays)}</div>
-                            <div className="text-xs text-muted-foreground">{fmt(budget.totals.budgetValue)}</div>
+                  {/* Stacked-bar identity visualisation per role */}
+                  <div className="space-y-3">
+                    {budget.roles.filter((r) => r.budgetedDays != null && r.budgetedDays > 0).map((role) => {
+                      const b = role.budgetedDays!;
+                      const invPct = Math.max(0, Math.min((role.invoicedDays / b) * 100, 100));
+                      const resPct = Math.max(0, Math.min((role.reservedDays / b) * 100, 100 - invPct));
+                      const unplPct = Math.max(0, Math.min(((role.unplannedDays ?? 0) / b) * 100, 100 - invPct - resPct));
+                      return (
+                        <div key={role.id} className="space-y-1">
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground">{role.name}</span>
+                            <span>{fmtDays(b)} budget</span>
                           </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Planned</div>
-                            <div className="font-medium">{fmtDays(totalPlannedDays)}</div>
+                          <div className="flex h-3 rounded-full overflow-hidden bg-muted">
+                            {invPct > 0 && (
+                              <div
+                                title={`Invoiced: ${fmtDays(role.invoicedDays)}`}
+                                style={{ width: `${invPct}%` }}
+                                className="bg-green-500 dark:bg-green-600"
+                              />
+                            )}
+                            {resPct > 0 && (
+                              <div
+                                title={`Re-plannable: ${fmtDays(role.reservedDays)}`}
+                                style={{ width: `${resPct}%` }}
+                                className="bg-blue-400 dark:bg-blue-500"
+                              />
+                            )}
+                            {unplPct > 0 && (
+                              <div
+                                title={`Unplanned: ${fmtDays(role.unplannedDays ?? 0)}`}
+                                style={{ width: `${unplPct}%` }}
+                                className="bg-muted-foreground/20"
+                              />
+                            )}
                           </div>
-                          <div>
-                            <div className="text-xs text-muted-foreground">Logged</div>
-                            <div className="font-medium">{fmtDays(budget.totals.bookedHours / 8)}</div>
-                            <div className="text-xs text-muted-foreground">{fmt(budget.totals.bookedValue)}</div>
+                          <div className="flex gap-3 text-xs text-muted-foreground">
+                            <span><span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />Invoiced {fmtDays(role.invoicedDays)}</span>
+                            <span><span className="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1" />Re-plannable {fmtDays(role.reservedDays)}</span>
+                            {role.unplannedDays != null && <span>Unplanned {fmtDays(role.unplannedDays)}</span>}
                           </div>
                         </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Totals summary card */}
+                  <div className="rounded-lg border bg-muted/30 p-4 text-sm space-y-3">
+                    <div className="font-semibold text-foreground">Project Total</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Budget</div>
+                        <div className="font-medium">{fmtDays(budget.totals.budgetedDays)}</div>
+                        <div className="text-xs text-muted-foreground">{fmt(budget.totals.budgetValue)}</div>
                       </div>
-                    );
-                  })()}
+                      <div>
+                        <div className="text-xs text-muted-foreground">Invoiced</div>
+                        <div className="font-medium text-green-700 dark:text-green-400">{fmtDays(budget.totals.invoicedDays)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Re-plannable</div>
+                        <div className="font-medium text-blue-600 dark:text-blue-400">{fmtDays(budget.totals.reservedDays)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Unplanned</div>
+                        <div className={`font-medium ${budget.totals.unplannedDays < 0 ? "text-destructive" : ""}`}>{fmtDays(budget.totals.unplannedDays)}</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 border-t pt-2">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Logged total</div>
+                        <div className="font-medium">{fmtDays(budget.totals.bookedHours / 8)}</div>
+                        <div className="text-xs text-muted-foreground">{fmt(budget.totals.bookedValue)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Free (not logged)</div>
+                        <div className="font-medium text-green-600 dark:text-green-400">{fmtDays(budget.totals.freeDays)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Remaining budget</div>
+                        <div className="font-medium">{fmtDays(budget.totals.remainingBudgetDays)}</div>
+                      </div>
+                    </div>
+                  </div>
                 </>
               )}
             </TabsContent>
@@ -574,26 +660,18 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                 <>
                   <div className="space-y-5">
                     {allocations.roles.map((role) => {
-                      const remPct = role.budgetedDays != null && role.budgetedDays > 0
-                        ? (role.remainingDays ?? 0) / role.budgetedDays
-                        : null;
-                      const remColor = remPct == null
-                        ? ""
-                        : remPct <= 0
-                          ? "text-destructive font-semibold"
-                          : remPct < 0.2
-                            ? "text-yellow-600 font-semibold"
-                            : "text-foreground";
-
                       return (
                         <div key={role.roleId} className="border rounded-md overflow-hidden">
-                          {/* Role header summary */}
+                          {/* Role header summary — four canonical buckets */}
                           <div className="bg-muted/40 px-4 py-2.5 border-b">
                             <div className="font-semibold text-sm text-foreground">{role.roleName}</div>
                             <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-0.5">
                               <span>Budget: <span className="text-foreground">{role.budgetedDays != null ? fmtDays(role.budgetedDays) : "—"}</span></span>
-                              <span>Planned: <span className="text-foreground">{fmtDays(role.plannedDays)}</span></span>
-                              <span>Logged: <span className="text-foreground">{fmtDays(role.bookedDays)}</span></span>
+                              <span>Invoiced: <span className="text-green-700 dark:text-green-400 font-medium">{fmtDays(role.invoicedDays)}</span></span>
+                              <span>Re-plannable: <span className="text-blue-600 dark:text-blue-400 font-medium">{fmtDays(role.reservedDays)}</span></span>
+                              {role.unplannedDays != null && (
+                                <span>Unplanned: <span className={`font-medium ${role.unplannedDays < 0 ? "text-destructive" : "text-foreground"}`}>{fmtDays(role.unplannedDays)}</span></span>
+                              )}
                             </div>
                           </div>
 
@@ -649,22 +727,25 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                   </div>
 
                   {/* Totals footer */}
-                  <div className="rounded-lg border bg-muted/30 p-4 text-sm space-y-2">
+                  <div className="rounded-lg border bg-muted/30 p-4 text-sm space-y-3">
                     <div className="font-semibold text-foreground">Project Total</div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       <div>
-                        <div className="text-xs text-muted-foreground">Budgeted</div>
+                        <div className="text-xs text-muted-foreground">Budget</div>
                         <div className="font-medium">{fmtDays(allocations.totals.budgetedDays)}</div>
                         <div className="text-xs text-muted-foreground">{fmt(allocations.totals.budgetValue)}</div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">Planned</div>
-                        <div className="font-medium">{fmtDays(allocations.totals.plannedDays)}</div>
+                        <div className="text-xs text-muted-foreground">Invoiced</div>
+                        <div className="font-medium text-green-700 dark:text-green-400">{fmtDays(allocations.totals.invoicedDays)}</div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">Logged</div>
-                        <div className="font-medium">{fmtDays(allocations.totals.bookedDays)}</div>
-                        <div className="text-xs text-muted-foreground">{fmt(allocations.totals.bookedValue)}</div>
+                        <div className="text-xs text-muted-foreground">Re-plannable</div>
+                        <div className="font-medium text-blue-600 dark:text-blue-400">{fmtDays(allocations.totals.reservedDays)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Unplanned</div>
+                        <div className={`font-medium ${allocations.totals.unplannedDays < 0 ? "text-destructive" : ""}`}>{fmtDays(allocations.totals.unplannedDays)}</div>
                       </div>
                     </div>
                   </div>

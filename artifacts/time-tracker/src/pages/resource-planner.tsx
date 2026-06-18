@@ -735,7 +735,12 @@ function BookingModal({
     budgetedDays: number | null;
     plannedDays: number;
     loggedDays: number;
-    availableDays: number | null;
+    invoicedDays: number;
+    reservedDays: number;
+    unplannedDays: number | null;
+    freeDays: number | null;
+    remainingBudgetDays: number | null;
+    loggedNotInvoicedDays: number;
     employeeLoggedDays: number | null;
     bookings: RoleBudgetBooking[];
   }
@@ -1332,7 +1337,6 @@ function BookingModal({
                 budgetedDays,
                 plannedDays,
                 loggedDays,
-                availableDays,
                 employeeLoggedDays,
                 bookings: roleBookings,
               } = roleBudgetStatus;
@@ -1348,6 +1352,9 @@ function BookingModal({
                 );
               }
 
+              const unplannedDays = roleBudgetStatus.unplannedDays ?? 0;
+              const unplannedAfter = r1(unplannedDays - thisDays);
+
               const empBooking = roleBookings.find(
                 (b) => b.employeeId === employeeId,
               );
@@ -1356,10 +1363,7 @@ function BookingModal({
               const empAvailable = r1(
                 budgetedDays - empPlannedDays - empLoggedDays,
               );
-
-              const roleAvailable = availableDays ?? 0;
               const empRemainingAfter = r1(empAvailable - thisDays);
-              const roleRemainingAfter = r1(roleAvailable - thisDays);
 
               const statusColor = (val: number) => {
                 if (val > 10) return "text-green-700 dark:text-green-400";
@@ -1371,9 +1375,10 @@ function BookingModal({
                 if (val >= 0) return 1;
                 return 2;
               };
+              // Over-budget warning triggers when booking would exceed Unplanned bucket
               const worstSeverity = Math.max(
                 borderSeverity(empRemainingAfter),
-                borderSeverity(roleRemainingAfter),
+                borderSeverity(unplannedAfter),
               );
               const outerBorder =
                 worstSeverity === 2
@@ -1433,7 +1438,7 @@ function BookingModal({
                     </div>
                   </div>
 
-                  {/* ENTIRE ROLE section */}
+                  {/* ENTIRE ROLE section — canonical bucket view */}
                   <div className="space-y-0.5 border-t border-border/40 pt-1.5">
                     <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                       👥 Entire role: All {selectedRole?.name ?? ""}
@@ -1457,18 +1462,18 @@ function BookingModal({
                       </div>
                     )}
                     <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Already planned</span>
-                      <span>−{plannedDays}d</span>
+                      <span>Invoiced</span>
+                      <span className="text-foreground">{roleBudgetStatus.invoicedDays}d</span>
                     </div>
                     <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Already logged</span>
-                      <span>−{loggedDays}d</span>
+                      <span>Re-plannable</span>
+                      <span className="text-blue-600 dark:text-blue-400">{roleBudgetStatus.reservedDays}d</span>
                     </div>
                     <div
-                      className={`flex justify-between font-medium pl-1 ${statusColor(roleAvailable)}`}
+                      className={`flex justify-between font-medium pl-1 ${statusColor(unplannedDays)}`}
                     >
-                      <span>Available</span>
-                      <span>{availableDays ?? "—"}d</span>
+                      <span>Unplanned</span>
+                      <span>{roleBudgetStatus.unplannedDays ?? "—"}{roleBudgetStatus.unplannedDays != null ? "d" : ""}</span>
                     </div>
                   </div>
 
@@ -1488,23 +1493,23 @@ function BookingModal({
                         </span>
                       </div>
                       <div
-                        className={`flex justify-between pl-1 ${statusColor(roleRemainingAfter)}`}
+                        className={`flex justify-between pl-1 ${statusColor(unplannedAfter)}`}
                       >
-                        <span>Remaining (role)</span>
+                        <span>Unplanned after booking</span>
                         <span className="font-medium">
-                          {roleRemainingAfter}d
+                          {unplannedAfter}d
                         </span>
                       </div>
                     </div>
                   )}
 
-                  {/* Red alert when role budget is exceeded */}
-                  {roleRemainingAfter < 0 && (
+                  {/* Red alert when unplanned budget is exceeded */}
+                  {unplannedAfter < 0 && (
                     <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 px-2.5 py-2 text-destructive text-xs">
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                       <span>
-                        This booking will exceed the role budget by{" "}
-                        {r1(Math.abs(roleRemainingAfter))}d. Consider: Reduce
+                        This booking will exceed the unplanned budget by{" "}
+                        {r1(Math.abs(unplannedAfter))}d. Consider: Reduce
                         scope OR assign more staff.
                       </span>
                     </div>
