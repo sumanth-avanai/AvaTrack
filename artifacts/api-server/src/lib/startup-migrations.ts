@@ -9,6 +9,7 @@ import { logger } from "./logger";
 
 export async function runStartupMigrations(): Promise<void> {
   await migrateHoursPerWeekToHoursPerDay();
+  await addPastReleasedAtColumn();
   await fixWorkingDaysMasks();
   await deleteZeroHourEntries();
   await backfillProjectColors();
@@ -57,6 +58,36 @@ async function migrateHoursPerWeekToHoursPerDay(): Promise<void> {
     logger.info("startup-migration: hours_per_day backfill complete");
   } catch (err) {
     logger.error({ err }, "startup-migration: migrateHoursPerWeekToHoursPerDay failed");
+  }
+}
+
+/**
+ * Add past_released_at TIMESTAMPTZ column to resource_bookings if missing.
+ * Idempotent — safe to run on every boot.
+ */
+async function addPastReleasedAtColumn(): Promise<void> {
+  try {
+    const result = await db.execute<{ exists: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name  = 'resource_bookings'
+          AND column_name = 'past_released_at'
+      ) AS exists
+    `);
+
+    const rows = Array.isArray(result) ? result : (result as { rows: { exists: boolean }[] }).rows;
+    if (rows[0]?.exists) return;
+
+    logger.info("startup-migration: adding past_released_at column to resource_bookings");
+
+    await db.execute(sql`
+      ALTER TABLE resource_bookings
+        ADD COLUMN IF NOT EXISTS past_released_at TIMESTAMPTZ
+    `);
+
+    logger.info("startup-migration: past_released_at column added to resource_bookings");
+  } catch (err) {
+    logger.error({ err }, "startup-migration: addPastReleasedAtColumn failed");
   }
 }
 
