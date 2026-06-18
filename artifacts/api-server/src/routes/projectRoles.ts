@@ -11,7 +11,7 @@ import {
 } from "@workspace/db";
 import { fetchEmpAvailabilityMap, type EmpAvailability } from "../lib/employee-availability";
 import { calcBookingHours } from "../lib/booking-hours";
-import { calcRoleBudgetReconciliation, type ReconciliationBooking } from "../lib/budget-reconciliation";
+import { calcRoleBudgetReconciliation, calcEffectiveBookingBudgetDays, type ReconciliationBooking } from "../lib/budget-reconciliation";
 
 const router: IRouter = Router();
 
@@ -208,6 +208,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
       endDate: resourceBookingsTable.endDate,
       hoursPerDay: resourceBookingsTable.hoursPerDay,
       weekdayHours: resourceBookingsTable.weekdayHours,
+      pastReleasedAt: resourceBookingsTable.pastReleasedAt,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
@@ -231,6 +232,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
       hoursPerDay: b.hoursPerDay,
       weekdayHours: b.weekdayHours as Record<string, number> | null,
       employeeId: b.employeeId,
+      pastReleasedAt: b.pastReleasedAt ?? null,
       avail: {
         holidayDates: avail?.holidayDates ?? [],
         vacationDateSet: avail?.vacationDateSet ?? new Set(),
@@ -239,13 +241,19 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     };
   });
 
-  // Also populate employeeMap for per-employee day totals in the response
+  // Also populate employeeMap for per-employee day totals in the response.
+  // Use release-aware calculation: released bookings only count future days.
   for (const b of activeBookingRows) {
     const avail = availMap.get(b.employeeId);
-    const { budgetDays: days } = calcBookingHours(
-      b.startDate, b.endDate, b.hoursPerDay,
-      b.weekdayHours as Record<string, number> | null,
-      avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
+    const days = calcEffectiveBookingBudgetDays(
+      {
+        startDate: b.startDate,
+        endDate: b.endDate,
+        hoursPerDay: b.hoursPerDay,
+        weekdayHours: b.weekdayHours as Record<string, number> | null,
+        pastReleasedAt: b.pastReleasedAt,
+      },
+      avail,
     );
     const emp = employeeMap.get(b.employeeId);
     if (emp) {
@@ -364,13 +372,14 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
   // Fetch individual bookings to compute planned days using bookable-day formula
   const plannedBookings = await db
     .select({
-      id:            resourceBookingsTable.id,
-      projectRoleId: resourceBookingsTable.projectRoleId,
-      employeeId:    resourceBookingsTable.employeeId,
-      startDate:     resourceBookingsTable.startDate,
-      endDate:       resourceBookingsTable.endDate,
-      hoursPerDay:   resourceBookingsTable.hoursPerDay,
-      weekdayHours:  resourceBookingsTable.weekdayHours,
+      id:              resourceBookingsTable.id,
+      projectRoleId:   resourceBookingsTable.projectRoleId,
+      employeeId:      resourceBookingsTable.employeeId,
+      startDate:       resourceBookingsTable.startDate,
+      endDate:         resourceBookingsTable.endDate,
+      hoursPerDay:     resourceBookingsTable.hoursPerDay,
+      weekdayHours:    resourceBookingsTable.weekdayHours,
+      pastReleasedAt:  resourceBookingsTable.pastReleasedAt,
     })
     .from(resourceBookingsTable)
     .where(
@@ -442,6 +451,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
         hoursPerDay: b.hoursPerDay,
         weekdayHours: b.weekdayHours as Record<string, number> | null,
         employeeId: b.employeeId,
+        pastReleasedAt: b.pastReleasedAt ?? null,
         avail: {
           holidayDates: avail?.holidayDates ?? [],
           vacationDateSet: avail?.vacationDateSet ?? new Set(),
@@ -538,13 +548,14 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
   // Fetch individual resource bookings for planned-day calculation (per employee per role)
   const bookingRows = await db
     .select({
-      projectRoleId: resourceBookingsTable.projectRoleId,
-      employeeId: resourceBookingsTable.employeeId,
-      employeeName: employeesTable.name,
-      startDate: resourceBookingsTable.startDate,
-      endDate: resourceBookingsTable.endDate,
-      hoursPerDay: resourceBookingsTable.hoursPerDay,
-      weekdayHours: resourceBookingsTable.weekdayHours,
+      projectRoleId:  resourceBookingsTable.projectRoleId,
+      employeeId:     resourceBookingsTable.employeeId,
+      employeeName:   employeesTable.name,
+      startDate:      resourceBookingsTable.startDate,
+      endDate:        resourceBookingsTable.endDate,
+      hoursPerDay:    resourceBookingsTable.hoursPerDay,
+      weekdayHours:   resourceBookingsTable.weekdayHours,
+      pastReleasedAt: resourceBookingsTable.pastReleasedAt,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
@@ -589,10 +600,16 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
     if (b.projectRoleId == null) continue;
     const key   = `${b.projectRoleId}:${b.employeeId}`;
     const avail = allocAvailMap.get(b.employeeId);
-    const { budgetDays: days } = calcBookingHours(
-      b.startDate, b.endDate, b.hoursPerDay,
-      b.weekdayHours as Record<string, number> | null,
-      avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
+    // Use release-aware calculation: released bookings only count future days.
+    const days = calcEffectiveBookingBudgetDays(
+      {
+        startDate: b.startDate,
+        endDate: b.endDate,
+        hoursPerDay: b.hoursPerDay,
+        weekdayHours: b.weekdayHours as Record<string, number> | null,
+        pastReleasedAt: b.pastReleasedAt,
+      },
+      avail,
     );
 
     const existing = allocMap.get(key);
@@ -670,6 +687,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
         hoursPerDay: b.hoursPerDay,
         weekdayHours: b.weekdayHours as Record<string, number> | null,
         employeeId: b.employeeId,
+        pastReleasedAt: b.pastReleasedAt ?? null,
         avail: {
           holidayDates: avail?.holidayDates ?? [],
           vacationDateSet: avail?.vacationDateSet ?? new Set(),

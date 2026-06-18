@@ -17,6 +17,7 @@ tags:
   - name: reports
   - name: auth
   - name: dashboard
+  - name: resourceBookings
 
 paths:
   /healthz:
@@ -488,6 +489,68 @@ paths:
               schema:
                 $ref: "#/components/schemas/TimeEntry"
 
+  # ── Resource Booking Actions ─────────────────────────────────────────────────
+  /resource-bookings/release-past-bulk:
+    post:
+      operationId: releasePastBulk
+      tags: [resourceBookings]
+      summary: Bulk-release past undelivered plan for unreleased bookings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReleasePastBulkBody"
+      responses:
+        "200":
+          description: List of bookings that were released
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleasePastBulkResult"
+
+  /resource-bookings/{id}/release-past:
+    post:
+      operationId: releasePastBooking
+      tags: [resourceBookings]
+      summary: Release past undelivered plan for a single booking
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated booking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceBookingAction"
+        "404":
+          description: Booking not found
+
+  /resource-bookings/{id}/unrelease:
+    post:
+      operationId: unreleaseBooking
+      tags: [resourceBookings]
+      summary: Undo release of past undelivered plan for a single booking
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated booking
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceBookingAction"
+        "404":
+          description: Booking not found
+
   /time-entries/bulk:
     post:
       operationId: bulkUpsertTimeEntries
@@ -715,6 +778,92 @@ paths:
 
 components:
   schemas:
+    # ── Resource Booking Actions ─────────────────────────────────────────────
+    ResourceBookingAction:
+      type: object
+      properties:
+        id:
+          type: integer
+        employeeId:
+          type: integer
+        projectId:
+          type: integer
+        projectRoleId:
+          type: ["integer", "null"]
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        hoursPerDay:
+          type: number
+        pastReleasedAt:
+          type: ["string", "null"]
+          format: date-time
+      required:
+        - id
+        - employeeId
+        - projectId
+        - startDate
+        - endDate
+        - hoursPerDay
+
+    ReleasePastBulkBody:
+      type: object
+      properties:
+        projectId:
+          type: integer
+        employeeId:
+          type: integer
+        dryRun:
+          type: boolean
+
+    ReleasePastBulkResult:
+      type: object
+      properties:
+        released:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              employeeId:
+                type: integer
+              employeeName:
+                type: ["string", "null"]
+              projectId:
+                type: integer
+              projectName:
+                type: string
+              projectRoleId:
+                type: ["integer", "null"]
+              projectRoleName:
+                type: ["string", "null"]
+              startDate:
+                type: string
+                format: date
+              endDate:
+                type: string
+                format: date
+              pastReleasedAt:
+                type: ["string", "null"]
+                format: date-time
+                nullable: true
+              pastUndeliveredDays:
+                type: number
+            required:
+              - id
+              - employeeId
+              - projectId
+              - projectName
+              - startDate
+              - endDate
+              - pastUndeliveredDays
+      required:
+        - released
+
     HealthStatus:
       type: object
       properties:

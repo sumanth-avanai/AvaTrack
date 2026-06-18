@@ -15,6 +15,7 @@ export const resourceBookingsTable = pgTable("resource_bookings", {
   hoursPerDay: real("hours_per_day").notNull(),
   weekdayHours: jsonb("weekday_hours").$type<Record<string, number>>(),
   notes: text("notes"),
+  pastReleasedAt: timestamp("past_released_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (t) => [

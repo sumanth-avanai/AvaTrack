@@ -400,6 +400,69 @@ export const CreateTimeEntryBody = zod.object({
 });
 
 /**
+ * @summary Bulk-release past undelivered plan for unreleased bookings
+ */
+export const ReleasePastBulkBody = zod.object({
+  projectId: zod.number().optional(),
+  employeeId: zod.number().optional(),
+  dryRun: zod.boolean().optional(),
+});
+
+export const ReleasePastBulkResponse = zod.object({
+  released: zod.array(
+    zod.object({
+      id: zod.number(),
+      employeeId: zod.number(),
+      employeeName: zod.string().nullish(),
+      projectId: zod.number(),
+      projectName: zod.string(),
+      projectRoleId: zod.number().nullish(),
+      projectRoleName: zod.string().nullish(),
+      startDate: zod.coerce.date(),
+      endDate: zod.coerce.date(),
+      pastReleasedAt: zod.coerce.date().nullish(),
+      pastUndeliveredDays: zod.number(),
+    }),
+  ),
+});
+
+/**
+ * @summary Release past undelivered plan for a single booking
+ */
+export const ReleasePastBookingParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ReleasePastBookingResponse = zod.object({
+  id: zod.number(),
+  employeeId: zod.number(),
+  projectId: zod.number(),
+  projectRoleId: zod.number().nullish(),
+  startDate: zod.coerce.date(),
+  endDate: zod.coerce.date(),
+  hoursPerDay: zod.number(),
+  pastReleasedAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary Undo release of past undelivered plan for a single booking
+ */
+export const UnreleaseBookingParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UnreleaseBookingResponse = zod.object({
+  id: zod.number(),
+  employeeId: zod.number(),
+  projectId: zod.number(),
+  projectRoleId: zod.number().nullish(),
+  startDate: zod.coerce.date(),
+  endDate: zod.coerce.date(),
+  hoursPerDay: zod.number(),
+  pastReleasedAt: zod.coerce.date().nullish(),
+});
+
+/**
  * @summary Upsert multiple time entries at once (for weekly timesheet save)
  */
 export const BulkUpsertTimeEntriesBody = zod.object({

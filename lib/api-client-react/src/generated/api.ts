@@ -42,7 +42,10 @@ import type {
   ListTimeEntriesParams,
   Project,
   ProjectReportRow,
+  ReleasePastBulkBody,
+  ReleasePastBulkResult,
   ResetPinBody,
+  ResourceBookingAction,
   TimeEntry,
   UpdateClientBody,
   UpdateEmployeeBody,
@@ -2041,6 +2044,260 @@ export const useCreateTimeEntry = <
   TContext
 > => {
   return useMutation(getCreateTimeEntryMutationOptions(options));
+};
+
+/**
+ * @summary Bulk-release past undelivered plan for unreleased bookings
+ */
+export const getReleasePastBulkUrl = () => {
+  return `/api/resource-bookings/release-past-bulk`;
+};
+
+export const releasePastBulk = async (
+  releasePastBulkBody: ReleasePastBulkBody,
+  options?: RequestInit,
+): Promise<ReleasePastBulkResult> => {
+  return customFetch<ReleasePastBulkResult>(getReleasePastBulkUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(releasePastBulkBody),
+  });
+};
+
+export const getReleasePastBulkMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof releasePastBulk>>,
+    TError,
+    { data: BodyType<ReleasePastBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof releasePastBulk>>,
+  TError,
+  { data: BodyType<ReleasePastBulkBody> },
+  TContext
+> => {
+  const mutationKey = ["releasePastBulk"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof releasePastBulk>>,
+    { data: BodyType<ReleasePastBulkBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return releasePastBulk(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReleasePastBulkMutationResult = NonNullable<
+  Awaited<ReturnType<typeof releasePastBulk>>
+>;
+export type ReleasePastBulkMutationBody = BodyType<ReleasePastBulkBody>;
+export type ReleasePastBulkMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Bulk-release past undelivered plan for unreleased bookings
+ */
+export const useReleasePastBulk = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof releasePastBulk>>,
+    TError,
+    { data: BodyType<ReleasePastBulkBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof releasePastBulk>>,
+  TError,
+  { data: BodyType<ReleasePastBulkBody> },
+  TContext
+> => {
+  return useMutation(getReleasePastBulkMutationOptions(options));
+};
+
+/**
+ * @summary Release past undelivered plan for a single booking
+ */
+export const getReleasePastBookingUrl = (id: number) => {
+  return `/api/resource-bookings/${id}/release-past`;
+};
+
+export const releasePastBooking = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ResourceBookingAction> => {
+  return customFetch<ResourceBookingAction>(getReleasePastBookingUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getReleasePastBookingMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof releasePastBooking>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof releasePastBooking>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["releasePastBooking"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof releasePastBooking>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return releasePastBooking(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReleasePastBookingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof releasePastBooking>>
+>;
+
+export type ReleasePastBookingMutationError = ErrorType<void>;
+
+/**
+ * @summary Release past undelivered plan for a single booking
+ */
+export const useReleasePastBooking = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof releasePastBooking>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof releasePastBooking>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getReleasePastBookingMutationOptions(options));
+};
+
+/**
+ * @summary Undo release of past undelivered plan for a single booking
+ */
+export const getUnreleaseBookingUrl = (id: number) => {
+  return `/api/resource-bookings/${id}/unrelease`;
+};
+
+export const unreleaseBooking = async (
+  id: number,
+  options?: RequestInit,
+): Promise<ResourceBookingAction> => {
+  return customFetch<ResourceBookingAction>(getUnreleaseBookingUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getUnreleaseBookingMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unreleaseBooking>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof unreleaseBooking>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["unreleaseBooking"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof unreleaseBooking>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return unreleaseBooking(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UnreleaseBookingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof unreleaseBooking>>
+>;
+
+export type UnreleaseBookingMutationError = ErrorType<void>;
+
+/**
+ * @summary Undo release of past undelivered plan for a single booking
+ */
+export const useUnreleaseBooking = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unreleaseBooking>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof unreleaseBooking>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getUnreleaseBookingMutationOptions(options));
 };
 
 /**

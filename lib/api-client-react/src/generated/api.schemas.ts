@@ -5,6 +5,47 @@
  * Time Tracking API
  * OpenAPI spec version: 0.1.0
  */
+export interface ResourceBookingAction {
+  id: number;
+  employeeId: number;
+  projectId: number;
+  /** @nullable */
+  projectRoleId?: number | null;
+  startDate: string;
+  endDate: string;
+  hoursPerDay: number;
+  /** @nullable */
+  pastReleasedAt?: string | null;
+}
+
+export interface ReleasePastBulkBody {
+  projectId?: number;
+  employeeId?: number;
+  dryRun?: boolean;
+}
+
+export type ReleasePastBulkResultReleasedItem = {
+  id: number;
+  employeeId: number;
+  /** @nullable */
+  employeeName?: string | null;
+  projectId: number;
+  projectName: string;
+  /** @nullable */
+  projectRoleId?: number | null;
+  /** @nullable */
+  projectRoleName?: string | null;
+  startDate: string;
+  endDate: string;
+  /** @nullable */
+  pastReleasedAt?: string | null;
+  pastUndeliveredDays: number;
+};
+
+export interface ReleasePastBulkResult {
+  released: ReleasePastBulkResultReleasedItem[];
+}
+
 export interface HealthStatus {
   status: string;
 }

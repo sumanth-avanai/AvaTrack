@@ -54,6 +54,8 @@ import {
   Check,
   ChevronDown,
   Filter,
+  Clock,
+  Undo2,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -96,6 +98,7 @@ interface ResourceBookingFull {
   hoursPerDay: number;
   weekdayHours: Record<string, number> | null;
   notes: string | null;
+  pastReleasedAt: string | null;
   employeeName: string;
   weeklyCapacityHours: number;
   projectName: string;
@@ -236,6 +239,86 @@ function useDeleteBooking() {
       });
       if (!res.ok) throw new Error("Failed to delete booking");
     },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
+      qc.invalidateQueries({ queryKey: ["project-budget"] });
+      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    },
+  });
+}
+
+function useReleasePastBooking() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/resource-bookings/${id}/release-past`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to release past plan");
+      return res.json() as Promise<ResourceBookingFull>;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
+      qc.invalidateQueries({ queryKey: ["project-budget"] });
+      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    },
+  });
+}
+
+function useUnreleaseBooking() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/resource-bookings/${id}/unrelease`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to undo release");
+      return res.json() as Promise<ResourceBookingFull>;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["resource-bookings"] });
+      qc.invalidateQueries({ queryKey: ["project-budget"] });
+      qc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    },
+  });
+}
+
+interface BulkReleasedItem {
+  id: number;
+  employeeId: number;
+  employeeName: string | null;
+  projectId: number;
+  projectName: string;
+  projectRoleId: number | null;
+  projectRoleName: string | null;
+  startDate: string;
+  endDate: string;
+  pastReleasedAt: string | null;
+  pastUndeliveredDays: number;
+}
+
+async function fetchReleasePastBulk(body: {
+  projectId?: number;
+  employeeId?: number;
+  dryRun?: boolean;
+}): Promise<{ released: BulkReleasedItem[] }> {
+  const res = await fetch(`/api/resource-bookings/release-past-bulk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error("Failed to bulk release past plan");
+  return res.json();
+}
+
+function useReleasePastBulk() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { projectId?: number; employeeId?: number }) =>
+      fetchReleasePastBulk({ ...body, dryRun: false }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["resource-bookings"] });
       qc.invalidateQueries({ queryKey: ["project-budget"] });
@@ -571,7 +654,10 @@ function BookingModal({
   const createMut = useCreateBooking();
   const updateMut = useUpdateBooking();
   const deleteMut = useDeleteBooking();
+  const releaseMut = useReleasePastBooking();
+  const unreleaseMut = useUnreleaseBooking();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(false);
 
   const isEdit = state.mode === "edit";
   const defaultProject = isEdit ? String(state.booking.projectId) : "";
@@ -813,6 +899,25 @@ function BookingModal({
   // Total hours
   const totalHours =
     calcResult && calcResult.totalHours > 0 ? calcResult.totalHours : null;
+
+  // Past undelivered days (for release button): fetched server-side so that
+  // logged hours are subtracted per booking, not role-wide. Disabled when
+  // already released or no booking id.
+  const editBookingId = isEdit ? (state as EditModalState).booking.id : null;
+  const editBookingReleased = isEdit ? !!(state as EditModalState).booking.pastReleasedAt : false;
+  const { data: pastUndeliveredData } = useQuery<{ pastUndeliveredDays: number }>({
+    queryKey: ["booking-past-undelivered", editBookingId],
+    queryFn: async () => {
+      const res = await fetch(`/api/resource-bookings/${editBookingId}/past-undelivered`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch past undelivered days");
+      return res.json();
+    },
+    enabled: isEdit && !!editBookingId && !editBookingReleased,
+    staleTime: 30_000,
+  });
+  const pastPlanDays = editBookingReleased ? 0 : (pastUndeliveredData?.pastUndeliveredDays ?? 0);
 
   // Weekday-mode derived values
   const weeklyTotal = weekdayMode
@@ -1503,9 +1608,10 @@ function BookingModal({
                     <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 px-2.5 py-2 text-destructive text-xs">
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                       <span>
-                        This booking will exceed the unplanned budget by{" "}
-                        {r1(Math.abs(unplannedAfter))}d. Consider: Reduce
-                        scope OR assign more staff.
+                        This booking exceeds the unplanned budget by{" "}
+                        {r1(Math.abs(unplannedAfter))}d. Options: reduce this
+                        booking, release past undelivered plan, or increase the
+                        role budget.
                       </span>
                     </div>
                   )}
@@ -1523,14 +1629,71 @@ function BookingModal({
         </div>
 
         <DialogFooter className="flex items-center justify-between pt-2">
-          {isEdit && !confirmDelete && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete booking
-            </Button>
+          {isEdit && !confirmDelete && !confirmRelease && (
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Delete booking
+              </Button>
+              {(state as EditModalState).booking.pastReleasedAt ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={unreleaseMut.isPending}
+                  onClick={async () => {
+                    try {
+                      await unreleaseMut.mutateAsync((state as EditModalState).booking.id);
+                      toast({ title: "Release undone" });
+                      onClose();
+                    } catch {
+                      toast({ title: "Failed to undo release", variant: "destructive" });
+                    }
+                  }}
+                >
+                  <Undo2 className="h-3.5 w-3.5" />
+                  {unreleaseMut.isPending ? "Undoing…" : "Undo release"}
+                </Button>
+              ) : pastPlanDays > 0 ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setConfirmRelease(true)}
+                >
+                  <Clock className="h-3.5 w-3.5" />
+                  Release past plan
+                </Button>
+              ) : null}
+            </div>
+          )}
+          {isEdit && confirmRelease && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground">
+                Release {Math.round(pastPlanDays * 10) / 10}d past plan? Future plan &amp; logged work are kept.
+              </span>
+              <Button
+                size="sm"
+                disabled={releaseMut.isPending}
+                onClick={async () => {
+                  try {
+                    await releaseMut.mutateAsync((state as EditModalState).booking.id);
+                    toast({ title: "Past plan released" });
+                    onClose();
+                  } catch {
+                    toast({ title: "Failed to release past plan", variant: "destructive" });
+                  }
+                }}
+              >
+                {releaseMut.isPending ? "Releasing…" : "Confirm"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmRelease(false)}>
+                Cancel
+              </Button>
+            </div>
           )}
           {isEdit && confirmDelete && (
             <div className="flex items-center gap-2">
@@ -1554,7 +1717,7 @@ function BookingModal({
               </Button>
             </div>
           )}
-          {!confirmDelete && (
+          {!confirmDelete && !confirmRelease && (
             <div className="flex gap-2 ml-auto">
               <Button variant="outline" onClick={onClose}>
                 Cancel
@@ -1801,6 +1964,142 @@ function VacationDialog({ state, onClose }: VacationDialogProps) {
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
+// ── Bulk Release Dialog ────────────────────────────────────────────────────────
+function BulkReleaseDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const bulkReleaseMut = useReleasePastBulk();
+  const [preview, setPreview] = useState<BulkReleasedItem[] | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  // Fetch preview list when dialog opens
+  useEffect(() => {
+    if (!open) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+    setPreviewLoading(true);
+    setPreviewError(null);
+    fetchReleasePastBulk({ dryRun: true })
+      .then((r) => setPreview(r.released))
+      .catch(() => setPreviewError("Failed to load preview. Please try again."))
+      .finally(() => setPreviewLoading(false));
+  }, [open]);
+
+  async function handleConfirm() {
+    try {
+      const result = await bulkReleaseMut.mutateAsync({});
+      toast({
+        title: `Released ${result.released.length} booking${result.released.length !== 1 ? "s" : ""}`,
+        description: "Past undelivered plan freed. Future days and logged work unchanged.",
+      });
+      onClose();
+    } catch {
+      toast({ title: "Failed to release past plan", variant: "destructive" });
+    }
+  }
+
+  const hasItems = preview != null && preview.length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-muted-foreground" />
+            Release past undelivered plan
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3 py-1 text-sm">
+          <p className="text-muted-foreground">
+            Reviews bookings with undelivered past days. Future planned days and all logged work are kept.
+            The action is reversible per booking.
+          </p>
+
+          {previewLoading && (
+            <div className="flex items-center justify-center py-6 text-muted-foreground text-xs gap-2">
+              <span className="animate-spin h-3.5 w-3.5 border border-current border-t-transparent rounded-full inline-block" />
+              Calculating…
+            </div>
+          )}
+
+          {previewError && (
+            <div className="text-destructive text-xs rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2">
+              {previewError}
+            </div>
+          )}
+
+          {!previewLoading && preview != null && preview.length === 0 && (
+            <div className="text-muted-foreground text-xs rounded-md border px-3 py-4 text-center">
+              Nothing to release — no bookings have undelivered past days.
+            </div>
+          )}
+
+          {!previewLoading && hasItems && (
+            <div className="rounded-md border overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50 text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Employee</th>
+                    <th className="px-3 py-2 text-left font-medium">Project / Role</th>
+                    <th className="px-3 py-2 text-left font-medium">Period</th>
+                    <th className="px-3 py-2 text-right font-medium">Undelivered</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {preview.map((item) => (
+                    <tr key={item.id} className="hover:bg-muted/30">
+                      <td className="px-3 py-2">{item.employeeName ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className="font-medium">{item.projectName}</span>
+                        {item.projectRoleName && (
+                          <span className="text-muted-foreground"> · {item.projectRoleName}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
+                        {item.startDate} – {item.endDate}
+                      </td>
+                      <td className="px-3 py-2 text-right font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap">
+                        {Math.round(item.pastUndeliveredDays * 10) / 10}d
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirm}
+            disabled={!hasItems || bulkReleaseMut.isPending || previewLoading}
+            className="gap-1.5"
+          >
+            <Clock className="h-4 w-4" />
+            {bulkReleaseMut.isPending
+              ? "Releasing…"
+              : hasItems
+                ? `Release ${preview!.length} booking${preview!.length !== 1 ? "s" : ""}`
+                : "Release"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ResourcePlannerPage() {
   const today = useMemo(() => {
     const d = new Date();
@@ -1816,6 +2115,7 @@ export default function ResourcePlannerPage() {
   const [filterClients, setFilterClients] = useState<string[]>([]);
   const [filterProjects, setFilterProjects] = useState<number[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
+  const [bulkReleaseOpen, setBulkReleaseOpen] = useState(false);
 
   const dragStateRef = useRef<{
     bookingId: number;
@@ -2489,6 +2789,17 @@ export default function ResourcePlannerPage() {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            {/* Bulk release past plan */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setBulkReleaseOpen(true)}
+            >
+              <Clock className="h-3.5 w-3.5" />
+              Release past
+            </Button>
           </div>
 
           {/* Zoom toggle */}
@@ -2853,6 +3164,15 @@ export default function ResourcePlannerPage() {
                                   : label.slice(0, charBudget) + "…"}
                             </div>
                           )}
+                          {/* Released indicator */}
+                          {b.pastReleasedAt && bounds.width > 24 && (
+                            <div
+                              className="absolute top-0.5 right-2 pointer-events-none"
+                              style={{ zIndex: 2 }}
+                            >
+                              <Clock className="h-3 w-3 text-white/70" />
+                            </div>
+                          )}
                           {/* Right resize handle */}
                           <div
                             className="absolute top-0 right-0 h-full"
@@ -2918,6 +3238,12 @@ export default function ResourcePlannerPage() {
                               {b.notes && (
                                 <div className="text-gray-500 italic">
                                   {b.notes}
+                                </div>
+                              )}
+                              {b.pastReleasedAt && (
+                                <div className="flex items-center gap-1 text-amber-600 font-medium">
+                                  <Clock className="h-3 w-3" />
+                                  Past plan released
                                 </div>
                               )}
                             </div>
@@ -2995,6 +3321,12 @@ export default function ResourcePlannerPage() {
             onClose={() => setVacationModal(null)}
           />
         )}
+
+        {/* Bulk release past plan dialog */}
+        <BulkReleaseDialog
+          open={bulkReleaseOpen}
+          onClose={() => setBulkReleaseOpen(false)}
+        />
       </div>
     </AdminLayout>
   );
