@@ -269,7 +269,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     .leftJoin(employeesTable, eq(timeEntriesTable.employeeId, employeesTable.id))
     .where(eq(timeEntriesTable.projectRoleId, id));
 
-  const loggedMap = new Map<number, { employeeName: string; hours: number }>();
+  const loggedMap = new Map<number, { employeeName: string; hours: number; invoicedHours: number }>();
   let totalLoggedHours = 0;
   const reconciliationEntries = timeEntryRows.map((row) => {
     const hours = Number(row.hours);
@@ -281,8 +281,13 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     const empEntry = loggedMap.get(row.employeeId);
     if (empEntry) {
       empEntry.hours += hours;
+      if (isInvoiced) empEntry.invoicedHours += hours;
     } else {
-      loggedMap.set(row.employeeId, { employeeName: row.employeeName ?? "Unknown", hours });
+      loggedMap.set(row.employeeId, {
+        employeeName: row.employeeName ?? "Unknown",
+        hours,
+        invoicedHours: isInvoiced ? hours : 0,
+      });
     }
     totalLoggedHours += hours;
 
@@ -314,12 +319,17 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
         employeeName: planned?.employeeName ?? logged?.employeeName ?? "Unknown",
         days: round1(planned?.days ?? 0),
         loggedDays: round1((logged?.hours ?? 0) / 8),
+        invoicedDays: round1((logged?.invoicedHours ?? 0) / 8),
       };
     })
     .sort((a, b) => (b.days + b.loggedDays) - (a.days + a.loggedDays));
 
   const employeeLoggedDays = requestingEmployeeId != null
     ? round1((loggedMap.get(requestingEmployeeId)?.hours ?? 0) / 8)
+    : null;
+
+  const employeeInvoicedDays = requestingEmployeeId != null
+    ? round1((loggedMap.get(requestingEmployeeId)?.invoicedHours ?? 0) / 8)
     : null;
 
   res.json({
@@ -333,6 +343,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     remainingBudgetDays: reconciliation.remainingBudgetDays,
     loggedNotInvoicedDays: reconciliation.loggedNotInvoicedDays,
     employeeLoggedDays,
+    employeeInvoicedDays,
     bookings,
   });
 });

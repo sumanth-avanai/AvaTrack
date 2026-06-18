@@ -730,6 +730,7 @@ function BookingModal({
     employeeName: string;
     days: number;
     loggedDays: number;
+    invoicedDays: number;
   }
   interface RoleBudgetStatus {
     budgetedDays: number | null;
@@ -742,6 +743,7 @@ function BookingModal({
     remainingBudgetDays: number | null;
     loggedNotInvoicedDays: number;
     employeeLoggedDays: number | null;
+    employeeInvoicedDays: number | null;
     bookings: RoleBudgetBooking[];
   }
   const excludeBookingId = isEdit ? state.booking.id : undefined;
@@ -1360,10 +1362,9 @@ function BookingModal({
               );
               const empPlannedDays = r1(empBooking?.days ?? 0);
               const empLoggedDays = r1(employeeLoggedDays ?? 0);
-              const empAvailable = r1(
-                budgetedDays - empPlannedDays - empLoggedDays,
-              );
-              const empRemainingAfter = r1(empAvailable - thisDays);
+              const empInvoicedDays = r1(roleBudgetStatus.employeeInvoicedDays ?? 0);
+              const empAwaitingDays = r1(Math.max(empLoggedDays - empInvoicedDays, 0));
+              const empRePlannableDays = r1(Math.max(empPlannedDays - empLoggedDays, 0));
 
               const statusColor = (val: number) => {
                 if (val > 10) return "text-green-700 dark:text-green-400";
@@ -1375,11 +1376,8 @@ function BookingModal({
                 if (val >= 0) return 1;
                 return 2;
               };
-              // Over-budget warning triggers when booking would exceed Unplanned bucket
-              const worstSeverity = Math.max(
-                borderSeverity(empRemainingAfter),
-                borderSeverity(unplannedAfter),
-              );
+              // Over-budget warning triggers only when booking would exceed Unplanned bucket
+              const worstSeverity = borderSeverity(unplannedAfter);
               const outerBorder =
                 worstSeverity === 2
                   ? "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/20"
@@ -1423,18 +1421,23 @@ function BookingModal({
                       👤 This employee: {empName}
                     </div>
                     <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Already planned</span>
-                      <span>−{empPlannedDays}d</span>
+                      <span>Planned</span>
+                      <span>{empPlannedDays}d</span>
                     </div>
-                    <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Already logged</span>
-                      <span>−{empLoggedDays}d</span>
+                    <div className="flex flex-col pl-1">
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Logged</span>
+                        <span>{empLoggedDays}d</span>
+                      </div>
+                      {empLoggedDays > 0 && (
+                        <div className="text-xs text-muted-foreground/70 text-right">
+                          {empInvoicedDays}d invoiced · {empAwaitingDays}d awaiting billing
+                        </div>
+                      )}
                     </div>
-                    <div
-                      className={`flex justify-between font-medium pl-1 ${statusColor(empAvailable)}`}
-                    >
-                      <span>Available</span>
-                      <span>{empAvailable}d</span>
+                    <div className="flex justify-between text-blue-600 dark:text-blue-400 font-medium pl-1">
+                      <span>Re-plannable</span>
+                      <span>{empRePlannableDays}d</span>
                     </div>
                   </div>
 
@@ -1483,14 +1486,6 @@ function BookingModal({
                       <div className="flex justify-between text-muted-foreground font-medium">
                         <span>📊 This booking</span>
                         <span>+{thisDays}d</span>
-                      </div>
-                      <div
-                        className={`flex justify-between pl-1 ${statusColor(empRemainingAfter)}`}
-                      >
-                        <span>Remaining (individual)</span>
-                        <span className="font-medium">
-                          {empRemainingAfter}d
-                        </span>
                       </div>
                       <div
                         className={`flex justify-between pl-1 ${statusColor(unplannedAfter)}`}
