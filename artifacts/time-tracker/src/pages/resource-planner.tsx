@@ -56,6 +56,7 @@ import {
   Filter,
   Clock,
   Undo2,
+  Info,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -796,18 +797,13 @@ function BookingModal({
     employeeInvoicedDays: number | null;
     bookings: RoleBudgetBooking[];
   }
-  const excludeBookingId = isEdit ? state.booking.id : undefined;
+  // Role budget is fetched LIVE — the slot being edited is NOT excluded, so
+  // these figures match the Budget / Allocations tabs exactly. The marginal
+  // effect of unsaved edits is shown separately as a "projected" line below.
   const { data: roleBudgetStatus } = useQuery<RoleBudgetStatus>({
-    queryKey: [
-      "role-budget-status",
-      roleId,
-      excludeBookingId ?? null,
-      employeeId,
-    ],
+    queryKey: ["role-budget-status", roleId, employeeId],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (excludeBookingId != null)
-        params.set("excludeBookingId", String(excludeBookingId));
       if (employeeId != null) params.set("employeeId", String(employeeId));
       const qs = params.toString() ? `?${params.toString()}` : "";
       const r = await fetch(`/api/project-roles/${roleId}/budget-status${qs}`, {
@@ -857,9 +853,6 @@ function BookingModal({
 
   // How many bookable days this booking consumes
   const thisBookingDays = bookingSummary ? bookingSummary.bookableDays : null;
-  // Budget is always in 8h-day equivalents
-  const thisBookingBudgetDays =
-    calcResult && calcResult.totalHours > 0 ? calcResult.budgetDays : null;
   // Total hours
   const totalHours =
     calcResult && calcResult.totalHours > 0 ? calcResult.totalHours : null;
@@ -883,9 +876,32 @@ function BookingModal({
   });
   const pastPlanDays = editBookingReleased ? 0 : (pastUndeliveredData?.pastUndeliveredDays ?? 0);
 
+  // Days this slot actually books against the role budget — RELEASE-AWARE and
+  // computed inline (not via a memo) so it always tracks the latest edits and
+  // matches the projected delta below. A released booking only books its
+  // future (today-onward) portion, since its past undelivered plan is freed.
+  const slotTodayStr = new Date().toISOString().slice(0, 10);
+  const booksAgainstBudget = (() => {
+    if (!startDate || !endDate || endDate < startDate) return null;
+    const wh = weekdayMode ? weekdayHours : null;
+    const calc = (from: string) =>
+      calcBookingHoursClient(
+        from, endDate, hoursPerDay, wh,
+        workingDaysMask, holidayDates, vacations,
+      ).budgetDays;
+    if (!editBookingReleased) return calc(startDate);
+    if (endDate < slotTodayStr) return 0;
+    return calc(startDate >= slotTodayStr ? startDate : slotTodayStr);
+  })();
+
   // Weekday-mode derived values
+  // Only count days the employee actually works — hours entered on a
+  // non-working weekday are ignored by the (mask-based) budget math.
   const weeklyTotal = weekdayMode
-    ? Object.values(weekdayHours).reduce((s, h) => s + h, 0)
+    ? (["1", "2", "3", "4", "5"] as const).reduce(
+        (s, k) => s + (workingDaysMask[Number(k) - 1] ? (weekdayHours[k] ?? 0) : 0),
+        0,
+      )
     : null;
   const allWeekdayZero = weekdayMode && weeklyTotal === 0;
 
@@ -1001,7 +1017,17 @@ function BookingModal({
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
       endDate,
-      ...(weekdayMode ? { weekdayHours } : { hoursPerDay, weekdayHours: null }),
+      ...(weekdayMode
+        ? {
+            // Persist hours only for actual working days; non-working weekdays
+            // are ignored by the budget math, so never store stale values.
+            weekdayHours: Object.fromEntries(
+              (["1", "2", "3", "4", "5"] as const)
+                .filter((k) => workingDaysMask[Number(k) - 1])
+                .map((k) => [k, weekdayHours[k] ?? 0]),
+            ) as Record<string, number>,
+          }
+        : { hoursPerDay, weekdayHours: null }),
       notes: notes.trim() || null,
     };
     try {
@@ -1292,28 +1318,40 @@ function BookingModal({
 
                 {/* Per-weekday inputs */}
                 <div className="grid grid-cols-5 gap-1.5">
-                  {(["1", "2", "3", "4", "5"] as const).map((key) => (
-                    <div key={key} className="space-y-0.5">
-                      <Label className="text-xs text-center block text-muted-foreground">
-                        {DAY_LABELS[key]}
-                      </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        max={24}
-                        step={0.5}
-                        className="text-center px-1"
-                        value={weekdayHours[key] ?? 0}
-                        onChange={(e) => {
-                          const v = parseFloat(e.target.value);
-                          setWeekdayHours((prev) => ({
-                            ...prev,
-                            [key]: isNaN(v) ? 0 : Math.max(0, Math.min(24, v)),
-                          }));
-                        }}
-                      />
-                    </div>
-                  ))}
+                  {(["1", "2", "3", "4", "5"] as const).map((key) => {
+                    const isWorkingDay = !!workingDaysMask[Number(key) - 1];
+                    return (
+                      <div key={key} className="space-y-0.5">
+                        <Label
+                          className={`text-xs text-center block ${isWorkingDay ? "text-muted-foreground" : "text-muted-foreground/40"}`}
+                        >
+                          {DAY_LABELS[key]}
+                        </Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={24}
+                          step={0.5}
+                          disabled={!isWorkingDay}
+                          title={
+                            isWorkingDay
+                              ? undefined
+                              : "Not a working day for this employee — hours here are not counted."
+                          }
+                          className={`text-center px-1 ${!isWorkingDay ? "opacity-40 cursor-not-allowed" : ""}`}
+                          value={isWorkingDay ? (weekdayHours[key] ?? 0) : 0}
+                          onChange={(e) => {
+                            if (!isWorkingDay) return;
+                            const v = parseFloat(e.target.value);
+                            setWeekdayHours((prev) => ({
+                              ...prev,
+                              [key]: isNaN(v) ? 0 : Math.max(0, Math.min(24, v)),
+                            }));
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* All-zero warning */}
@@ -1341,8 +1379,9 @@ function BookingModal({
           {/* Booking summary */}
           {bookingSummary && (
             <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-sm space-y-1">
-              <div className="font-medium text-foreground mb-1">
-                Booking summary
+              <div className="font-medium text-foreground mb-1 flex items-center gap-1.5">
+                <CalendarRange className="h-3.5 w-3.5 text-muted-foreground" />
+                This slot
               </div>
               <div className="flex justify-between text-muted-foreground">
                 <span>Working days in period</span>
@@ -1368,6 +1407,19 @@ function BookingModal({
                   {bookingSummary.bookableDays}d
                 </span>
               </div>
+              {booksAgainstBudget != null && (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>
+                    Books against role budget
+                    {editBookingReleased ? (
+                      <span className="text-xs text-muted-foreground/70"> (future only)</span>
+                    ) : null}
+                  </span>
+                  <span className="font-medium text-blue-600 dark:text-blue-400">
+                    +{Math.round(booksAgainstBudget * 10) / 10}d
+                  </span>
+                </div>
+              )}
               {totalHours != null && totalHours > 0 && (
                 <div className="border-t border-border/60 pt-1 font-medium text-foreground text-xs">
                   {weekdayMode && weeklyTotal != null ? (
@@ -1400,188 +1452,359 @@ function BookingModal({
             </div>
           )}
 
-          {/* Role budget status box */}
-          {roleId &&
-            roleBudgetStatus &&
-            (() => {
-              const {
-                budgetedDays,
-                plannedDays,
-                loggedDays,
-                employeeLoggedDays,
-                bookings: roleBookings,
-              } = roleBudgetStatus;
-              const thisDays = thisBookingBudgetDays ?? 0;
-              const r1 = (n: number) => Math.round(n * 10) / 10;
-
-              if (budgetedDays == null) {
-                return (
-                  <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground flex items-start gap-2">
-                    <span className="mt-0.5">ℹ</span>
-                    <span>No budget defined for this role.</span>
-                  </div>
-                );
-              }
-
-              const unplannedDays = roleBudgetStatus.unplannedDays ?? 0;
-              const unplannedAfter = r1(unplannedDays - thisDays);
-
-              const empBooking = roleBookings.find(
-                (b) => b.employeeId === employeeId,
-              );
-              const empPlannedDays = r1(empBooking?.days ?? 0);
-              const empLoggedDays = r1(employeeLoggedDays ?? 0);
-              const empInvoicedDays = r1(roleBudgetStatus.employeeInvoicedDays ?? 0);
-              const empAwaitingDays = r1(Math.max(empLoggedDays - empInvoicedDays, 0));
-              const empRePlannableDays = r1(Math.max(empPlannedDays - empLoggedDays, 0));
-
-              const statusColor = (val: number) => {
-                if (val > 10) return "text-green-700 dark:text-green-400";
-                if (val >= 0) return "text-yellow-700 dark:text-yellow-400";
-                return "text-destructive";
-              };
-              const borderSeverity = (val: number) => {
-                if (val > 10) return 0;
-                if (val >= 0) return 1;
-                return 2;
-              };
-              // Over-budget warning triggers only when booking would exceed Unplanned bucket
-              const worstSeverity = borderSeverity(unplannedAfter);
-              const outerBorder =
-                worstSeverity === 2
-                  ? "border-red-400 dark:border-red-600 bg-red-50 dark:bg-red-950/20"
-                  : worstSeverity === 1
-                    ? "border-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-950/20"
-                    : "border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-950/20";
-
-              const selectedRole = projectRoles?.find(
-                (r) => String(r.id) === roleId,
-              );
-              const empName = isEdit
-                ? (employees.find((e) => e.id === employeeId)?.name ??
-                  "Employee")
-                : (state as ModalState).employeeName;
-
-              return (
-                <div
-                  className={`rounded-md border px-3 py-2.5 text-sm space-y-2 ${outerBorder}`}
-                >
-                  {/* Header */}
+          {/* ── This slot: past vs. future, anchored to today + release ───────── */}
+          {isEdit && (() => {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const todayLabel = format(new Date(), "MMM d, yyyy");
+            const released = !!(state as EditModalState).booking.pastReleasedAt;
+            const bStart = (state as EditModalState).booking.startDate;
+            const bEnd = (state as EditModalState).booking.endDate;
+            const hasPast = bStart < todayStr;
+            const hasFuture = bEnd >= todayStr;
+            return (
+              <div className="rounded-md border border-border bg-card px-3 py-2.5 text-sm space-y-2">
+                <div className="flex items-center justify-between gap-2">
                   <div className="font-semibold text-foreground flex items-center gap-1.5">
-                    <span>Role Budget</span>
-                    {selectedRole && (
-                      <span className="text-muted-foreground font-normal">
-                        — {selectedRole.name}
-                      </span>
-                    )}
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                    This slot · past vs. future
                   </div>
-
-                  {/* Budgeted row (shared) */}
-                  <div className="flex justify-between text-muted-foreground border-b border-border/40 pb-1.5">
-                    <span>Budgeted</span>
-                    <span className="font-medium text-foreground">
-                      {budgetedDays}d
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    as of today, {todayLabel}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Today is the dividing line. Planned days{" "}
+                  <span className="font-medium text-foreground">before today</span> that were
+                  never logged are <span className="font-medium text-foreground">undelivered</span>{" "}
+                  and silently hold budget. Releasing them frees that reservation —{" "}
+                  <span className="font-medium text-foreground">future plan and logged work are always kept.</span>
+                </p>
+                {released ? (
+                  <div className="flex items-center justify-between gap-2 rounded-md bg-muted/60 border border-border px-2.5 py-2">
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <Clock className="h-3.5 w-3.5" /> Past undelivered plan released
                     </span>
-                  </div>
-
-                  {/* THIS EMPLOYEE section */}
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                      👤 This employee: {empName}
-                    </div>
-                    <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Planned</span>
-                      <span>{empPlannedDays}d</span>
-                    </div>
-                    <div className="flex flex-col pl-1">
-                      <div className="flex justify-between text-muted-foreground">
-                        <span>Logged</span>
-                        <span>{empLoggedDays}d</span>
-                      </div>
-                      {empLoggedDays > 0 && (
-                        <div className="text-xs text-muted-foreground/70 text-right">
-                          {empInvoicedDays}d invoiced · {empAwaitingDays}d awaiting billing
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex justify-between text-blue-600 dark:text-blue-400 font-medium pl-1">
-                      <span>Re-plannable</span>
-                      <span>{empRePlannableDays}d</span>
-                    </div>
-                  </div>
-
-                  {/* ENTIRE ROLE section — canonical bucket view */}
-                  <div className="space-y-0.5 border-t border-border/40 pt-1.5">
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                      👥 Entire role: All {selectedRole?.name ?? ""}
-                    </div>
-                    {/* Per-employee breakdown */}
-                    {roleBookings.length > 0 && (
-                      <div className="pl-1 space-y-0.5 text-xs mb-1">
-                        {roleBookings.map((rb) => (
-                          <div
-                            key={rb.employeeId}
-                            className="flex justify-between text-muted-foreground/80"
-                          >
-                            <span className="truncate max-w-[140px]">
-                              └ {rb.employeeName}
-                            </span>
-                            <span className="shrink-0 ml-2">
-                              {rb.days}d planned · {rb.loggedDays}d logged
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Invoiced</span>
-                      <span className="text-foreground">{roleBudgetStatus.invoicedDays}d</span>
-                    </div>
-                    <div className="flex justify-between text-muted-foreground pl-1">
-                      <span>Re-plannable</span>
-                      <span className="text-blue-600 dark:text-blue-400">{roleBudgetStatus.reservedDays}d</span>
-                    </div>
-                    <div
-                      className={`flex justify-between font-medium pl-1 ${statusColor(unplannedDays)}`}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 h-7"
+                      disabled={unreleaseMut.isPending}
+                      onClick={async () => {
+                        try {
+                          await unreleaseMut.mutateAsync((state as EditModalState).booking.id);
+                          toast({ title: "Release undone" });
+                          onClose();
+                        } catch {
+                          toast({ title: "Failed to undo release", variant: "destructive" });
+                        }
+                      }}
                     >
-                      <span>Unplanned</span>
-                      <span>{roleBudgetStatus.unplannedDays ?? "—"}{roleBudgetStatus.unplannedDays != null ? "d" : ""}</span>
-                    </div>
+                      <Undo2 className="h-3.5 w-3.5" />
+                      {unreleaseMut.isPending ? "Undoing…" : "Undo release"}
+                    </Button>
                   </div>
-
-                  {/* This booking + Remaining */}
-                  {thisDays > 0 && (
-                    <div className="border-t border-border/40 pt-1.5 space-y-0.5">
-                      <div className="flex justify-between text-muted-foreground font-medium">
-                        <span>📊 This booking</span>
-                        <span>+{thisDays}d</span>
-                      </div>
-                      <div
-                        className={`flex justify-between pl-1 ${statusColor(unplannedAfter)}`}
-                      >
-                        <span>Unplanned after booking</span>
-                        <span className="font-medium">
-                          {unplannedAfter}d
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Red alert when unplanned budget is exceeded */}
-                  {unplannedAfter < 0 && (
-                    <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 px-2.5 py-2 text-destructive text-xs">
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                      <span>
-                        This booking exceeds the unplanned budget by{" "}
-                        {r1(Math.abs(unplannedAfter))}d. Options: reduce this
-                        booking, release past undelivered plan, or increase the
-                        role budget.
+                ) : pastPlanDays > 0 ? (
+                  confirmRelease ? (
+                    <div className="flex items-center gap-2 flex-wrap rounded-md bg-muted/60 border border-border px-2.5 py-2">
+                      <span className="text-xs text-muted-foreground">
+                        Release {Math.round(pastPlanDays * 10) / 10}d of past undelivered plan? Future plan &amp; logged work are kept.
                       </span>
+                      <Button
+                        size="sm"
+                        className="h-7"
+                        disabled={releaseMut.isPending}
+                        onClick={async () => {
+                          try {
+                            const updated = await releaseMut.mutateAsync((state as EditModalState).booking.id);
+                            toast({ title: "Past plan released" });
+                            if (onBookingUpdated) {
+                              setConfirmRelease(false);
+                              onBookingUpdated(updated);
+                            } else {
+                              onClose();
+                            }
+                          } catch {
+                            toast({ title: "Failed to release past plan", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        {releaseMut.isPending ? "Releasing…" : "Confirm release"}
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7" onClick={() => setConfirmRelease(false)}>
+                        Cancel
+                      </Button>
                     </div>
-                  )}
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-center gap-1.5"
+                      onClick={() => setConfirmRelease(true)}
+                    >
+                      <Clock className="h-3.5 w-3.5" />
+                      Release {Math.round(pastPlanDays * 10) / 10}d past undelivered plan
+                    </Button>
+                  )
+                ) : (
+                  <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    {hasPast
+                      ? "No undelivered past days to release."
+                      : "This slot has no past days yet."}
+                    {hasFuture ? " Future plan is intact." : ""}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ── Shared role plan — identical for every slot on this role ───────── */}
+          {roleId && roleBudgetStatus && (() => {
+            const {
+              budgetedDays,
+              loggedDays,
+              invoicedDays,
+              reservedDays,
+              unplannedDays,
+              freeDays,
+              remainingBudgetDays,
+              bookings: roleBookings,
+            } = roleBudgetStatus;
+            const r1 = (n: number) => Math.round(n * 10) / 10;
+            const thisDays = booksAgainstBudget ?? 0;
+            const selectedRole = projectRoles?.find((r) => String(r.id) === roleId);
+            const empName = isEdit
+              ? (employees.find((e) => e.id === employeeId)?.name ?? "Employee")
+              : (state as ModalState).employeeName;
+
+            if (budgetedDays == null) {
+              return (
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground flex items-start gap-2">
+                  <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    No budget defined for this role — slots aren't checked against a budget.
+                    Set a budgeted-days figure on the role to enable tracking.
+                  </span>
                 </div>
               );
-            })()}
+            }
+
+            const unplanned = unplannedDays ?? 0;
+            const statusColor = (val: number) =>
+              val > 10
+                ? "text-green-700 dark:text-green-400"
+                : val >= 0
+                  ? "text-yellow-700 dark:text-yellow-400"
+                  : "text-destructive";
+
+            const todayStr = new Date().toISOString().slice(0, 10);
+
+            // Live vs projected: roleBudgetStatus already includes the saved
+            // slot (edit) or excludes the not-yet-created slot (create). To
+            // preview unsaved edits without double-counting, project Unplanned
+            // by only the CHANGE in this slot's budget-days.
+            const released = isEdit
+              ? !!(state as EditModalState).booking.pastReleasedAt
+              : false;
+            const effDays = (
+              s: string,
+              e: string,
+              hpd: number,
+              wh: Record<string, number> | null,
+            ): number => {
+              if (!s || !e || e < s) return 0;
+              if (!released)
+                return calcBookingHoursClient(s, e, hpd, wh, workingDaysMask, holidayDates, vacations).budgetDays;
+              if (e < todayStr) return 0;
+              return calcBookingHoursClient(s >= todayStr ? s : todayStr, e, hpd, wh, workingDaysMask, holidayDates, vacations).budgetDays;
+            };
+            const savedSlotDays = isEdit
+              ? effDays(
+                  (state as EditModalState).booking.startDate,
+                  (state as EditModalState).booking.endDate,
+                  (state as EditModalState).booking.hoursPerDay,
+                  (state as EditModalState).booking.weekdayHours,
+                )
+              : 0;
+            const editedSlotDays = booksAgainstBudget ?? 0;
+            const slotDelta = r1(editedSlotDays - savedSlotDays);
+            const unplannedProjected = r1(unplanned - slotDelta);
+            const showProjected = Math.abs(slotDelta) >= 0.05;
+            const mySlots = allBookings
+              .filter((b) => b.employeeId === employeeId && String(b.projectRoleId) === roleId)
+              .sort((a, b) => a.startDate.localeCompare(b.startDate));
+            const currentId = isEdit ? (state as EditModalState).booking.id : null;
+
+            return (
+              <div className="rounded-md border border-border bg-muted/30 px-3 py-2.5 text-sm space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold text-foreground">
+                    Role budget
+                    {selectedRole ? (
+                      <span className="font-normal text-muted-foreground"> — {selectedRole.name}</span>
+                    ) : null}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                    live · matches Budget tab
+                  </span>
+                </div>
+
+                {/* Canonical buckets (8h-day equivalents) */}
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Budgeted</span>
+                    <span className="font-medium text-foreground">{budgetedDays}d</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Logged</span>
+                    <span className="text-foreground">{r1(loggedDays)}d</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Invoiced</span>
+                    <span className="text-foreground">{r1(invoicedDays)}d</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Re-plannable</span>
+                    <span className="text-blue-600 dark:text-blue-400 font-medium">{r1(reservedDays)}d</span>
+                  </div>
+                  <div className={`flex justify-between ${statusColor(unplanned)}`}>
+                    <span>Unplanned</span>
+                    <span className="font-medium">{r1(unplanned)}d</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Free</span>
+                    <span className="text-foreground">{freeDays != null ? r1(freeDays) + "d" : "—"}</span>
+                  </div>
+                </div>
+                <div className="text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
+                  Budgeted = Invoiced + Re-plannable + Unplanned. Remaining (Budgeted − Invoiced):{" "}
+                  <span className="text-foreground font-medium">
+                    {remainingBudgetDays != null ? r1(remainingBudgetDays) + "d" : "—"}
+                  </span>
+                </div>
+
+                {/* Live vs projected effect of THIS slot */}
+                {showProjected ? (
+                  <div className="rounded-md bg-background/60 border border-border/60 px-2.5 py-1.5 space-y-0.5">
+                    <div className="flex justify-between font-medium text-foreground">
+                      <span>
+                        {isEdit
+                          ? slotDelta >= 0
+                            ? "Your edits add"
+                            : "Your edits free"
+                          : "This slot books"}
+                      </span>
+                      <span>
+                        {isEdit
+                          ? (slotDelta >= 0 ? "+" : "−") + r1(Math.abs(slotDelta)) + "d"
+                          : "+" + r1(editedSlotDays) + "d"}
+                      </span>
+                    </div>
+                    <div className={`flex justify-between ${statusColor(unplannedProjected)}`}>
+                      <span>Unplanned after {isEdit ? "saving" : "adding"}</span>
+                      <span className="font-medium">{unplannedProjected}d</span>
+                    </div>
+                  </div>
+                ) : isEdit ? (
+                  <div className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                    <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      These figures are live and already include this slot — they
+                      match the Budget tab. Change the dates or hours to preview
+                      your edit.
+                    </span>
+                  </div>
+                ) : null}
+                {showProjected && unplannedProjected < 0 && (
+                  <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 px-2.5 py-2 text-destructive text-xs">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      {isEdit ? "After saving, this" : "This"} slot would exceed the
+                      unplanned budget by {r1(Math.abs(unplannedProjected))}d.
+                      Options: reduce this slot, release past undelivered plan, or
+                      increase the role budget.
+                    </span>
+                  </div>
+                )}
+
+                {/* This employee's slots on this role (each booking = a slot) */}
+                {mySlots.length > 0 && (
+                  <div className="border-t border-border/40 pt-1.5 space-y-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {empName}'s slots on this role
+                    </div>
+                    {mySlots.map((b) => {
+                      const bd = calcBookingHoursClient(
+                        b.startDate, b.endDate, b.hoursPerDay, b.weekdayHours,
+                        workingDaysMask, holidayDates, vacations,
+                      ).budgetDays;
+                      const isCur = currentId != null && b.id === currentId;
+                      const rel = !!b.pastReleasedAt;
+                      return (
+                        <div
+                          key={b.id}
+                          className={`flex items-center justify-between rounded px-1.5 py-1 text-xs ${isCur ? "bg-primary/10 ring-1 ring-primary/30" : ""}`}
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            {isCur && <span className="text-primary font-semibold">●</span>}
+                            <span className="truncate">
+                              {format(parseISO(b.startDate), "d MMM")} – {format(parseISO(b.endDate), "d MMM yy")}
+                            </span>
+                            {rel && (
+                              <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground border border-border rounded px-1">
+                                <Clock className="h-2.5 w-2.5" /> released
+                              </span>
+                            )}
+                            {isCur && <span className="text-[10px] text-primary">this slot</span>}
+                          </span>
+                          <span className="shrink-0 ml-2 text-muted-foreground">
+                            {r1(bd)}d planned{b.endDate < todayStr && !rel ? " · has past" : ""}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {!isEdit && thisDays > 0 && (
+                      <div className="flex items-center justify-between rounded px-1.5 py-1 text-xs bg-primary/10 ring-1 ring-primary/30">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-primary font-semibold">＋</span>
+                          {startDate && endDate
+                            ? `${format(parseISO(startDate), "d MMM")} – ${format(parseISO(endDate), "d MMM yy")}`
+                            : "new slot"}
+                          <span className="text-[10px] text-primary">new slot</span>
+                        </span>
+                        <span className="shrink-0 ml-2 text-muted-foreground">+{r1(thisDays)}d</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* All employees on this role */}
+                {roleBookings.length > 0 && (
+                  <div className="border-t border-border/40 pt-1.5 space-y-0.5">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      All employees on this role
+                    </div>
+                    {roleBookings.map((rb) => (
+                      <div key={rb.employeeId} className="flex justify-between text-xs text-muted-foreground/80">
+                        <span className="truncate max-w-[150px]">{rb.employeeName}</span>
+                        <span className="shrink-0 ml-2">
+                          {r1(rb.days)}d planned · {r1(rb.loggedDays)}d logged
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Legend — definitions (strictly per replit.md) */}
+                <div className="border-t border-border/40 pt-1.5 text-[11px] text-muted-foreground leading-relaxed">
+                  <span className="font-medium text-foreground">What these mean: </span>
+                  <b>Planned</b> = days booked. <b>Logged</b> = hours recorded ÷ 8. <b>Invoiced</b> = billed (locked).{" "}
+                  <b>Re-plannable</b> = planned but not yet delivered (movable). <b>Unplanned</b> = budget not yet committed.{" "}
+                  <b>Free</b> = Budgeted − Logged. All figures are 8h-day equivalents.
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Overbooking warning */}
           {isOverbooked && (
@@ -1593,82 +1816,18 @@ function BookingModal({
         </div>
 
         <DialogFooter className="flex items-center justify-between pt-2">
-          {isEdit && !confirmDelete && !confirmRelease && (
-            <div className="flex gap-2">
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setConfirmDelete(true)}
-              >
-                Delete booking
-              </Button>
-              {(state as EditModalState).booking.pastReleasedAt ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  disabled={unreleaseMut.isPending}
-                  onClick={async () => {
-                    try {
-                      await unreleaseMut.mutateAsync((state as EditModalState).booking.id);
-                      toast({ title: "Release undone" });
-                      onClose();
-                    } catch {
-                      toast({ title: "Failed to undo release", variant: "destructive" });
-                    }
-                  }}
-                >
-                  <Undo2 className="h-3.5 w-3.5" />
-                  {unreleaseMut.isPending ? "Undoing…" : "Undo release"}
-                </Button>
-              ) : pastPlanDays > 0 ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  onClick={() => setConfirmRelease(true)}
-                >
-                  <Clock className="h-3.5 w-3.5" />
-                  Release past plan
-                </Button>
-              ) : null}
-            </div>
-          )}
-          {isEdit && confirmRelease && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-muted-foreground">
-                Release {Math.round(pastPlanDays * 10) / 10}d past plan? Future plan &amp; logged work are kept.
-              </span>
-              <Button
-                size="sm"
-                disabled={releaseMut.isPending}
-                onClick={async () => {
-                  try {
-                    const updated = await releaseMut.mutateAsync((state as EditModalState).booking.id);
-                    toast({ title: "Past plan released" });
-                    if (onBookingUpdated) {
-                      setConfirmRelease(false);
-                      onBookingUpdated(updated);
-                    } else {
-                      onClose();
-                    }
-                  } catch {
-                    toast({ title: "Failed to release past plan", variant: "destructive" });
-                  }
-                }}
-              >
-                {releaseMut.isPending ? "Releasing…" : "Confirm"}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirmRelease(false)}>
-                Cancel
-              </Button>
-            </div>
+          {isEdit && !confirmDelete && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete booking
+            </Button>
           )}
           {isEdit && confirmDelete && (
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">
-                Are you sure?
-              </span>
+              <span className="text-sm text-muted-foreground">Are you sure?</span>
               <Button
                 variant="destructive"
                 size="sm"
@@ -1677,16 +1836,12 @@ function BookingModal({
               >
                 {deleteMut.isPending ? "Deleting…" : "Yes, delete"}
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmDelete(false)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
                 Cancel
               </Button>
             </div>
           )}
-          {!confirmDelete && !confirmRelease && (
+          {!confirmDelete && (
             <div className="flex gap-2 ml-auto">
               <Button variant="outline" onClick={onClose}>
                 Cancel
@@ -3175,6 +3330,11 @@ export default function ResourcePlannerPage() {
         {/* Booking modal */}
         {modal && (
           <BookingModal
+            key={
+              modal.mode === "edit"
+                ? `edit-${(modal as EditModalState).booking.id}`
+                : "create"
+            }
             state={modal}
             projects={projects as any[]}
             allBookings={bookings}
