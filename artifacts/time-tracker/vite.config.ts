@@ -66,20 +66,6 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
-    // Local dev only: when API_PROXY_TARGET is set, forward same-origin /api
-    // calls to the separately-running api-server. On Replit this env var is
-    // unset (the platform's application router handles /api routing), so the
-    // proxy is absent and behaviour is unchanged.
-    ...(process.env.API_PROXY_TARGET
-      ? {
-          proxy: {
-            "/api": {
-              target: process.env.API_PROXY_TARGET,
-              changeOrigin: true,
-            },
-          },
-        }
-      : {}),
   },
   preview: {
     port,

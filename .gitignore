@@ -48,8 +48,6 @@ Thumbs.db
 .cache/
 .local/
 
-# Local development (file-based PGlite Postgres + local env)
-.local-pgdata/
 .env.local
 .env
 

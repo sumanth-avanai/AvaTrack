@@ -7,7 +7,6 @@
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "db:local": "pnpm --filter @workspace/scripts run db:local",
     "db:push": "pnpm --filter @workspace/db run push",
     "seed": "pnpm --filter @workspace/scripts run seed"
   },
