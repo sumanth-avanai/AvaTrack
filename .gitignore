@@ -47,3 +47,11 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local development (file-based PGlite Postgres + local env)
+.local-pgdata/
+.env.local
+.env
+
+# Local tooling / editor caches (not part of the project)
+.config/
