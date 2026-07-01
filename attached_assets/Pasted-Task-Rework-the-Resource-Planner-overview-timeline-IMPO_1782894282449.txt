@@ -1,0 +1,113 @@
+Task: Rework the Resource Planner (overview/timeline)
+
+IMPORTANT: Existing data (Employees, Projects, Bookings, Holidays, Vacations,
+Project Roles) must NOT be changed, migrated, or deleted. This is purely a
+presentation/interaction change to the Resource Planner. If the existing
+`colour` field on Projects is missing or empty, populate it additively
+(set a default value) without otherwise altering existing project records.
+
+This only affects the timeline view (rows = employees) in the Resource
+Planner, including its filter bar. Leave the Booking modal (New/Edit
+Booking) unchanged — that's a separate follow-up task.
+
+1. COLOR CODING
+- Booking bars use the color from Project.colour instead of the current
+  uniform blue/purple styling.
+- New projects automatically get the next free color from a fixed, clearly
+  distinguishable palette (8-10 colors). Color remains manually editable in
+  project settings.
+
+2. BAR LABELING
+- Bars show only the role name (from Project Roles), not truncated. Client
+  name and project name are NO LONGER shown in the bar (they move to the
+  tooltip/click detail, see item 5).
+- The role name is rendered as a text overlay across the full width of the
+  cell, independent of the fill level (see item 3), so it never gets cut off
+  under partial utilization.
+
+3. DAY-LEVEL RENDERING (most important functional change)
+Currently a booking renders as one continuous bar across the full
+start-end date range, with an averaged value in the label (e.g. "2.4h/d").
+This is misleading for weekday-mode bookings with uneven daily distribution
+(e.g. Mon 8h, Tue 4h, Wed-Fri 0h).
+
+New behavior per day and employee:
+- Daily utilization = hours booked on that day (across all of that person's
+  bookings) / daily capacity (from employee master data; may be 0 on a
+  holiday/vacation/outside-contract day — existing logic for this already
+  exists).
+- Day with 0 booked hours: cell stays empty/neutral (e.g. dashed border), NO
+  continuous bar drawn across it. For flat-mode bookings, this only applies
+  to days already excluded by the working-days mask/holiday/vacation — normal
+  working days in flat mode are filled evenly as before.
+- Day with booking < daily capacity: cell shows a proportional fill as
+  background (width = hours booked / capacity), role name stays fully
+  readable via the overlay, plus a small right-aligned "Xh free"
+  (capacity - booked).
+- Day with booking = daily capacity: cell fully filled, no extra text needed
+  beyond the role name.
+- Day with booking > daily capacity (overbooking): cell in a warning color,
+  "-Xh" right-aligned in red.
+- Visual segmentation: consecutive days with >0 booked hours belonging to the
+  same booking/role render as ONE continuous segment (rounded corners only at
+  the segment start/end), NOT as separate boxes per day. Only genuine 0h days
+  break a segment.
+
+4. EMPTY EMPLOYEE ROWS
+- Employees with no booking in the visible period still appear as their own
+  row (not hidden), with a subtle "available" label instead of an empty area.
+
+5. TOOLTIP / CLICK DETAIL ON BARS
+- Hovering or clicking a booking segment shows: client, full project name,
+  role, day rate, date range, hours booked on that day, and the notes field
+  if present. This replaces the info that used to live in the bar text.
+
+6. ABSENCES INSTEAD OF DIAGONAL STRIPES
+- Holidays, vacation, sick leave, and unpaid/other absences are no longer
+  shown as a diagonal stripe pattern, but as a neutral (gray) cell with an
+  icon:
+  - Holiday: star icon
+  - Vacation: sun icon
+  - Sick: thermometer icon
+  - Unpaid/Other: X or neutral icon
+- These cells are visually clearly distinct from project bookings (gray
+  instead of project color).
+
+7. FILTER PANEL (replaces/unifies the existing Client and Project dropdown
+   filters)
+- A single "Projects" filter button with a badge showing the number of
+  currently active projects.
+- Clicking it opens a panel with:
+  - A search field at the top, filtering live by client or project name
+  - A list grouped by client; each client has its own checkbox (toggles all
+    its projects), with individual projects indented below, each showing a
+    color dot + checkbox
+  - A footer with "Select all" and "Reset"
+- This panel replaces the current separate "Client" and "Project" dropdowns
+  AND removes the need for a permanent color legend in the timeline (color
+  mapping is visible in the panel itself via the color dots, and additionally
+  in the tooltip from item 5).
+- Filtering affects which bookings/rows are visible in the timeline
+  (unchecked projects should be hidden, not just dimmed, to stay consistent
+  with the current dropdown behavior elsewhere in the app).
+
+ACCEPTANCE CRITERIA
+- [ ] Existing Bookings, Employees, Projects, Holidays, and Vacations are
+      unchanged in the database after this change (spot-check: compare row
+      counts per table before/after).
+- [ ] A weekday-mode booking with e.g. Mon 8h/Tue 4h/Wed-Fri 0h renders in
+      the timeline as: Monday fully filled, Tuesday half-filled with "4h
+      free", Wednesday-Friday empty cells (no continuous bar).
+- [ ] Bars show only the role name, no longer the client/project name.
+- [ ] The role name remains fully readable at any fill level (no truncation
+      under partial utilization).
+- [ ] Employees with no booking still appear as a row with an "available"
+      label.
+- [ ] Holidays/vacation/sick leave are shown via icons instead of a stripe
+      pattern.
+- [ ] The filter panel with search, client grouping, and badge counter works
+      and correctly filters the timeline.
+- [ ] Existing overbooking logic (if any) and the availability calculation
+      logic (holidays/vacation/contract boundaries) remain unchanged — only
+      the presentation changes, not the underlying available-hours
+      calculation.
