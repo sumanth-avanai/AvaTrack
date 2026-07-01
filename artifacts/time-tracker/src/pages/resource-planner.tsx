@@ -53,15 +53,12 @@ import {
   ArrowUpDown,
   Check,
   ChevronDown,
-  Filter,
   Clock,
   Undo2,
   Info,
   Sun,
   Star,
   Thermometer,
-  Minus,
-  Search,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -71,11 +68,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   useListEmployees,
   getListEmployeesQueryKey,
@@ -116,20 +108,23 @@ interface ResourceBookingFull {
   clientName: string | null;
   projectColor: string;
 }
-type ZoomLevel = "month" | "quarter" | "year";
+type ZoomLevel = "week" | "month" | "quarter" | "year";
 type SortMode = "alpha-asc" | "alpha-desc" | "alloc-desc" | "alloc-asc";
 
 const CELL_WIDTH: Record<ZoomLevel, number> = {
+  week: 420, // 60 px/day — activates per-day fill & overlays
   month: 80,
   quarter: 50,
   year: 18,
 };
 const NUM_WEEKS: Record<ZoomLevel, number> = {
+  week: 6,
   month: 13,
   quarter: 26,
   year: 52,
 };
 const NAV_WEEKS: Record<ZoomLevel, number> = {
+  week: 2,
   month: 4,
   quarter: 13,
   year: 26,
@@ -2232,11 +2227,10 @@ export default function ResourcePlannerPage() {
     dayIndex: number;
   } | null>(null);
 
-  const [excludedProjectIds, setExcludedProjectIds] = useState<Set<number>>(
+  // Project shelf: set of selected project IDs for highlight (empty = no highlight)
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<number>>(
     new Set(),
   );
-  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
-  const [filterSearch, setFilterSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
   // Scroll tracking for sticky-like segment labels
   const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
@@ -2562,8 +2556,8 @@ export default function ResourcePlannerPage() {
     [employees],
   );
 
-  // ── Project filter panel data ─────────────────────────────────────────────
-  const projectsByClient = useMemo(() => {
+  // ── Project shelf — flat list of projects derived from bookings ─────────────
+  const shelfProjects = useMemo(() => {
     const projectMap = new Map<
       number,
       { id: number; name: string; clientName: string; color: string }
@@ -2578,36 +2572,18 @@ export default function ResourcePlannerPage() {
         });
       }
     }
-    const clientMap = new Map<
-      string,
-      { id: number; name: string; clientName: string; color: string }[]
-    >();
-    for (const [, proj] of projectMap) {
-      if (!clientMap.has(proj.clientName)) clientMap.set(proj.clientName, []);
-      clientMap.get(proj.clientName)!.push(proj);
-    }
-    return [...clientMap.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([clientName, projs]) => ({
-        clientName,
-        projects: [...projs].sort((a, b) => a.name.localeCompare(b.name)),
-      }));
-  }, [bookings]);
-
-  const filteredProjectGroups = useMemo(() => {
-    if (!filterSearch.trim()) return projectsByClient;
-    const q = filterSearch.toLowerCase();
-    return projectsByClient
-      .map((g) => ({
-        ...g,
-        projects: g.projects.filter(
-          (p) =>
-            p.name.toLowerCase().includes(q) ||
-            g.clientName.toLowerCase().includes(q),
-        ),
-      }))
-      .filter((g) => g.projects.length > 0);
-  }, [projectsByClient, filterSearch]);
+    const ordered = [...projectMap.values()].sort((a, b) => {
+      if (a.clientName !== b.clientName)
+        return a.clientName.localeCompare(b.clientName);
+      return a.name.localeCompare(b.name);
+    });
+    if (selectedProjectIds.size === 0) return ordered;
+    // Stable sort: selected tiles float to the front
+    return [
+      ...ordered.filter((p) => selectedProjectIds.has(p.id)),
+      ...ordered.filter((p) => !selectedProjectIds.has(p.id)),
+    ];
+  }, [bookings, selectedProjectIds]);
 
   // ── Filtered + sorted employees ─────────────────────────────────────────────
   const activeEmployees = useMemo(() => {
@@ -2798,9 +2774,7 @@ export default function ResourcePlannerPage() {
       const vacationDayMap =
         vacationDayMapByEmployee[id] ?? new Map<string, VacationEntry>();
       const vacationDateSet = new Set(vacationDayMap.keys());
-      const empBookings = (bookingsByEmployee[id] ?? []).filter(
-        (b) => !excludedProjectIds.has(b.projectId),
-      );
+      const empBookings = bookingsByEmployee[id] ?? [];
       const allSegs: SegmentBase[] = [];
       for (const b of empBookings) {
         const color = resolveProjectColor(b.projectId, b.projectColor);
@@ -2822,23 +2796,14 @@ export default function ResourcePlannerPage() {
   }, [
     activeEmployees,
     bookingsByEmployee,
-    excludedProjectIds,
     windowStart,
     numWeeks,
     holidayDateSetByEmployee,
     vacationDayMapByEmployee,
   ]);
 
-  // ── Filtered employee list (hide when all bookings excluded by filter) ────
-  const visibleEmployees = useMemo(() => {
-    if (excludedProjectIds.size === 0) return activeEmployees;
-    // Filter active: only show employees who have at least one visible segment
-    // (employees with no bookings at all are also hidden while filter is active)
-    return activeEmployees.filter(
-      (emp: any) =>
-        (segmentsByEmployee[(emp as any).id] ?? []).length > 0,
-    );
-  }, [activeEmployees, excludedProjectIds, segmentsByEmployee]);
+  // All active employees are always visible (project shelf highlights, never hides)
+  const visibleEmployees = activeEmployees;
 
   // ── Daily hours totals per employee/day (sum across ALL booking segments) ──
   const dailyTotalsMap = useMemo(() => {
@@ -2913,182 +2878,6 @@ export default function ResourcePlannerPage() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Projects filter popover */}
-            <Popover open={filterPanelOpen} onOpenChange={setFilterPanelOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <Filter className="h-3.5 w-3.5" />
-                  Projects
-                  {excludedProjectIds.size > 0 && (
-                    <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 leading-none">
-                      {excludedProjectIds.size}
-                    </span>
-                  )}
-                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-72 p-0">
-                {/* Search */}
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
-                  <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <Input
-                    placeholder="Search projects…"
-                    value={filterSearch}
-                    onChange={(e) => setFilterSearch(e.target.value)}
-                    className="h-7 border-0 shadow-none px-0 py-0 text-sm focus-visible:ring-0"
-                  />
-                  {filterSearch && (
-                    <button
-                      onClick={() => setFilterSearch("")}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Project list grouped by client */}
-                <div className="max-h-72 overflow-y-auto py-1">
-                  {filteredProjectGroups.length === 0 ? (
-                    <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-                      No projects found
-                    </div>
-                  ) : (
-                    filteredProjectGroups.map((group) => {
-                      const allVisible = group.projects.every(
-                        (p) => !excludedProjectIds.has(p.id),
-                      );
-                      const someVisible = group.projects.some(
-                        (p) => !excludedProjectIds.has(p.id),
-                      );
-                      return (
-                        <div key={group.clientName}>
-                          {/* Client header — toggle-all */}
-                          <div
-                            className="flex items-center gap-2 px-3 py-1.5 hover:bg-muted/50 cursor-pointer"
-                            onClick={() => {
-                              setExcludedProjectIds((prev) => {
-                                const next = new Set(prev);
-                                if (allVisible) {
-                                  group.projects.forEach((p) =>
-                                    next.add(p.id),
-                                  );
-                                } else {
-                                  group.projects.forEach((p) =>
-                                    next.delete(p.id),
-                                  );
-                                }
-                                return next;
-                              });
-                            }}
-                          >
-                            <span
-                              className={`flex h-4 w-4 items-center justify-center rounded border shrink-0 ${
-                                allVisible
-                                  ? "bg-primary border-primary text-primary-foreground"
-                                  : someVisible
-                                    ? "border-primary"
-                                    : "border-input"
-                              }`}
-                            >
-                              {allVisible && <Check className="h-3 w-3" />}
-                              {!allVisible && someVisible && (
-                                <Minus className="h-2 w-2 text-primary" />
-                              )}
-                            </span>
-                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
-                              {group.clientName}
-                            </span>
-                          </div>
-
-                          {/* Projects in this client group */}
-                          {group.projects.map((p) => {
-                            const visible = !excludedProjectIds.has(p.id);
-                            return (
-                              <div
-                                key={p.id}
-                                className="flex items-center gap-2 pl-8 pr-3 py-1 hover:bg-muted/50 cursor-pointer"
-                                onClick={() => {
-                                  setExcludedProjectIds((prev) => {
-                                    const next = new Set(prev);
-                                    if (visible) {
-                                      next.add(p.id);
-                                    } else {
-                                      next.delete(p.id);
-                                    }
-                                    return next;
-                                  });
-                                }}
-                              >
-                                <span
-                                  className={`flex h-4 w-4 items-center justify-center rounded border shrink-0 ${visible ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}
-                                >
-                                  {visible && <Check className="h-3 w-3" />}
-                                </span>
-                                <span
-                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: p.color }}
-                                />
-                                <span className="text-sm truncate">
-                                  {p.name}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                {/* Footer */}
-                <div className="flex items-center justify-between px-3 py-2 border-t border-border gap-2">
-                  <button
-                    className="text-xs text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      // Select all: make all currently visible (searched) projects visible
-                      const visibleIds = filteredProjectGroups.flatMap(
-                        (g) => g.projects.map((p) => p.id),
-                      );
-                      setExcludedProjectIds((prev) => {
-                        const next = new Set(prev);
-                        visibleIds.forEach((id: number) => next.delete(id));
-                        return next;
-                      });
-                    }}
-                  >
-                    Select all
-                  </button>
-                  <button
-                    className="text-xs text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      setExcludedProjectIds(new Set());
-                      setFilterSearch("");
-                    }}
-                  >
-                    Reset
-                  </button>
-                  {excludedProjectIds.size > 0 && (
-                    <span className="text-xs text-muted-foreground ml-auto">
-                      {excludedProjectIds.size} hidden
-                    </span>
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
-
-            {/* Clear filter */}
-            {excludedProjectIds.size > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5 text-muted-foreground hover:text-foreground"
-                onClick={() => setExcludedProjectIds(new Set())}
-              >
-                Clear filter
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            )}
 
             {/* Sort */}
             <DropdownMenu>
@@ -3138,7 +2927,7 @@ export default function ResourcePlannerPage() {
 
           {/* Zoom toggle */}
           <div className="flex items-center gap-1 border border-border rounded-md p-0.5">
-            {(["month", "quarter", "year"] as ZoomLevel[]).map((z) => (
+            {(["week", "month", "quarter"] as ZoomLevel[]).map((z) => (
               <button
                 key={z}
                 onClick={() => setZoom(z)}
@@ -3148,11 +2937,76 @@ export default function ResourcePlannerPage() {
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                {z === "month" ? "Month" : z === "quarter" ? "Quarter" : "Year"}
+                {z === "week" ? "Week" : z === "month" ? "Month" : "Quarter"}
               </button>
             ))}
           </div>
         </div>
+
+        {/* ── Project shelf ──────────────────────────────────────────────────── */}
+        {shelfProjects.length > 0 && (
+          <div className="px-4 py-2.5 border-b border-border bg-card">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Projects
+              </span>
+              {selectedProjectIds.size > 0 && (
+                <button
+                  className="text-xs text-muted-foreground hover:text-foreground ml-auto"
+                  onClick={() => setSelectedProjectIds(new Set())}
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {shelfProjects.map((p) => {
+                const isSelected = selectedProjectIds.has(p.id);
+                const hasSelection = selectedProjectIds.size > 0;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedProjectIds((prev) => {
+                        const next = new Set(prev);
+                        if (isSelected) next.delete(p.id);
+                        else next.add(p.id);
+                        return next;
+                      });
+                    }}
+                    style={{
+                      backgroundColor: p.color,
+                      boxShadow: isSelected
+                        ? `0 0 0 2px #fff, 0 0 0 4px ${p.color}`
+                        : undefined,
+                      opacity: hasSelection && !isSelected ? 0.45 : 1,
+                      transform:
+                        hasSelection && !isSelected
+                          ? "scale(0.93)"
+                          : "scale(1)",
+                      transition: "opacity 0.15s, transform 0.15s, box-shadow 0.15s",
+                    }}
+                    className="px-2.5 py-1.5 rounded-md text-left focus:outline-none"
+                  >
+                    <div
+                      className="text-[10px] leading-none mb-0.5 truncate max-w-[120px]"
+                      style={{ color: "rgba(255,255,255,0.75)" }}
+                    >
+                      {p.clientName}
+                    </div>
+                    <div
+                      className="text-[11px] font-semibold leading-none truncate max-w-[120px]"
+                      style={{ color: "#fff" }}
+                    >
+                      {p.name}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Planner grid */}
         <div
@@ -3503,7 +3357,12 @@ export default function ResourcePlannerPage() {
                             left,
                             width,
                             borderRadius: 3,
-                            opacity: isDragging ? 0.35 : 1,
+                            opacity: isDragging
+                              ? 0.35
+                              : selectedProjectIds.size > 0 &&
+                                  !selectedProjectIds.has(seg.projectId)
+                                ? 0.25
+                                : 1,
                             cursor: isDragging ? "grabbing" : "grab",
                             zIndex: isDragging ? 5 : 4,
                             userSelect: "none",
@@ -3533,8 +3392,8 @@ export default function ResourcePlannerPage() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Fill — proportional per-day only when cells are wide enough */}
-                          {dayWidth >= 60 ? (
+                          {/* Fill — proportional per-day only in Week zoom */}
+                          {zoom === "week" ? (
                             <div
                               className="absolute inset-0 flex"
                               style={{ borderRadius: 3, overflow: "hidden" }}
@@ -3821,8 +3680,8 @@ export default function ResourcePlannerPage() {
                       );
                     })}
 
-                    {/* Per-day free/over labels — only when day-cells are wide enough to read */}
-                    {dayWidth >= 60 &&
+                    {/* Per-day free/over labels — only in Week zoom */}
+                    {zoom === "week" &&
                       barH >= 14 &&
                       Array.from({ length: numWeeks * 7 }, (_, offset) => {
                         const day = addDays(windowStart, offset);
