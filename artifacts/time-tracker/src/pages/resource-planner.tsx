@@ -144,6 +144,7 @@ const BAR_H_STACKED = 16;
 const BAR_GAP = 2;
 const BAR_PAD_TOP = 4;
 const MAX_VISIBLE_LANES = 3;
+const ABSENCE_H = BAR_H_STACKED;
 
 function assignLanes(
   bookings: ResourceBookingFull[],
@@ -162,18 +163,31 @@ function assignLanes(
   });
 }
 
-function calcRowHeight(laneCount: number): number {
-  if (laneCount <= 1) return ROW_HEIGHT;
-  const visible = Math.min(laneCount, MAX_VISIBLE_LANES);
+function calcRowHeight(laneCount: number, hasAbsences: boolean): number {
+  const visible = Math.min(Math.max(laneCount, 0), MAX_VISIBLE_LANES);
+  const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
   const hasMore = laneCount > MAX_VISIBLE_LANES;
-  return Math.max(
-    ROW_HEIGHT,
-    BAR_PAD_TOP +
-      visible * BAR_H_STACKED +
-      (visible - 1) * BAR_GAP +
-      BAR_PAD_TOP +
-      (hasMore ? 16 : 0),
-  );
+
+  let contentH = 0;
+  if (visible > 0) contentH = visible * barH + (visible - 1) * BAR_GAP;
+  if (hasMore) contentH += BAR_GAP + 16;
+  if (hasAbsences) contentH += (contentH > 0 ? BAR_GAP : 0) + ABSENCE_H;
+
+  if (contentH === 0) return ROW_HEIGHT;
+  return Math.max(ROW_HEIGHT, BAR_PAD_TOP + contentH + BAR_PAD_TOP);
+}
+
+/**
+ * Pixel offset from the top of the timeline row where the absence lane begins.
+ * This is always BELOW the booking-bar lanes so absence cells never overlap bar labels.
+ */
+function calcAbsenceLaneTop(laneCount: number, barH: number): number {
+  const visible = Math.min(Math.max(laneCount, 0), MAX_VISIBLE_LANES);
+  const hasMore = laneCount > MAX_VISIBLE_LANES;
+  if (visible === 0) return BAR_PAD_TOP;
+  let top = BAR_PAD_TOP + visible * (barH + BAR_GAP);
+  if (hasMore) top += 16 + BAR_GAP;
+  return top;
 }
 
 function darkenColor(hex: string): string {
@@ -2898,8 +2912,8 @@ export default function ResourcePlannerPage() {
       setZoom(newZoom);
       setWindowStart((ws) => snapToZoom(ws, newZoom));
     };
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
+    el.addEventListener("wheel", handler, { capture: true, passive: false });
+    return () => el.removeEventListener("wheel", handler, { capture: true });
   }, []);
 
   return (
@@ -3243,7 +3257,12 @@ export default function ResourcePlannerPage() {
                   ? Math.max(...baseSegments.map((s) => s.lane)) + 1
                   : 0;
               const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
-              const rowHeight = calcRowHeight(laneCount);
+              const hasAbsences = days.some((d) => {
+                const ds = format(d, "yyyy-MM-dd");
+                return holidayDateSet.has(ds) || vacationDayMap.has(ds);
+              });
+              const rowHeight = calcRowHeight(laneCount, hasAbsences);
+              const absenceLaneTop = calcAbsenceLaneTop(laneCount, barH);
               const hiddenCount = baseSegments.filter(
                 (s) => s.lane >= MAX_VISIBLE_LANES,
               ).length;
@@ -3341,8 +3360,8 @@ export default function ResourcePlannerPage() {
                               <div
                                 className="absolute flex items-center justify-center pointer-events-auto"
                                 style={{
-                                  top: 0,
-                                  bottom: 0,
+                                  top: absenceLaneTop,
+                                  height: ABSENCE_H,
                                   left,
                                   width: dayWidth,
                                   backgroundColor: "rgba(156,163,175,0.18)",
@@ -3387,8 +3406,8 @@ export default function ResourcePlannerPage() {
                                 aria-label={`Edit ${vacation.vacationType.replace(/_/g, " ")} for ${emp.name}`}
                                 className="absolute flex items-center justify-center pointer-events-auto cursor-pointer hover:brightness-90 focus:outline-none focus:ring-2 focus:ring-orange-400"
                                 style={{
-                                  top: 0,
-                                  bottom: 0,
+                                  top: absenceLaneTop,
+                                  height: ABSENCE_H,
                                   left,
                                   width: dayWidth,
                                   backgroundColor: "rgba(251,146,60,0.14)",
