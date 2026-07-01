@@ -3206,7 +3206,7 @@ export default function ResourcePlannerPage() {
                         {format(w, "d")}
                       </span>
                       {zoom === "month" && (
-                        <span className="text-[10px] text-muted-foreground/60">
+                        <span className="text-[11px] text-muted-foreground/60">
                           {format(w, "MMM")}
                         </span>
                       )}
@@ -3435,7 +3435,7 @@ export default function ResourcePlannerPage() {
                                   {vacation.note}
                                 </div>
                               )}
-                              <div className="text-muted-foreground text-[10px] pt-0.5">
+                              <div className="text-muted-foreground text-[11px] pt-0.5">
                                 Click to edit
                               </div>
                             </TooltipContent>
@@ -3591,7 +3591,7 @@ export default function ResourcePlannerPage() {
                             (() => {
                               const stickyLeft = Math.max(
                                 4,
-                                timelineScrollLeft - EMPLOYEE_COL - left + 4,
+                                timelineScrollLeft - left + 4,
                               );
                               // Hide if the sticky position has gone past the right edge
                               if (stickyLeft >= width - 8) return null;
@@ -3912,7 +3912,7 @@ export default function ResourcePlannerPage() {
                             }}
                           >
                             {bounds.width > 48 && (
-                              <span className="text-white text-[10px] font-semibold truncate">
+                              <span className="text-white text-[11px] font-semibold truncate">
                                 {format(
                                   parseISO(dragGhost.startDate),
                                   "MMM d",
@@ -3928,7 +3928,7 @@ export default function ResourcePlannerPage() {
                     {/* "+N more" indicator */}
                     {hiddenCount > 0 && (
                       <div
-                        className="absolute text-[10px] text-muted-foreground select-none pointer-events-none px-1"
+                        className="absolute text-[11px] text-muted-foreground select-none pointer-events-none px-1"
                         style={{
                           top:
                             BAR_PAD_TOP +
