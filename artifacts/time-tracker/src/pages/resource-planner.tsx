@@ -57,6 +57,11 @@ import {
   Clock,
   Undo2,
   Info,
+  Sun,
+  Star,
+  Thermometer,
+  Minus,
+  Search,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -67,6 +72,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   useListEmployees,
   getListEmployeesQueryKey,
   useListProjects,
@@ -76,7 +86,7 @@ import {
   useListHolidays,
   getListHolidaysQueryKey,
 } from "@workspace/api-client-react";
-import { resolveProjectColor } from "@workspace/api-zod";
+import { resolveProjectColor, PROJECT_COLORS } from "@workspace/api-zod";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface ProjectRole {
@@ -172,6 +182,122 @@ function darkenColor(hex: string): string {
     Math.max(0, parseInt(c.slice(i, i + 2), 16) - 50),
   );
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+// ── Day-level segment types ───────────────────────────────────────────────────
+interface SegmentBase {
+  bookingId: number;
+  startOffset: number; // days from windowStart, 0-indexed inclusive
+  endOffset: number;   // days from windowStart, inclusive
+  roleName: string | null;
+  color: string;
+  projectName: string;
+  clientName: string | null;
+  dayRate: number | null;
+  bookingStartDate: string;
+  bookingEndDate: string;
+  notes: string | null;
+  pastReleasedAt: string | null;
+  projectRoleId: number | null;
+  projectId: number;
+  dailyHours: number[]; // one entry per day in [startOffset, endOffset]
+}
+type Segment = SegmentBase & { lane: number };
+
+/** Hours this booking contributes to a given calendar day (0 if outside range,
+ *  off the employee's working-day mask in flat mode, or on a holiday/vacation). */
+function getHoursForDayBooking(
+  booking: ResourceBookingFull,
+  day: Date,
+  empMask: number[],
+  holidayDateSet: Set<string>,
+  vacationDateSet: Set<string>,
+): number {
+  const dayStr = format(day, "yyyy-MM-dd");
+  if (dayStr < booking.startDate || dayStr > booking.endDate) return 0;
+  if (holidayDateSet.has(dayStr) || vacationDateSet.has(dayStr)) return 0;
+  if (booking.weekdayHours != null) {
+    // weekdayHours keys are "1"=Mon … "5"=Fri, matching getDay() for Mon–Fri
+    return booking.weekdayHours[String(day.getDay())] ?? 0;
+  }
+  // Flat mode: apply only on the employee's working-mask days
+  const isoIdx = getISODay(day) - 1; // 0=Mon … 6=Sun
+  if (!empMask[isoIdx]) return 0;
+  return booking.hoursPerDay;
+}
+
+/** Daily capacity in hours for one working day. */
+function getDailyCapacity(weeklyCapacityHours: number, mask: number[]): number {
+  const activeDays = mask.reduce((s, v) => s + v, 0);
+  return activeDays > 0 ? weeklyCapacityHours / activeDays : 0;
+}
+
+/** Build segments (consecutive non-zero days) for one booking over the visible window. */
+function buildBookingSegments(
+  booking: ResourceBookingFull,
+  windowStartDate: Date,
+  numWeeks: number,
+  color: string,
+  empMask: number[],
+  holidayDateSet: Set<string>,
+  vacationDateSet: Set<string>,
+): SegmentBase[] {
+  const segments: SegmentBase[] = [];
+  const totalDays = numWeeks * 7;
+  let curStart: number | null = null;
+  let dailyHours: number[] = [];
+
+  const base: Omit<SegmentBase, "startOffset" | "endOffset" | "dailyHours"> = {
+    bookingId: booking.id,
+    roleName: booking.projectRoleName,
+    color,
+    projectName: booking.projectName,
+    clientName: booking.clientName,
+    dayRate: booking.dayRate,
+    bookingStartDate: booking.startDate,
+    bookingEndDate: booking.endDate,
+    notes: booking.notes,
+    pastReleasedAt: booking.pastReleasedAt,
+    projectRoleId: booking.projectRoleId,
+    projectId: booking.projectId,
+  };
+
+  for (let offset = 0; offset < totalDays; offset++) {
+    const day = addDays(windowStartDate, offset);
+    const hours = getHoursForDayBooking(
+      booking,
+      day,
+      empMask,
+      holidayDateSet,
+      vacationDateSet,
+    );
+    if (hours > 0) {
+      if (curStart === null) curStart = offset;
+      dailyHours.push(hours);
+    } else {
+      if (curStart !== null) {
+        segments.push({ ...base, startOffset: curStart, endOffset: offset - 1, dailyHours });
+        curStart = null;
+        dailyHours = [];
+      }
+    }
+  }
+  if (curStart !== null) {
+    segments.push({ ...base, startOffset: curStart, endOffset: totalDays - 1, dailyHours });
+  }
+  return segments;
+}
+
+/** Assign lanes to segments using greedy interval scheduling. */
+function assignSegmentLanes(segments: SegmentBase[]): Segment[] {
+  const sorted = [...segments].sort((a, b) => a.startOffset - b.startOffset);
+  const laneEnds: number[] = [];
+  return sorted.map((seg) => {
+    let lane = laneEnds.findIndex((end) => seg.startOffset > end);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = seg.endOffset;
+    return { ...seg, lane };
+  });
 }
 
 // ── API hooks ──────────────────────────────────────────────────────────────────
@@ -2100,8 +2226,11 @@ export default function ResourcePlannerPage() {
   const [modal, setModal] = useState<AnyModalState | null>(null);
   const [vacationModal, setVacationModal] =
     useState<VacationDialogState | null>(null);
-  const [filterClients, setFilterClients] = useState<string[]>([]);
-  const [filterProjects, setFilterProjects] = useState<number[]>([]);
+  const [excludedProjectIds, setExcludedProjectIds] = useState<Set<number>>(
+    new Set(),
+  );
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [filterSearch, setFilterSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
 
   const dragStateRef = useRef<{
@@ -2418,52 +2547,56 @@ export default function ResourcePlannerPage() {
     [employees],
   );
 
-  // ── Derived filter options ──────────────────────────────────────────────────
-  const availableClients = useMemo(() => {
-    const seen = new Set<string>();
-    const list: string[] = [];
+  // ── Project filter panel data ─────────────────────────────────────────────
+  const projectsByClient = useMemo(() => {
+    const projectMap = new Map<
+      number,
+      { id: number; name: string; clientName: string; color: string }
+    >();
     for (const b of bookings as ResourceBookingFull[]) {
-      if (b.clientName && !seen.has(b.clientName)) {
-        seen.add(b.clientName);
-        list.push(b.clientName);
+      if (!projectMap.has(b.projectId)) {
+        projectMap.set(b.projectId, {
+          id: b.projectId,
+          name: b.projectName,
+          clientName: b.clientName ?? "No Client",
+          color: resolveProjectColor(b.projectId, b.projectColor),
+        });
       }
     }
-    return list.sort();
-  }, [bookings]);
-
-  const availableProjects = useMemo(() => {
-    const seen = new Set<number>();
-    const list: { id: number; name: string }[] = [];
-    for (const b of bookings as ResourceBookingFull[]) {
-      if (!seen.has(b.projectId)) {
-        seen.add(b.projectId);
-        list.push({ id: b.projectId, name: b.projectName });
-      }
+    const clientMap = new Map<
+      string,
+      { id: number; name: string; clientName: string; color: string }[]
+    >();
+    for (const [, proj] of projectMap) {
+      if (!clientMap.has(proj.clientName)) clientMap.set(proj.clientName, []);
+      clientMap.get(proj.clientName)!.push(proj);
     }
-    return list.sort((a, b) => a.name.localeCompare(b.name));
+    return [...clientMap.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([clientName, projs]) => ({
+        clientName,
+        projects: [...projs].sort((a, b) => a.name.localeCompare(b.name)),
+      }));
   }, [bookings]);
 
-  const activeFilters = filterClients.length + filterProjects.length;
+  const filteredProjectGroups = useMemo(() => {
+    if (!filterSearch.trim()) return projectsByClient;
+    const q = filterSearch.toLowerCase();
+    return projectsByClient
+      .map((g) => ({
+        ...g,
+        projects: g.projects.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            g.clientName.toLowerCase().includes(q),
+        ),
+      }))
+      .filter((g) => g.projects.length > 0);
+  }, [projectsByClient, filterSearch]);
 
   // ── Filtered + sorted employees ─────────────────────────────────────────────
   const activeEmployees = useMemo(() => {
-    let list = allActiveEmployees;
-    if (activeFilters > 0) {
-      list = list.filter((emp: any) => {
-        const empBookings = (bookings as ResourceBookingFull[]).filter(
-          (b) => b.employeeId === emp.id,
-        );
-        return empBookings.some((b) => {
-          const clientOk =
-            filterClients.length === 0 ||
-            (b.clientName && filterClients.includes(b.clientName));
-          const projectOk =
-            filterProjects.length === 0 || filterProjects.includes(b.projectId);
-          return clientOk && projectOk;
-        });
-      });
-    }
-    return [...list].sort((a: any, b: any) => {
+    return [...allActiveEmployees].sort((a: any, b: any) => {
       if (sortMode === "alpha-asc") return a.name.localeCompare(b.name);
       if (sortMode === "alpha-desc") return b.name.localeCompare(a.name);
       const aTotal = (bookings as ResourceBookingFull[])
@@ -2474,14 +2607,7 @@ export default function ResourcePlannerPage() {
         .reduce((s, bk) => s + bk.hoursPerDay, 0);
       return sortMode === "alloc-desc" ? bTotal - aTotal : aTotal - bTotal;
     });
-  }, [
-    allActiveEmployees,
-    bookings,
-    filterClients,
-    filterProjects,
-    activeFilters,
-    sortMode,
-  ]);
+  }, [allActiveEmployees, bookings, sortMode]);
 
   // ── Vacation markers ──────────────────────────────────────────────────────
   const vacationsByEmployee = useMemo(() => {
@@ -2576,6 +2702,123 @@ export default function ResourcePlannerPage() {
     windowEnd,
   ]);
 
+  // ── Additive project color patch (fire-and-forget on first load) ─────────
+  const qc = useQueryClient();
+  const colorPatchedRef = useRef(false);
+  useEffect(() => {
+    if (colorPatchedRef.current || !(projects as any[]).length) return;
+    const colorless = (projects as any[]).filter((p: any) => !p.color);
+    if (!colorless.length) {
+      colorPatchedRef.current = true;
+      return;
+    }
+    colorPatchedRef.current = true;
+    colorless.forEach((p: any) => {
+      const color = PROJECT_COLORS[p.id % PROJECT_COLORS.length];
+      fetch(`/api/projects/${p.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ color }),
+      })
+        .then((r) => {
+          if (r.ok)
+            qc.invalidateQueries({
+              queryKey: getListProjectsQueryKey({ includeInactive: false }),
+            });
+        })
+        .catch(() => {});
+    });
+  }, [projects, qc]);
+
+  // ── Per-employee holiday date sets ────────────────────────────────────────
+  const holidayDateSetByEmployee = useMemo(() => {
+    const result: Record<number, Set<string>> = {};
+    for (const emp of activeEmployees) {
+      const id = (emp as any).id;
+      result[id] = new Set((holidaysByEmployee[id] ?? []).map((h) => h.date));
+    }
+    return result;
+  }, [activeEmployees, holidaysByEmployee]);
+
+  // ── Per-employee vacation day maps (date → VacationEntry) ────────────────
+  const vacationDayMapByEmployee = useMemo(() => {
+    const wsStr = format(windowStart, "yyyy-MM-dd");
+    const weStr = format(addDays(windowEnd, -1), "yyyy-MM-dd");
+    const result: Record<number, Map<string, VacationEntry>> = {};
+    for (const emp of activeEmployees) {
+      const id = (emp as any).id;
+      const dayMap = new Map<string, VacationEntry>();
+      for (const v of vacationsByEmployee[id] ?? []) {
+        const start = v.startDate < wsStr ? wsStr : v.startDate;
+        const end = v.endDate > weStr ? weStr : v.endDate;
+        if (start > end) continue;
+        let d = parseISO(start);
+        const eDate = parseISO(end);
+        while (d <= eDate) {
+          dayMap.set(format(d, "yyyy-MM-dd"), v);
+          d = addDays(d, 1);
+        }
+      }
+      result[id] = dayMap;
+    }
+    return result;
+  }, [activeEmployees, vacationsByEmployee, windowStart, windowEnd]);
+
+  // ── Booking segments (day-level, precomputed per employee) ────────────────
+  const segmentsByEmployee = useMemo(() => {
+    const result: Record<number, Segment[]> = {};
+    for (const emp of activeEmployees) {
+      const id = (emp as any).id;
+      const empMask: number[] = Array.isArray((emp as any).workingDaysMask)
+        ? (emp as any).workingDaysMask
+        : [1, 1, 1, 1, 1, 0, 0];
+      const holidayDateSet =
+        holidayDateSetByEmployee[id] ?? new Set<string>();
+      const vacationDayMap =
+        vacationDayMapByEmployee[id] ?? new Map<string, VacationEntry>();
+      const vacationDateSet = new Set(vacationDayMap.keys());
+      const empBookings = (bookingsByEmployee[id] ?? []).filter(
+        (b) => !excludedProjectIds.has(b.projectId),
+      );
+      const allSegs: SegmentBase[] = [];
+      for (const b of empBookings) {
+        const color = resolveProjectColor(b.projectId, b.projectColor);
+        allSegs.push(
+          ...buildBookingSegments(
+            b,
+            windowStart,
+            numWeeks,
+            color,
+            empMask,
+            holidayDateSet,
+            vacationDateSet,
+          ),
+        );
+      }
+      result[id] = assignSegmentLanes(allSegs);
+    }
+    return result;
+  }, [
+    activeEmployees,
+    bookingsByEmployee,
+    excludedProjectIds,
+    windowStart,
+    numWeeks,
+    holidayDateSetByEmployee,
+    vacationDayMapByEmployee,
+  ]);
+
+  // ── Filtered employee list (hide when all bookings excluded by filter) ────
+  const visibleEmployees = useMemo(() => {
+    if (excludedProjectIds.size === 0) return activeEmployees;
+    return activeEmployees.filter((emp: any) => {
+      const allBookings = bookingsByEmployee[(emp as any).id] ?? [];
+      if (allBookings.length === 0) return true; // no bookings → show "Available"
+      return (segmentsByEmployee[(emp as any).id] ?? []).length > 0;
+    });
+  }, [activeEmployees, excludedProjectIds, bookingsByEmployee, segmentsByEmployee]);
+
   // Window label
   const windowLabel = useMemo(() => {
     const startLabel = format(windowStart, "MMM yyyy");
@@ -2629,128 +2872,160 @@ export default function ResourcePlannerPage() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Client filter */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+            {/* Projects filter popover */}
+            <Popover open={filterPanelOpen} onOpenChange={setFilterPanelOpen}>
+              <PopoverTrigger asChild>
                 <Button variant="outline" size="sm" className="gap-1.5">
                   <Filter className="h-3.5 w-3.5" />
-                  Client
-                  {filterClients.length > 0 && (
+                  Projects
+                  {excludedProjectIds.size > 0 && (
                     <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 leading-none">
-                      {filterClients.length}
+                      {excludedProjectIds.size}
                     </span>
                   )}
                   <ChevronDown className="h-3 w-3 text-muted-foreground" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="min-w-[180px] max-h-72 overflow-y-auto"
-              >
-                <DropdownMenuLabel className="text-xs text-muted-foreground">
-                  Filter by client
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {availableClients.length === 0 ? (
-                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                    No clients with bookings
-                  </div>
-                ) : (
-                  availableClients.map((client) => {
-                    const selected = filterClients.includes(client);
-                    return (
-                      <DropdownMenuItem
-                        key={client}
-                        onSelect={(e) => {
-                          e.preventDefault();
-                          setFilterClients((prev) =>
-                            selected
-                              ? prev.filter((c) => c !== client)
-                              : [...prev, client],
-                          );
-                        }}
-                        className="gap-2 cursor-pointer"
-                      >
-                        <span
-                          className={`flex h-4 w-4 items-center justify-center rounded border ${selected ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}
-                        >
-                          {selected && <Check className="h-3 w-3" />}
-                        </span>
-                        <span className="truncate">{client}</span>
-                      </DropdownMenuItem>
-                    );
-                  })
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-72 p-0">
+                {/* Search */}
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+                  <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <Input
+                    placeholder="Search projects…"
+                    value={filterSearch}
+                    onChange={(e) => setFilterSearch(e.target.value)}
+                    className="h-7 border-0 shadow-none px-0 py-0 text-sm focus-visible:ring-0"
+                  />
+                  {filterSearch && (
+                    <button
+                      onClick={() => setFilterSearch("")}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
 
-            {/* Project filter */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5">
-                  <Filter className="h-3.5 w-3.5" />
-                  Project
-                  {filterProjects.length > 0 && (
-                    <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 leading-none">
-                      {filterProjects.length}
+                {/* Project list grouped by client */}
+                <div className="max-h-72 overflow-y-auto py-1">
+                  {filteredProjectGroups.length === 0 ? (
+                    <div className="px-3 py-4 text-xs text-muted-foreground text-center">
+                      No projects found
+                    </div>
+                  ) : (
+                    filteredProjectGroups.map((group) => {
+                      const allVisible = group.projects.every(
+                        (p) => !excludedProjectIds.has(p.id),
+                      );
+                      const someVisible = group.projects.some(
+                        (p) => !excludedProjectIds.has(p.id),
+                      );
+                      return (
+                        <div key={group.clientName}>
+                          {/* Client header — toggle-all */}
+                          <div
+                            className="flex items-center gap-2 px-3 py-1.5 hover:bg-muted/50 cursor-pointer"
+                            onClick={() => {
+                              setExcludedProjectIds((prev) => {
+                                const next = new Set(prev);
+                                if (allVisible) {
+                                  group.projects.forEach((p) =>
+                                    next.add(p.id),
+                                  );
+                                } else {
+                                  group.projects.forEach((p) =>
+                                    next.delete(p.id),
+                                  );
+                                }
+                                return next;
+                              });
+                            }}
+                          >
+                            <span
+                              className={`flex h-4 w-4 items-center justify-center rounded border shrink-0 ${
+                                allVisible
+                                  ? "bg-primary border-primary text-primary-foreground"
+                                  : someVisible
+                                    ? "border-primary"
+                                    : "border-input"
+                              }`}
+                            >
+                              {allVisible && <Check className="h-3 w-3" />}
+                              {!allVisible && someVisible && (
+                                <Minus className="h-2 w-2 text-primary" />
+                              )}
+                            </span>
+                            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide truncate">
+                              {group.clientName}
+                            </span>
+                          </div>
+
+                          {/* Projects in this client group */}
+                          {group.projects.map((p) => {
+                            const visible = !excludedProjectIds.has(p.id);
+                            return (
+                              <div
+                                key={p.id}
+                                className="flex items-center gap-2 pl-8 pr-3 py-1 hover:bg-muted/50 cursor-pointer"
+                                onClick={() => {
+                                  setExcludedProjectIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (visible) {
+                                      next.add(p.id);
+                                    } else {
+                                      next.delete(p.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <span
+                                  className={`flex h-4 w-4 items-center justify-center rounded border shrink-0 ${visible ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}
+                                >
+                                  {visible && <Check className="h-3 w-3" />}
+                                </span>
+                                <span
+                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                  style={{ backgroundColor: p.color }}
+                                />
+                                <span className="text-sm truncate">
+                                  {p.name}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="flex items-center justify-between px-3 py-2 border-t border-border">
+                  <button
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setExcludedProjectIds(new Set())}
+                  >
+                    Show all
+                  </button>
+                  {excludedProjectIds.size > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      {excludedProjectIds.size} hidden
                     </span>
                   )}
-                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="min-w-[200px] max-h-72 overflow-y-auto"
-              >
-                <DropdownMenuLabel className="text-xs text-muted-foreground">
-                  Filter by project
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {availableProjects.length === 0 ? (
-                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                    No projects with bookings
-                  </div>
-                ) : (
-                  availableProjects.map((proj) => {
-                    const selected = filterProjects.includes(proj.id);
-                    return (
-                      <DropdownMenuItem
-                        key={proj.id}
-                        onSelect={(e) => {
-                          e.preventDefault();
-                          setFilterProjects((prev) =>
-                            selected
-                              ? prev.filter((p) => p !== proj.id)
-                              : [...prev, proj.id],
-                          );
-                        }}
-                        className="gap-2 cursor-pointer"
-                      >
-                        <span
-                          className={`flex h-4 w-4 items-center justify-center rounded border ${selected ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}
-                        >
-                          {selected && <Check className="h-3 w-3" />}
-                        </span>
-                        <span className="truncate">{proj.name}</span>
-                      </DropdownMenuItem>
-                    );
-                  })
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </div>
+              </PopoverContent>
+            </Popover>
 
-            {/* Active filters badge + clear */}
-            {activeFilters > 0 && (
+            {/* Clear filter */}
+            {excludedProjectIds.size > 0 && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="gap-1.5 text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  setFilterClients([]);
-                  setFilterProjects([]);
-                }}
+                onClick={() => setExcludedProjectIds(new Set())}
               >
-                Filters ({activeFilters})
+                Clear filter
                 <X className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -2884,39 +3159,42 @@ export default function ResourcePlannerPage() {
             </div>
 
             {/* ── Employee rows ── */}
-            {activeEmployees.length === 0 && (
+            {visibleEmployees.length === 0 && (
               <div className="py-12 text-center text-muted-foreground text-sm">
                 No active employees found.
               </div>
             )}
 
-            {activeEmployees.map((emp: any) => {
-              const empBookings = bookingsByEmployee[emp.id] ?? [];
+            {visibleEmployees.map((emp: any) => {
+              const empId: number = emp.id;
+              const empBookings = bookingsByEmployee[empId] ?? [];
               const cap: number = emp.weeklyCapacityHours ?? 40;
-              const visibleBookings = empBookings.filter(
-                (b) =>
-                  getBarBounds(
-                    b.startDate,
-                    b.endDate,
-                    windowStart,
-                    numWeeks,
-                    cellWidth,
-                  ) !== null,
-              );
-              const laned = assignLanes(visibleBookings);
+              const empMask: number[] = Array.isArray(emp.workingDaysMask)
+                ? emp.workingDaysMask
+                : [1, 1, 1, 1, 1, 0, 0];
+              const dailyCap = getDailyCapacity(cap, empMask);
+              const dayWidth = cellWidth / 7;
+
+              const holidayDateSet =
+                holidayDateSetByEmployee[empId] ?? new Set<string>();
+              const vacationDayMap =
+                vacationDayMapByEmployee[empId] ??
+                new Map<string, VacationEntry>();
+
+              const baseSegments = segmentsByEmployee[empId] ?? [];
               const laneCount =
-                laned.length > 0
-                  ? Math.max(...laned.map((b) => b.lane)) + 1
+                baseSegments.length > 0
+                  ? Math.max(...baseSegments.map((s) => s.lane)) + 1
                   : 0;
               const barH = laneCount > 1 ? BAR_H_STACKED : BAR_H_SINGLE;
               const rowHeight = calcRowHeight(laneCount);
-              const hiddenCount = laned.filter(
-                (b) => b.lane >= MAX_VISIBLE_LANES,
+              const hiddenCount = baseSegments.filter(
+                (s) => s.lane >= MAX_VISIBLE_LANES,
               ).length;
 
               return (
                 <div
-                  key={emp.id}
+                  key={empId}
                   className="flex border-b border-border group"
                   style={{ minHeight: rowHeight }}
                 >
@@ -2932,7 +3210,7 @@ export default function ResourcePlannerPage() {
                         </div>
                       </TooltipTrigger>
                       <TooltipContent side="right" className="text-xs">
-                        {cap}h/week capacity
+                        {cap}h/week · {dailyCap.toFixed(1)}h/day
                       </TooltipContent>
                     </Tooltip>
                     <DropdownMenu>
@@ -2968,11 +3246,10 @@ export default function ResourcePlannerPage() {
                     onClick={(e) => {
                       const rect = e.currentTarget.getBoundingClientRect();
                       const offsetX = e.clientX - rect.left;
-                      const dayWidth = cellWidth / 7;
-                      const dayOffset = Math.floor(offsetX / dayWidth);
+                      const clickDayOffset = Math.floor(offsetX / dayWidth);
                       const clampedOffset = Math.max(
                         0,
-                        Math.min(dayOffset, numWeeks * 7 - 1),
+                        Math.min(clickDayOffset, numWeeks * 7 - 1),
                       );
                       const clickedDate = format(
                         addDays(windowStart, clampedOffset),
@@ -2981,7 +3258,7 @@ export default function ResourcePlannerPage() {
                       openCreateVacationModal(emp, clickedDate, clickedDate);
                     }}
                   >
-                    {/* Capacity cells */}
+                    {/* Week grid background */}
                     <div className="flex h-full absolute inset-0">
                       {weeks.map((_w, i) => (
                         <div
@@ -2992,197 +3269,278 @@ export default function ResourcePlannerPage() {
                       ))}
                     </div>
 
-                    {/* Vacation bands */}
-                    {(vacationsByEmployee[emp.id] ?? []).map((v) => {
-                      const bounds = getBarBounds(
-                        v.startDate,
-                        v.endDate,
-                        windowStart,
-                        numWeeks,
-                        cellWidth,
-                      );
-                      if (!bounds) return null;
-                      return (
-                        <Tooltip key={`vac-${v.id}`}>
-                          <TooltipTrigger asChild>
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              aria-label={`Edit ${v.vacationType.replace(/_/g, " ")} for ${emp.name}`}
-                              className="absolute pointer-events-auto cursor-pointer hover:brightness-90 transition-all focus:outline-none focus:ring-2 focus:ring-orange-400"
-                              style={{
-                                top: 0,
-                                bottom: 0,
-                                left: bounds.left,
-                                width: bounds.width,
-                                background:
-                                  "repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(251,146,60,0.22) 4px, rgba(251,146,60,0.22) 8px)",
-                                zIndex: 2,
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEditVacationModal(v, emp.name);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ")
-                                  openEditVacationModal(v, emp.name);
-                              }}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side="top"
-                            className="text-xs space-y-0.5"
-                          >
-                            <div className="font-semibold capitalize">
-                              {v.vacationType.replace(/_/g, " ")}
-                            </div>
-                            <div>
-                              {format(parseISO(v.startDate), "MMM d")} –{" "}
-                              {format(parseISO(v.endDate), "MMM d, yyyy")}
-                            </div>
-                            {v.note && (
-                              <div className="text-muted-foreground italic">
-                                {v.note}
-                              </div>
-                            )}
-                            <div className="text-muted-foreground text-[10px] pt-0.5">
-                              Click to edit
-                            </div>
-                          </TooltipContent>
-                        </Tooltip>
-                      );
-                    })}
-
-                    {/* Holiday markers */}
-                    {(holidaysByEmployee[emp.id] ?? []).map((h) => {
-                      const dayWidth = cellWidth / 7;
-                      const hDate = parseISO(h.date);
-                      const offset = differenceInDays(hDate, windowStart);
-                      if (offset < 0 || offset >= numWeeks * 7) return null;
+                    {/* Per-day absence cells — holidays and vacations */}
+                    {Array.from({ length: numWeeks * 7 }, (_, offset) => {
+                      const day = addDays(windowStart, offset);
+                      const dayStr = format(day, "yyyy-MM-dd");
                       const left = offset * dayWidth;
-                      return (
-                        <Tooltip key={`hol-${h.id}`}>
-                          <TooltipTrigger asChild>
-                            <div
-                              className="absolute pointer-events-auto"
-                              style={{
-                                top: 0,
-                                bottom: 0,
-                                left,
-                                width: Math.max(dayWidth, 2),
-                                backgroundColor: "rgba(147,197,253,0.35)",
-                                zIndex: 2,
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent
-                            side="top"
-                            className="text-xs space-y-0.5"
-                          >
-                            <div className="font-semibold">{h.name}</div>
-                            <div>{format(hDate, "MMM d, yyyy")}</div>
-                          </TooltipContent>
-                        </Tooltip>
-                      );
+
+                      if (holidayDateSet.has(dayStr)) {
+                        const holiday = (holidaysByEmployee[empId] ?? []).find(
+                          (h) => h.date === dayStr,
+                        );
+                        return (
+                          <Tooltip key={`h-${offset}`}>
+                            <TooltipTrigger asChild>
+                              <div
+                                className="absolute flex items-center justify-center pointer-events-auto"
+                                style={{
+                                  top: 0,
+                                  bottom: 0,
+                                  left,
+                                  width: dayWidth,
+                                  backgroundColor: "rgba(156,163,175,0.18)",
+                                  zIndex: 2,
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {dayWidth >= 12 && (
+                                  <Star className="h-3 w-3 text-gray-400" />
+                                )}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent
+                              side="top"
+                              className="text-xs space-y-0.5"
+                            >
+                              <div className="font-semibold">
+                                {holiday?.name ?? "Public holiday"}
+                              </div>
+                              <div>{format(day, "MMM d, yyyy")}</div>
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+
+                      const vacation = vacationDayMap.get(dayStr);
+                      if (vacation) {
+                        const icon =
+                          vacation.vacationType === "vacation" ? (
+                            <Sun className="h-3 w-3 text-orange-400" />
+                          ) : vacation.vacationType === "sick" ? (
+                            <Thermometer className="h-3 w-3 text-red-400" />
+                          ) : (
+                            <Minus className="h-3 w-3 text-gray-400" />
+                          );
+                        return (
+                          <Tooltip key={`v-${offset}`}>
+                            <TooltipTrigger asChild>
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Edit ${vacation.vacationType.replace(/_/g, " ")} for ${emp.name}`}
+                                className="absolute flex items-center justify-center pointer-events-auto cursor-pointer hover:brightness-90 focus:outline-none focus:ring-2 focus:ring-orange-400"
+                                style={{
+                                  top: 0,
+                                  bottom: 0,
+                                  left,
+                                  width: dayWidth,
+                                  backgroundColor: "rgba(251,146,60,0.14)",
+                                  zIndex: 2,
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEditVacationModal(vacation, emp.name);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ")
+                                    openEditVacationModal(vacation, emp.name);
+                                }}
+                              >
+                                {dayWidth >= 12 && icon}
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent
+                              side="top"
+                              className="text-xs space-y-0.5"
+                            >
+                              <div className="font-semibold capitalize">
+                                {vacation.vacationType.replace(/_/g, " ")}
+                              </div>
+                              <div>
+                                {format(parseISO(vacation.startDate), "MMM d")}{" "}
+                                –{" "}
+                                {format(
+                                  parseISO(vacation.endDate),
+                                  "MMM d, yyyy",
+                                )}
+                              </div>
+                              {vacation.note && (
+                                <div className="text-muted-foreground italic">
+                                  {vacation.note}
+                                </div>
+                              )}
+                              <div className="text-muted-foreground text-[10px] pt-0.5">
+                                Click to edit
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        );
+                      }
+
+                      return null;
                     })}
 
-                    {/* Booking bars — stacked by lane */}
-                    {laned.map((b) => {
-                      if (b.lane >= MAX_VISIBLE_LANES) return null;
-                      const ghost =
-                        dragGhost?.bookingId === b.id ? dragGhost : null;
-                      const bounds = getBarBounds(
-                        ghost ? ghost.startDate : b.startDate,
-                        ghost ? ghost.endDate : b.endDate,
-                        windowStart,
-                        numWeeks,
-                        cellWidth,
-                      );
-                      if (!bounds) return null;
-                      const color = resolveProjectColor(
-                        b.projectId,
-                        b.projectColor,
-                      );
-                      const barTop = BAR_PAD_TOP + b.lane * (barH + BAR_GAP);
-                      const hpd =
-                        b.hoursPerDay % 1 === 0
-                          ? String(b.hoursPerDay)
-                          : b.hoursPerDay.toFixed(1);
-                      const label = [
-                        b.clientName
-                          ? `${b.clientName} – ${b.projectName}`
-                          : b.projectName,
-                        b.projectRoleName,
-                        `${hpd}h/d`,
-                      ]
-                        .filter(Boolean)
-                        .join(" | ");
-                      const charBudget = Math.max(
-                        1,
-                        Math.floor(bounds.width / 7) - 1,
-                      );
-                      const isDragging = ghost !== null;
-                      const bDayWidth = cellWidth / 7;
+                    {/* "Available" label when no visible segments */}
+                    {baseSegments.length === 0 && (
+                      <div className="absolute inset-0 flex items-center px-4 pointer-events-none">
+                        <span className="text-xs text-muted-foreground/40 select-none">
+                          Available
+                        </span>
+                      </div>
+                    )}
 
+                    {/* Booking segments — proportional bottom-fill per day */}
+                    {baseSegments.map((seg) => {
+                      if (seg.lane >= MAX_VISIBLE_LANES) return null;
+                      const isDragging =
+                        dragGhost?.bookingId === seg.bookingId;
+                      const barTop =
+                        BAR_PAD_TOP + seg.lane * (barH + BAR_GAP);
+                      const left = seg.startOffset * dayWidth;
+                      const width =
+                        (seg.endOffset - seg.startOffset + 1) * dayWidth;
                       const showCloseOut =
                         !isDragging &&
-                        !b.pastReleasedAt &&
-                        b.startDate < todayStr &&
-                        bounds.width > 32;
+                        !seg.pastReleasedAt &&
+                        seg.bookingStartDate < todayStr &&
+                        width > 32;
+                      const segKey = `seg-${seg.bookingId}-${seg.startOffset}`;
 
                       const barDiv = (
                         <div
-                          className={`absolute rounded-sm flex items-center px-2 overflow-hidden shadow-sm group/bar${isDragging ? "" : " hover:brightness-90 transition-all"}`}
+                          className={`absolute overflow-hidden group/bar${isDragging ? "" : " transition-all"}`}
                           style={{
                             top: barTop,
                             height: barH,
-                            left: bounds.left,
-                            width: bounds.width,
-                            backgroundColor: color,
-                            borderLeft: `3px solid ${darkenColor(color)}`,
-                            opacity: isDragging ? 0.75 : 0.9,
+                            left,
+                            width,
+                            borderRadius: 3,
+                            opacity: isDragging ? 0.35 : 1,
                             cursor: isDragging ? "grabbing" : "grab",
                             zIndex: isDragging ? 5 : 4,
                             userSelect: "none",
+                            border: `1px solid ${seg.color}60`,
+                            backgroundColor: `${seg.color}18`,
                           }}
-                          onMouseDown={(e) =>
-                            startBookingDrag(e, b, "move", bDayWidth)
-                          }
+                          onMouseDown={(e) => {
+                            const booking = empBookings.find(
+                              (b) => b.id === seg.bookingId,
+                            );
+                            if (booking)
+                              startBookingDrag(e, booking, "move", dayWidth);
+                          }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Left resize handle */}
+                          {/* Per-day proportional fill bars */}
                           <div
-                            className="absolute top-0 left-0 h-full"
-                            style={{ width: 7, cursor: "ew-resize", zIndex: 1 }}
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              startBookingDrag(e, b, "resize-start", bDayWidth);
-                            }}
-                          />
-                          {bounds.width > 16 && (
-                            <div className="text-white text-[10px] font-semibold leading-none truncate select-none">
-                              {isDragging
-                                ? `${format(parseISO(ghost!.startDate), "MMM d")} – ${format(parseISO(ghost!.endDate), "MMM d")}`
-                                : label.length <= charBudget
-                                  ? label
-                                  : label.slice(0, charBudget) + "…"}
-                            </div>
-                          )}
-                          {/* Released indicator */}
-                          {b.pastReleasedAt && bounds.width > 24 && (
+                            className="absolute inset-0 flex"
+                            style={{ borderRadius: 3, overflow: "hidden" }}
+                          >
+                            {seg.dailyHours.map((h, i) => {
+                              const fill =
+                                dailyCap > 0
+                                  ? Math.min(1, h / dailyCap)
+                                  : 0;
+                              const isOver =
+                                dailyCap > 0 && h > dailyCap;
+                              const freeH =
+                                dailyCap > 0 ? dailyCap - h : null;
+                              const showFreeLabel =
+                                dayWidth > 28 &&
+                                barH >= 18 &&
+                                freeH !== null &&
+                                Math.abs(freeH) >= 0.1;
+                              return (
+                                <div
+                                  key={i}
+                                  style={{
+                                    width: dayWidth,
+                                    flexShrink: 0,
+                                    position: "relative",
+                                    borderLeft:
+                                      i > 0
+                                        ? "1px solid rgba(255,255,255,0.25)"
+                                        : undefined,
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      position: "absolute",
+                                      bottom: 0,
+                                      left: 0,
+                                      right: 0,
+                                      height: `${fill * 100}%`,
+                                      backgroundColor: isOver
+                                        ? "rgba(239,68,68,0.80)"
+                                        : `${seg.color}CC`,
+                                    }}
+                                  />
+                                  {showFreeLabel && (
+                                    <div
+                                      style={{
+                                        position: "absolute",
+                                        bottom: 2,
+                                        right: 2,
+                                        fontSize: 8,
+                                        fontWeight: 700,
+                                        lineHeight: 1,
+                                        color: isOver
+                                          ? "rgb(185,28,28)"
+                                          : "rgba(0,0,0,0.38)",
+                                        zIndex: 2,
+                                        pointerEvents: "none",
+                                        userSelect: "none",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                    >
+                                      {isOver
+                                        ? `-${(-freeH!).toFixed(1).replace(/\.0$/, "")}h`
+                                        : `+${freeH!.toFixed(1).replace(/\.0$/, "")}h`}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Role/project name text */}
+                          {width > 20 && (
                             <div
-                              className="absolute top-0.5 right-2 pointer-events-none"
+                              className="absolute inset-0 flex items-center px-1.5 pointer-events-none"
                               style={{ zIndex: 2 }}
                             >
-                              <Clock className="h-3 w-3 text-white/70" />
+                              <span
+                                className="text-[10px] font-semibold truncate select-none leading-none"
+                                style={{
+                                  color: seg.color,
+                                  filter:
+                                    "drop-shadow(0 0 3px rgba(255,255,255,0.9))",
+                                }}
+                              >
+                                {seg.roleName ?? seg.projectName}
+                              </span>
                             </div>
                           )}
-                          {/* Close Out button — visible on bar hover when past days exist */}
+
+                          {/* Past-released indicator */}
+                          {seg.pastReleasedAt && width > 24 && (
+                            <div
+                              className="absolute top-0.5 right-1.5 pointer-events-none"
+                              style={{ zIndex: 2 }}
+                            >
+                              <Clock
+                                className="h-3 w-3"
+                                style={{ color: seg.color, opacity: 0.7 }}
+                              />
+                            </div>
+                          )}
+
+                          {/* Close Out button */}
                           {showCloseOut && (
                             <button
                               type="button"
-                              className="absolute top-0.5 right-2 opacity-0 group-hover/bar:opacity-100 transition-opacity rounded p-0.5 hover:bg-white/20 focus:outline-none focus:bg-white/20"
+                              className="absolute top-0.5 right-1.5 opacity-0 group-hover/bar:opacity-100 transition-opacity rounded p-0.5 hover:bg-black/10 focus:outline-none"
                               style={{ zIndex: 6, cursor: "pointer" }}
                               title="Close Out — release undelivered past days"
                               onMouseDown={(e) => {
@@ -3191,19 +3549,62 @@ export default function ResourcePlannerPage() {
                               }}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openCloseOutModal(b);
+                                const booking = empBookings.find(
+                                  (b) => b.id === seg.bookingId,
+                                );
+                                if (booking) openCloseOutModal(booking);
                               }}
                             >
-                              <Clock className="h-3 w-3 text-white/90" />
+                              <Clock
+                                className="h-3 w-3"
+                                style={{ color: seg.color }}
+                              />
                             </button>
                           )}
+
+                          {/* Left resize handle */}
+                          <div
+                            className="absolute top-0 left-0 h-full"
+                            style={{
+                              width: 7,
+                              cursor: "ew-resize",
+                              zIndex: 3,
+                            }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              const booking = empBookings.find(
+                                (b) => b.id === seg.bookingId,
+                              );
+                              if (booking)
+                                startBookingDrag(
+                                  e,
+                                  booking,
+                                  "resize-start",
+                                  dayWidth,
+                                );
+                            }}
+                          />
+
                           {/* Right resize handle */}
                           <div
                             className="absolute top-0 right-0 h-full"
-                            style={{ width: 7, cursor: "ew-resize", zIndex: 1 }}
+                            style={{
+                              width: 7,
+                              cursor: "ew-resize",
+                              zIndex: 3,
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
-                              startBookingDrag(e, b, "resize-end", bDayWidth);
+                              const booking = empBookings.find(
+                                (b) => b.id === seg.bookingId,
+                              );
+                              if (booking)
+                                startBookingDrag(
+                                  e,
+                                  booking,
+                                  "resize-end",
+                                  dayWidth,
+                                );
                             }}
                           />
                         </div>
@@ -3211,73 +3612,77 @@ export default function ResourcePlannerPage() {
 
                       if (isDragging) {
                         return (
-                          <div key={b.id} style={{ display: "contents" }}>
+                          <div key={segKey} style={{ display: "contents" }}>
                             {barDiv}
                           </div>
                         );
                       }
 
                       return (
-                        <Tooltip key={b.id}>
+                        <Tooltip key={segKey}>
                           <TooltipTrigger asChild>{barDiv}</TooltipTrigger>
                           <TooltipContent
                             side="top"
                             className="text-xs max-w-[240px] p-0"
                           >
-                            {/* Header: project + client */}
                             <div className="px-3 pt-2.5 pb-1.5">
                               <div className="font-semibold text-gray-900">
-                                {b.projectName}
+                                {seg.projectName}
                               </div>
-                              {b.clientName && (
+                              {seg.clientName && (
                                 <div className="text-gray-500">
-                                  {b.clientName}
+                                  {seg.clientName}
                                 </div>
                               )}
                             </div>
-
-                            {/* Details: role, allocation, dates, total */}
                             <div className="px-3 pb-2 space-y-0.5 border-t border-gray-200 pt-1.5">
-                              {b.projectRoleName && (
+                              {seg.roleName && (
                                 <div className="text-primary font-medium">
-                                  {b.projectRoleName}
-                                  {b.dayRate
-                                    ? ` — €${b.dayRate.toLocaleString("de-DE")}/day`
+                                  {seg.roleName}
+                                  {seg.dayRate
+                                    ? ` — €${seg.dayRate.toLocaleString("de-DE")}/day`
                                     : ""}
                                 </div>
                               )}
-                              <div className="text-gray-700">{hpd}h/day</div>
                               <div className="text-gray-700">
-                                {format(parseISO(b.startDate), "MMM d")} –{" "}
-                                {format(parseISO(b.endDate), "MMM d, yyyy")}
+                                {format(
+                                  parseISO(seg.bookingStartDate),
+                                  "MMM d",
+                                )}{" "}
+                                –{" "}
+                                {format(
+                                  parseISO(seg.bookingEndDate),
+                                  "MMM d, yyyy",
+                                )}
                               </div>
                               <div className="text-gray-700">
-                                Total:{" "}
-                                {(
-                                  countWeekdaysBetween(b.startDate, b.endDate) *
-                                  b.hoursPerDay
-                                ).toFixed(0)}
-                                h
+                                {seg.dailyHours
+                                  .reduce((s, h) => s + h, 0)
+                                  .toFixed(1)
+                                  .replace(/\.0$/, "")}
+                                h in this segment
                               </div>
-                              {b.notes && (
+                              {seg.notes && (
                                 <div className="text-gray-500 italic">
-                                  {b.notes}
+                                  {seg.notes}
                                 </div>
                               )}
-                              {b.pastReleasedAt && (
+                              {seg.pastReleasedAt && (
                                 <div className="flex items-center gap-1 text-amber-600 font-medium">
                                   <Clock className="h-3 w-3" />
                                   Past plan released
                                 </div>
                               )}
                             </div>
-
-                            {/* Budget strip — full width, colored background */}
-                            {b.projectRoleId &&
+                            {seg.projectRoleId &&
                               (() => {
-                                const rb = roleBudgetMap.get(b.projectRoleId);
-                                if (!rb || rb.budgetedDays == null) return null;
-                                const isOver = rb.plannedDays > rb.budgetedDays;
+                                const rb = roleBudgetMap.get(
+                                  seg.projectRoleId,
+                                );
+                                if (!rb || rb.budgetedDays == null)
+                                  return null;
+                                const isOver =
+                                  rb.plannedDays > rb.budgetedDays;
                                 return (
                                   <div
                                     className={`px-3 py-1.5 border-t border-gray-200 ${
@@ -3297,7 +3702,56 @@ export default function ResourcePlannerPage() {
                       );
                     })}
 
-                    {/* "+N more" indicator for overflowing lanes */}
+                    {/* Ghost bar for active drag */}
+                    {dragGhost &&
+                      empBookings.some(
+                        (b) => b.id === dragGhost.bookingId,
+                      ) &&
+                      (() => {
+                        const bounds = getBarBounds(
+                          dragGhost.startDate,
+                          dragGhost.endDate,
+                          windowStart,
+                          numWeeks,
+                          cellWidth,
+                        );
+                        if (!bounds) return null;
+                        const dragged = empBookings.find(
+                          (b) => b.id === dragGhost.bookingId,
+                        )!;
+                        const color = resolveProjectColor(
+                          dragged.projectId,
+                          dragged.projectColor,
+                        );
+                        return (
+                          <div
+                            className="absolute pointer-events-none rounded-sm flex items-center px-2"
+                            style={{
+                              top: BAR_PAD_TOP,
+                              height: BAR_H_SINGLE,
+                              left: bounds.left,
+                              width: bounds.width,
+                              backgroundColor: color,
+                              opacity: 0.85,
+                              zIndex: 6,
+                              userSelect: "none",
+                            }}
+                          >
+                            {bounds.width > 48 && (
+                              <span className="text-white text-[10px] font-semibold truncate">
+                                {format(
+                                  parseISO(dragGhost.startDate),
+                                  "MMM d",
+                                )}{" "}
+                                –{" "}
+                                {format(parseISO(dragGhost.endDate), "MMM d")}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                    {/* "+N more" indicator */}
                     {hiddenCount > 0 && (
                       <div
                         className="absolute text-[10px] text-muted-foreground select-none pointer-events-none px-1"
