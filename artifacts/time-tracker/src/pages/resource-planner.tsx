@@ -2283,6 +2283,13 @@ export default function ResourcePlannerPage() {
       query: { queryKey: getListProjectsQueryKey({ includeInactive: false }) },
     },
   );
+  // All projects (including inactive) used only for the one-time color backfill
+  const { data: allProjectsForPatch = [] } = useListProjects(
+    { includeInactive: true },
+    {
+      query: { queryKey: getListProjectsQueryKey({ includeInactive: true }) },
+    },
+  );
   const { data: bookings = [], isLoading: bookingsLoading } =
     useResourceBookings();
   const { data: allVacations = [] } = useAllVacations();
@@ -2712,30 +2719,35 @@ export default function ResourcePlannerPage() {
   const qc = useQueryClient();
   const colorPatchedRef = useRef(false);
   useEffect(() => {
-    if (colorPatchedRef.current || !(projects as any[]).length) return;
-    const colorless = (projects as any[]).filter((p: any) => !p.color);
+    if (colorPatchedRef.current || !(allProjectsForPatch as any[]).length)
+      return;
+    const colorless = (allProjectsForPatch as any[]).filter(
+      (p: any) => !p.color,
+    );
     if (!colorless.length) {
       colorPatchedRef.current = true;
       return;
     }
     colorPatchedRef.current = true;
-    colorless.forEach((p: any) => {
-      const color = PROJECT_COLORS[p.id % PROJECT_COLORS.length];
-      fetch(`/api/projects/${p.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ color }),
-      })
-        .then((r) => {
-          if (r.ok)
-            qc.invalidateQueries({
-              queryKey: getListProjectsQueryKey({ includeInactive: false }),
-            });
-        })
-        .catch(() => {});
+    Promise.all(
+      colorless.map((p: any) => {
+        const color = PROJECT_COLORS[p.id % PROJECT_COLORS.length];
+        return fetch(`/api/projects/${p.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ color }),
+        });
+      }),
+    ).then(() => {
+      qc.invalidateQueries({
+        queryKey: getListProjectsQueryKey({ includeInactive: false }),
+      });
+      qc.invalidateQueries({
+        queryKey: getListProjectsQueryKey({ includeInactive: true }),
+      });
     });
-  }, [projects, qc]);
+  }, [allProjectsForPatch, qc]);
 
   // ── Per-employee holiday date sets ────────────────────────────────────────
   const holidayDateSetByEmployee = useMemo(() => {
@@ -3542,10 +3554,10 @@ export default function ResourcePlannerPage() {
                                   <div
                                     style={{
                                       position: "absolute",
+                                      top: 0,
                                       bottom: 0,
                                       left: 0,
-                                      right: 0,
-                                      height: `${fill * 100}%`,
+                                      width: `${fill * 100}%`,
                                       backgroundColor: isOver
                                         ? "rgba(239,68,68,0.80)"
                                         : `${seg.color}CC`,
@@ -3774,8 +3786,8 @@ export default function ResourcePlannerPage() {
                     })}
 
                     {/* Per-day free/over labels based on daily total across all bookings */}
-                    {dayWidth > 28 &&
-                      barH >= 18 &&
+                    {dayWidth > 4 &&
+                      barH >= 14 &&
                       Array.from({ length: numWeeks * 7 }, (_, offset) => {
                         const day = addDays(windowStart, offset);
                         const dayStr = format(day, "yyyy-MM-dd");
@@ -3821,7 +3833,9 @@ export default function ResourcePlannerPage() {
                           >
                             {isOverDay
                               ? `-${(-freeH).toFixed(1).replace(/\.0$/, "")}h`
-                              : `${freeH.toFixed(1).replace(/\.0$/, "")}h free`}
+                              : dayWidth > 16
+                              ? `${freeH.toFixed(1).replace(/\.0$/, "")}h free`
+                              : `${freeH.toFixed(1).replace(/\.0$/, "")}h`}
                           </div>
                         );
                       })}
