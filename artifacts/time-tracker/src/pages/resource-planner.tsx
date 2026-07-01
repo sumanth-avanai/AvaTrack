@@ -142,7 +142,7 @@ const SIDE_BUFFER_DAYS = 30;
 // ── Ribbon + hours-lane booking visual constants ─────────────────────────────
 const RIBBON_H = 20;
 const HOURS_LANE_H = 48;
-const LANE_GAP = 4;
+const LANE_GAP = 2;
 const LANE_TOTAL_H = RIBBON_H + HOURS_LANE_H;
 const BAR_PAD_TOP = 4;
 const MAX_VISIBLE_LANES = 3;
@@ -251,7 +251,7 @@ function getDailyCapacity(weeklyCapacityHours: number, mask: number[]): number {
   return activeDays > 0 ? weeklyCapacityHours / activeDays : 0;
 }
 
-/** Build segments (consecutive non-zero days) for one booking over the visible window. */
+/** Build one unbroken segment per booking, clipped to the visible window. */
 function buildBookingSegments(
   booking: ResourceBookingFull,
   windowStartDate: Date,
@@ -261,11 +261,6 @@ function buildBookingSegments(
   holidayDateSet: Set<string>,
   vacationDateSet: Set<string>,
 ): SegmentBase[] {
-  const segments: SegmentBase[] = [];
-  const totalDays = numDays;
-  let curStart: number | null = null;
-  let dailyHours: number[] = [];
-
   const base: Omit<SegmentBase, "startOffset" | "endOffset" | "dailyHours"> = {
     bookingId: booking.id,
     roleName: booking.projectRoleName,
@@ -281,30 +276,30 @@ function buildBookingSegments(
     projectId: booking.projectId,
   };
 
-  for (let offset = 0; offset < totalDays; offset++) {
-    const day = addDays(windowStartDate, offset);
-    const hours = getHoursForDayBooking(
-      booking,
-      day,
-      empMask,
-      holidayDateSet,
-      vacationDateSet,
+  // Clip booking span to visible window — produce ONE unbroken segment so the
+  // period ribbon is always continuous. 0h days (weekends, holidays, vacations)
+  // are included in dailyHours as 0 so the hours lane can render them correctly.
+  const bookStart = parseISO(booking.startDate);
+  const bookEnd = parseISO(booking.endDate);
+  const winEnd = addDays(windowStartDate, numDays - 1);
+
+  if (bookEnd < windowStartDate || bookStart > winEnd) return [];
+
+  const clipStart = bookStart < windowStartDate ? windowStartDate : bookStart;
+  const clipEnd = bookEnd > winEnd ? winEnd : bookEnd;
+
+  const startOffset = differenceInDays(clipStart, windowStartDate);
+  const endOffset = differenceInDays(clipEnd, windowStartDate);
+
+  const dailyHours: number[] = [];
+  for (let i = startOffset; i <= endOffset; i++) {
+    const day = addDays(windowStartDate, i);
+    dailyHours.push(
+      getHoursForDayBooking(booking, day, empMask, holidayDateSet, vacationDateSet),
     );
-    if (hours > 0) {
-      if (curStart === null) curStart = offset;
-      dailyHours.push(hours);
-    } else {
-      if (curStart !== null) {
-        segments.push({ ...base, startOffset: curStart, endOffset: offset - 1, dailyHours });
-        curStart = null;
-        dailyHours = [];
-      }
-    }
   }
-  if (curStart !== null) {
-    segments.push({ ...base, startOffset: curStart, endOffset: totalDays - 1, dailyHours });
-  }
-  return segments;
+
+  return [{ ...base, startOffset, endOffset, dailyHours }];
 }
 
 /** Assign lanes to segments using greedy interval scheduling. */
