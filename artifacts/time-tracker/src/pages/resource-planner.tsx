@@ -2271,6 +2271,7 @@ export default function ResourcePlannerPage() {
   const zoomRef = useRef<ZoomLevel>("month");
   const focusDateRef = useRef<Date>(startOfMonth(today));
   const pendingScrollRef = useRef<number | null>(null);
+  const rebaseScrollRef = useRef<number | null>(null);
   const [gridAvailableWidth, setGridAvailableWidth] = useState(800);
   const [isPanning, setIsPanning] = useState(false);
   const panDragRef = useRef<{
@@ -2913,11 +2914,16 @@ export default function ResourcePlannerPage() {
   useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
   useEffect(() => { focusDateRef.current = focusDate; }, [focusDate]);
 
-  // Apply a pending scroll position on the next paint (set by navigateTo / zoom change)
+  // Apply a pending scroll position on the next paint (set by navigateTo / zoom change / rebase)
   useLayoutEffect(() => {
-    if (pendingScrollRef.current !== null && gridRef.current) {
-      gridRef.current.scrollLeft = pendingScrollRef.current;
-      pendingScrollRef.current = null;
+    if (gridRef.current) {
+      if (pendingScrollRef.current !== null) {
+        gridRef.current.scrollLeft = pendingScrollRef.current;
+        pendingScrollRef.current = null;
+      } else if (rebaseScrollRef.current !== null) {
+        gridRef.current.scrollLeft = rebaseScrollRef.current;
+        rebaseScrollRef.current = null;
+      }
     }
   });
 
@@ -3180,7 +3186,7 @@ export default function ResourcePlannerPage() {
                     className="px-2.5 py-1.5 rounded-md text-left focus:outline-none"
                   >
                     <div
-                      className="text-[10px] leading-none mb-0.5 truncate max-w-[120px]"
+                      className="text-[11px] leading-none mb-0.5 truncate max-w-[120px]"
                       style={{ color: "rgba(255,255,255,0.75)" }}
                     >
                       {p.clientName}
@@ -3202,9 +3208,28 @@ export default function ResourcePlannerPage() {
         <div
           ref={gridRef}
           className={`flex-1 overflow-auto relative${isPanning ? " cursor-grabbing select-none" : ""}`}
-          onScroll={(e) =>
-            setTimelineScrollLeft(e.currentTarget.scrollLeft)
-          }
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const sl = el.scrollLeft;
+            setTimelineScrollLeft(sl);
+
+            // Edge-rebase: when the user pans near the left or right wall,
+            // silently shift windowStart and compensate the scroll position so
+            // the visible content stays in place — giving effectively infinite scroll.
+            if (pendingScrollRef.current !== null || rebaseScrollRef.current !== null) return;
+            const dw = dayWidthRef.current;
+            const threshold = SIDE_BUFFER_DAYS * dw * 0.5;
+            if (sl < threshold) {
+              setWindowStart((ws) => addDays(ws, -SIDE_BUFFER_DAYS));
+              rebaseScrollRef.current = sl + SIDE_BUFFER_DAYS * dw;
+            } else {
+              const maxSl = el.scrollWidth - el.clientWidth;
+              if (sl > maxSl - threshold) {
+                setWindowStart((ws) => addDays(ws, SIDE_BUFFER_DAYS));
+                rebaseScrollRef.current = sl - SIDE_BUFFER_DAYS * dw;
+              }
+            }
+          }}
         >
           {bookingsLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-50 text-sm text-muted-foreground">
@@ -3248,7 +3273,7 @@ export default function ResourcePlannerPage() {
                       className="shrink-0 px-2 py-1 text-xs font-semibold text-muted-foreground border-r border-border/50"
                       style={{ width: contentWidth }}
                     >
-                      {format(windowStart, "yyyy")}
+                      {format(focusDate, "yyyy")}
                     </div>
                   ) : (
                     monthGroups.map((m, i) => (
@@ -3285,7 +3310,7 @@ export default function ResourcePlannerPage() {
                       style={{ width: dayWidth, height: 24 }}
                     >
                       <span
-                        className={`text-[10px] leading-none ${
+                        className={`text-[11px] leading-none ${
                           d.getDay() === 0 || d.getDay() === 6
                             ? "text-muted-foreground/40"
                             : "text-foreground/60"
@@ -3307,7 +3332,7 @@ export default function ResourcePlannerPage() {
                           className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center px-1"
                           style={{ width: chunkWidth, height: 24 }}
                         >
-                          <span className="text-[10px] text-foreground/60">
+                          <span className="text-[11px] text-foreground/60">
                             {format(d, "d")}
                           </span>
                         </div>
@@ -3319,7 +3344,7 @@ export default function ResourcePlannerPage() {
                       className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center px-1"
                       style={{ width: m.dayCount * dayWidth, height: 24 }}
                     >
-                      <span className="text-[10px] text-foreground/60 truncate">
+                      <span className="text-[11px] text-foreground/60 truncate">
                         {m.label.split(" ")[0]}
                       </span>
                     </div>
