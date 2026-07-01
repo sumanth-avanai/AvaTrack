@@ -2285,6 +2285,9 @@ export default function ResourcePlannerPage() {
   const focusDateRef = useRef<Date>(startOfMonth(today));
   const pendingScrollRef = useRef<number | null>(null);
   const rebaseScrollRef = useRef<number | null>(null);
+  // Guards against the async scroll event fired by a programmatic scrollLeft assignment
+  // triggering a second rebase immediately after the first one settles.
+  const rebaseGuardRef = useRef(false);
   const windowStartRef = useRef<Date>(windowStart);
   const [gridAvailableWidth, setGridAvailableWidth] = useState(800);
   const [isPanning, setIsPanning] = useState(false);
@@ -2970,6 +2973,12 @@ export default function ResourcePlannerPage() {
       } else if (rebaseScrollRef.current !== null) {
         gridRef.current.scrollLeft = rebaseScrollRef.current;
         rebaseScrollRef.current = null;
+        // Block the async scroll event that the browser fires after a programmatic
+        // scrollLeft assignment — otherwise it can immediately re-trigger a rebase.
+        rebaseGuardRef.current = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          rebaseGuardRef.current = false;
+        }));
       }
     }
   });
@@ -3263,7 +3272,7 @@ export default function ResourcePlannerPage() {
             // Edge-rebase: when the user pans near the left or right wall,
             // silently shift windowStart and compensate the scroll position so
             // the visible content stays in place — giving effectively infinite scroll.
-            if (pendingScrollRef.current !== null || rebaseScrollRef.current !== null) return;
+            if (pendingScrollRef.current !== null || rebaseScrollRef.current !== null || rebaseGuardRef.current) return;
             const dw = dayWidthRef.current;
             const threshold = SIDE_BUFFER_DAYS * dw * 0.5;
             const ws = windowStartRef.current;
@@ -3684,12 +3693,24 @@ export default function ResourcePlannerPage() {
                         segWidth > 32;
                       const segKey = `seg-${seg.bookingId}-${seg.startOffset}`;
 
-                      // Pixel left positions (relative to segment start) of each Monday in ribbon
-                      const mondayPixelLefts: number[] = [];
-                      for (let i = 1; i <= seg.endOffset - seg.startOffset; i++) {
-                        const d = addDays(windowStart, seg.startOffset + i);
-                        if (d.getDay() === 1) {
-                          mondayPixelLefts.push((dayLefts[seg.startOffset + i] ?? 0) - segLeft);
+                      // Repeat label positions (relative to segment start) inside the ribbon.
+                      // Week zoom → repeat at each Monday.
+                      // All other zooms → repeat at each month boundary (1st of month).
+                      // Min 60 px gap between labels so they don't pile up at small zoom levels.
+                      const ribbonRepeatLefts: number[] = [];
+                      {
+                        const isWeekZoom = zoom === "week";
+                        let lastLabelPx = -60; // allow first repeat even close to left edge
+                        for (let i = 1; i <= seg.endOffset - seg.startOffset; i++) {
+                          const d = addDays(windowStart, seg.startOffset + i);
+                          const isRepeat = isWeekZoom ? d.getDay() === 1 : d.getDate() === 1;
+                          if (isRepeat) {
+                            const px = (dayLefts[seg.startOffset + i] ?? 0) - segLeft;
+                            if (px - lastLabelPx >= 60) {
+                              ribbonRepeatLefts.push(px);
+                              lastLabelPx = px;
+                            }
+                          }
                         }
                       }
 
@@ -3746,8 +3767,8 @@ export default function ResourcePlannerPage() {
                               border: `1px solid ${seg.color}55`,
                             }}
                           >
-                            {/* Role/project name at segment start */}
-                            {dayWidth >= 16 && (
+                            {/* Role/project name at segment start — visible whenever the bar is at least ~20 px wide */}
+                            {segWidth > 20 && (
                               <span
                                 className="absolute pointer-events-none select-none"
                                 style={{
@@ -3766,8 +3787,8 @@ export default function ResourcePlannerPage() {
                                 {seg.roleName ?? seg.projectName}
                               </span>
                             )}
-                            {/* Repeat label at each Monday within the segment */}
-                            {dayWidth >= 16 && mondayPixelLefts.map((pixLeft) => (
+                            {/* Repeat label at each Monday (week zoom) or month boundary (other zooms) */}
+                            {segWidth > 20 && ribbonRepeatLefts.map((pixLeft) => (
                               <span
                                 key={pixLeft}
                                 className="absolute pointer-events-none select-none"
