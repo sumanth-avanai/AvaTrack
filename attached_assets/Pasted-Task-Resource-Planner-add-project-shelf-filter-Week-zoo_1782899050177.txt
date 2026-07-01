@@ -1,0 +1,76 @@
+Task: Resource Planner — add project shelf filter + Week zoom level
+
+IMPORTANT: Do not modify any Booking, Employee, Project, Holiday, or
+Vacation data. This is a UI/filtering addition only.
+
+CONTEXT: This builds on the previous fix (single label per segment, no
+per-day overlay outside Week zoom, 11px minimum font size). Keep all of
+that behavior intact.
+
+1. ADD "WEEK" ZOOM LEVEL
+- Add "Week" as a third zoom option alongside the existing "Month" and
+  "Quarter" (order: Week | Month | Quarter).
+- Week zoom is the zoom level where per-day proportional fill + "Xh free" /
+  "-Xh" overlays (from the previous task) are shown. Month and Quarter keep
+  rendering continuous single-color segments with one label each, as
+  already fixed.
+
+2. REPLACE THE CLIENT/PROJECT DROPDOWN FILTERS WITH A "PROJECT SHELF"
+- Remove the existing separate "Client" and "Project" dropdown filters.
+- Add a horizontal, wrapping shelf of project tiles above the timeline,
+  one tile per project. Each tile:
+  - Solid background in the project's color (Project.colour)
+  - Two lines of text: client name (smaller, ~80% opacity) above the
+    project name (bold)
+  - Fully clickable (the whole tile, not a small icon)
+- Tiles wrap onto multiple lines as needed — do not truncate the list or
+  hide tiles behind a "show more" control by default.
+- Clicking a tile toggles its "selected" state. Multiple tiles can be
+  selected simultaneously (this is a multi-select highlight, not a
+  single-select radio filter).
+- Whenever at least one tile is selected:
+  - Selected tiles visually reorder to the front/top of the shelf (stable
+    sort: selected tiles first in their original relative order, then
+    unselected tiles in their original relative order).
+  - Selected tiles render at full opacity with a visible selection
+    indicator (e.g. a border/ring in a contrasting shade of the tile's own
+    color — do not introduce an unrelated accent color for this).
+  - Unselected tiles shrink slightly and render at reduced opacity
+    (dimmed, not hidden) — they must remain readable, just visually
+    de-emphasized.
+- When no tile is selected, all tiles render at full opacity in their
+  default (unsorted) order.
+- Add a "Reset" control near the shelf that clears all selections and
+  restores default order/opacity.
+
+3. HIGHLIGHT BEHAVIOR IN THE TIMELINE (NOT hide/filter)
+- Selecting one or more project tiles does NOT remove any employee rows and
+  does NOT remove any booking segments from the timeline.
+- Instead: booking segments belonging to a selected project render at full
+  opacity/normal appearance; booking segments belonging to non-selected
+  projects render dimmed (reduced opacity), consistent with the dimmed
+  tile treatment in the shelf.
+- Absence cells (holiday/vacation/sick/other) are never dimmed by this
+  filter — they stay at normal visibility regardless of project selection.
+- Employees with no booking at all remain visible with their "available"
+  label at normal opacity, unaffected by the selection.
+
+ACCEPTANCE CRITERIA
+- [ ] Zoom control shows Week, Month, Quarter; Week zoom shows per-day fill
+      overlays, Month/Quarter show continuous single-label segments (per
+      the previous fix).
+- [ ] Client and Project dropdowns are removed; project shelf renders one
+      tile per project with client name + project name, colored per
+      Project.colour.
+- [ ] Clicking a tile toggles selection; multiple tiles can be selected at
+      once.
+- [ ] Selected tiles move to the front of the shelf and render at full
+      opacity with a selection indicator; unselected tiles shrink and dim
+      but remain visible and clickable.
+- [ ] Selecting tiles dims non-matching booking segments in the timeline
+      without hiding any employee rows or segments.
+- [ ] Absence cells and "available" rows are unaffected by project
+      selection and always render at normal opacity.
+- [ ] "Reset" clears selection and restores default shelf order/opacity.
+- [ ] Existing Bookings/Employees/Projects/Holidays/Vacations remain
+      unchanged in the database.
