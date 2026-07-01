@@ -129,6 +129,19 @@ const DAY_WIDTH: Record<ZoomLevel, number> = {
 /** Weekend columns are this fraction of the weekday column width. */
 const WEEKEND_WIDTH_RATIO = 0.4;
 
+/** Return the pixel width of a single calendar day at the given base width. */
+function varDayWidth(d: Date, baseWidth: number): number {
+  const dow = d.getDay();
+  return (dow === 0 || dow === 6) ? Math.max(2, baseWidth * WEEKEND_WIDTH_RATIO) : baseWidth;
+}
+
+/** Compute the total pixel span of `count` days starting at `startDate`. */
+function computePixelSpanOfDays(startDate: Date, count: number, baseWidth: number): number {
+  let total = 0;
+  for (let i = 0; i < count; i++) total += varDayWidth(addDays(startDate, i), baseWidth);
+  return total;
+}
+
 /** Snap a date to the start of the appropriate calendar unit. */
 function snapToZoom(date: Date, z: ZoomLevel): Date {
   switch (z) {
@@ -2272,6 +2285,7 @@ export default function ResourcePlannerPage() {
   const focusDateRef = useRef<Date>(startOfMonth(today));
   const pendingScrollRef = useRef<number | null>(null);
   const rebaseScrollRef = useRef<number | null>(null);
+  const windowStartRef = useRef<Date>(windowStart);
   const [gridAvailableWidth, setGridAvailableWidth] = useState(800);
   const [isPanning, setIsPanning] = useState(false);
   const panDragRef = useRef<{
@@ -2319,10 +2333,7 @@ export default function ResourcePlannerPage() {
     const widths: number[] = [];
     const lefts: number[] = [0];
     for (let i = 0; i < numDays; i++) {
-      const dow = addDays(windowStart, i).getDay();
-      const w = (dow === 0 || dow === 6)
-        ? Math.max(2, dayWidth * WEEKEND_WIDTH_RATIO)
-        : dayWidth;
+      const w = varDayWidth(addDays(windowStart, i), dayWidth);
       widths.push(w);
       lefts.push(lefts[i] + w);
     }
@@ -2947,6 +2958,7 @@ export default function ResourcePlannerPage() {
   // Keep refs in sync for the wheel/pan handlers (close over stale state)
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
+  useEffect(() => { windowStartRef.current = windowStart; }, [windowStart]);
   useEffect(() => { focusDateRef.current = focusDate; }, [focusDate]);
 
   // Apply a pending scroll position on the next paint (set by navigateTo / zoom change / rebase)
@@ -3254,14 +3266,18 @@ export default function ResourcePlannerPage() {
             if (pendingScrollRef.current !== null || rebaseScrollRef.current !== null) return;
             const dw = dayWidthRef.current;
             const threshold = SIDE_BUFFER_DAYS * dw * 0.5;
+            const ws = windowStartRef.current;
             if (sl < threshold) {
-              setWindowStart((ws) => addDays(ws, -SIDE_BUFFER_DAYS));
-              rebaseScrollRef.current = sl + SIDE_BUFFER_DAYS * dw;
+              const newWS = addDays(ws, -SIDE_BUFFER_DAYS);
+              const shiftPx = computePixelSpanOfDays(newWS, SIDE_BUFFER_DAYS, dw);
+              setWindowStart(() => newWS);
+              rebaseScrollRef.current = sl + shiftPx;
             } else {
               const maxSl = el.scrollWidth - el.clientWidth;
               if (sl > maxSl - threshold) {
-                setWindowStart((ws) => addDays(ws, SIDE_BUFFER_DAYS));
-                rebaseScrollRef.current = sl - SIDE_BUFFER_DAYS * dw;
+                const shiftPx = computePixelSpanOfDays(ws, SIDE_BUFFER_DAYS, dw);
+                setWindowStart((prev) => addDays(prev, SIDE_BUFFER_DAYS));
+                rebaseScrollRef.current = sl - shiftPx;
               }
             }
           }}
