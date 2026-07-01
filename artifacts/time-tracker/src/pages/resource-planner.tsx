@@ -2226,6 +2226,12 @@ export default function ResourcePlannerPage() {
   const [modal, setModal] = useState<AnyModalState | null>(null);
   const [vacationModal, setVacationModal] =
     useState<VacationDialogState | null>(null);
+  // Tracks which (segKey → dayIndex) is being hovered for day-specific tooltip
+  const [hoveredSegDay, setHoveredSegDay] = useState<{
+    segKey: string;
+    dayIndex: number;
+  } | null>(null);
+
   const [excludedProjectIds, setExcludedProjectIds] = useState<Set<number>>(
     new Set(),
   );
@@ -2812,12 +2818,13 @@ export default function ResourcePlannerPage() {
   // ── Filtered employee list (hide when all bookings excluded by filter) ────
   const visibleEmployees = useMemo(() => {
     if (excludedProjectIds.size === 0) return activeEmployees;
-    return activeEmployees.filter((emp: any) => {
-      const allBookings = bookingsByEmployee[(emp as any).id] ?? [];
-      if (allBookings.length === 0) return true; // no bookings → show "Available"
-      return (segmentsByEmployee[(emp as any).id] ?? []).length > 0;
-    });
-  }, [activeEmployees, excludedProjectIds, bookingsByEmployee, segmentsByEmployee]);
+    // Filter active: only show employees who have at least one visible segment
+    // (employees with no bookings at all are also hidden while filter is active)
+    return activeEmployees.filter(
+      (emp: any) =>
+        (segmentsByEmployee[(emp as any).id] ?? []).length > 0,
+    );
+  }, [activeEmployees, excludedProjectIds, segmentsByEmployee]);
 
   // ── Daily hours totals per employee/day (sum across ALL booking segments) ──
   const dailyTotalsMap = useMemo(() => {
@@ -3021,15 +3028,34 @@ export default function ResourcePlannerPage() {
                 </div>
 
                 {/* Footer */}
-                <div className="flex items-center justify-between px-3 py-2 border-t border-border">
+                <div className="flex items-center justify-between px-3 py-2 border-t border-border gap-2">
                   <button
                     className="text-xs text-muted-foreground hover:text-foreground"
-                    onClick={() => setExcludedProjectIds(new Set())}
+                    onClick={() => {
+                      // Select all: make all currently visible (searched) projects visible
+                      const visibleIds = filteredProjectGroups.flatMap(
+                        (g) => g.projects.map((p) => p.id),
+                      );
+                      setExcludedProjectIds((prev) => {
+                        const next = new Set(prev);
+                        visibleIds.forEach((id: number) => next.delete(id));
+                        return next;
+                      });
+                    }}
                   >
-                    Show all
+                    Select all
+                  </button>
+                  <button
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setExcludedProjectIds(new Set());
+                      setFilterSearch("");
+                    }}
+                  >
+                    Reset
                   </button>
                   {excludedProjectIds.size > 0 && (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground ml-auto">
                       {excludedProjectIds.size} hidden
                     </span>
                   )}
@@ -3465,6 +3491,20 @@ export default function ResourcePlannerPage() {
                             border: `1px solid ${seg.color}60`,
                             backgroundColor: `${seg.color}18`,
                           }}
+                          onMouseMove={(e) => {
+                            const rect =
+                              e.currentTarget.getBoundingClientRect();
+                            const offsetX = e.clientX - rect.left;
+                            const dayIdx = Math.max(
+                              0,
+                              Math.min(
+                                Math.floor(offsetX / dayWidth),
+                                seg.dailyHours.length - 1,
+                              ),
+                            );
+                            setHoveredSegDay({ segKey, dayIndex: dayIdx });
+                          }}
+                          onMouseLeave={() => setHoveredSegDay(null)}
                           onMouseDown={(e) => {
                             const booking = empBookings.find(
                               (b) => b.id === seg.bookingId,
@@ -3669,25 +3709,28 @@ export default function ResourcePlannerPage() {
                               </div>
                               <div className="text-gray-700">
                                 {(() => {
-                                  const bk = empBookings.find(
-                                    (b) => b.id === seg.bookingId,
+                                  const dayIdx =
+                                    hoveredSegDay?.segKey === segKey
+                                      ? hoveredSegDay.dayIndex
+                                      : 0;
+                                  const hovDay = addDays(
+                                    windowStart,
+                                    seg.startOffset + dayIdx,
                                   );
-                                  if (!bk) return null;
-                                  if (bk.weekdayHours) {
-                                    const wh = bk.weekdayHours as Record<
-                                      string,
-                                      number
-                                    >;
-                                    const days = ["Mo", "Tu", "We", "Th", "Fr"];
-                                    const parts = Object.entries(wh)
-                                      .filter(([, v]) => v > 0)
-                                      .map(
-                                        ([k, v]) =>
-                                          `${days[Number(k) - 1] ?? k}: ${v.toFixed(1).replace(/\.0$/, "")}h`,
-                                      );
-                                    return parts.join(" · ");
-                                  }
-                                  return `${(bk.hoursPerDay ?? 0).toFixed(1).replace(/\.0$/, "")}h/day`;
+                                  const dayH =
+                                    seg.dailyHours[dayIdx] ?? 0;
+                                  return (
+                                    <>
+                                      <span className="font-medium">
+                                        {format(hovDay, "EEE MMM d")}
+                                      </span>
+                                      {" — "}
+                                      {dayH
+                                        .toFixed(1)
+                                        .replace(/\.0$/, "")}
+                                      h
+                                    </>
+                                  );
                                 })()}
                               </div>
                               {seg.notes && (
