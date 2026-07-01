@@ -2264,6 +2264,14 @@ export default function ResourcePlannerPage() {
   } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef<ZoomLevel>("month");
+  const [isPanning, setIsPanning] = useState(false);
+  const panDragRef = useRef<{
+    active: boolean;
+    startX: number;
+    startWindowStart: Date;
+    lastDayOffset: number;
+  }>({ active: false, startX: 0, startWindowStart: new Date(), lastDayOffset: 0 });
+  const dayWidthRef = useRef<number>(0);
   const [dragGhost, setDragGhost] = useState<{
     bookingId: number;
     startDate: string;
@@ -2887,8 +2895,9 @@ export default function ResourcePlannerPage() {
     }
   }, [zoom, windowStart]);
 
-  // Keep zoomRef in sync for the wheel handler
+  // Keep zoomRef and dayWidthRef in sync for the wheel/pan handlers
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+  useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
 
   // Zoom change helper: snaps windowStart to the right boundary
   const handleZoomChange = (newZoom: ZoomLevel) => {
@@ -2914,6 +2923,29 @@ export default function ResourcePlannerPage() {
     };
     el.addEventListener("wheel", handler, { capture: true, passive: false });
     return () => el.removeEventListener("wheel", handler, { capture: true });
+  }, []);
+
+  // Timeline pan-drag: drag the date header left/right to slide the window
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!panDragRef.current.active) return;
+      const deltaX = panDragRef.current.startX - e.clientX;
+      const dayOffset = Math.round(deltaX / dayWidthRef.current);
+      if (dayOffset === panDragRef.current.lastDayOffset) return;
+      panDragRef.current.lastDayOffset = dayOffset;
+      setWindowStart(addDays(panDragRef.current.startWindowStart, dayOffset));
+    };
+    const onUp = () => {
+      if (!panDragRef.current.active) return;
+      panDragRef.current.active = false;
+      setIsPanning(false);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
   }, []);
 
   return (
@@ -3109,7 +3141,7 @@ export default function ResourcePlannerPage() {
         {/* Planner grid */}
         <div
           ref={gridRef}
-          className="flex-1 overflow-auto relative"
+          className={`flex-1 overflow-auto relative${isPanning ? " cursor-grabbing select-none" : ""}`}
           onScroll={(e) =>
             setTimelineScrollLeft(e.currentTarget.scrollLeft)
           }
@@ -3133,8 +3165,22 @@ export default function ResourcePlannerPage() {
                 </span>
               </div>
 
-              {/* Time labels */}
-              <div style={{ width: contentWidth }}>
+              {/* Time labels — drag left/right to pan the timeline */}
+              <div
+                style={{ width: contentWidth }}
+                className="cursor-grab"
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  panDragRef.current = {
+                    active: true,
+                    startX: e.clientX,
+                    startWindowStart: windowStart,
+                    lastDayOffset: 0,
+                  };
+                  setIsPanning(true);
+                }}
+              >
                 {/* Top row: period / month groups */}
                 <div className="flex border-b border-border/50 bg-muted/30">
                   {zoom === "year" ? (
