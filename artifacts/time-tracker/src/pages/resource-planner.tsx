@@ -2304,10 +2304,7 @@ export default function ResourcePlannerPage() {
 
   const numDays = useMemo(() => {
     const viewportDays = Math.ceil(gridAvailableWidth / dayWidth);
-    return Math.max(
-      periodDays + 2 * SIDE_BUFFER_DAYS,
-      viewportDays + SIDE_BUFFER_DAYS,
-    );
+    return Math.max(periodDays, viewportDays) + 2 * SIDE_BUFFER_DAYS;
   }, [periodDays, gridAvailableWidth, dayWidth]);
 
   const days = useMemo(
@@ -3847,10 +3844,16 @@ export default function ResourcePlannerPage() {
                             })}
                           </div>
 
-                          {/* Left resize handle */}
+                          {/* Left resize handle — anchored to hours lane */}
                           <div
-                            className="absolute top-0 left-0 h-full"
-                            style={{ width: 7, cursor: "ew-resize", zIndex: 5 }}
+                            className="absolute left-0"
+                            style={{
+                              top: RIBBON_H,
+                              height: HOURS_LANE_H,
+                              width: 7,
+                              cursor: "ew-resize",
+                              zIndex: 5,
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               const booking = empBookings.find((b) => b.id === seg.bookingId);
@@ -3858,10 +3861,16 @@ export default function ResourcePlannerPage() {
                             }}
                           />
 
-                          {/* Right resize handle */}
+                          {/* Right resize handle — anchored to hours lane */}
                           <div
-                            className="absolute top-0 right-0 h-full"
-                            style={{ width: 7, cursor: "ew-resize", zIndex: 5 }}
+                            className="absolute right-0"
+                            style={{
+                              top: RIBBON_H,
+                              height: HOURS_LANE_H,
+                              width: 7,
+                              cursor: "ew-resize",
+                              zIndex: 5,
+                            }}
                             onMouseDown={(e) => {
                               e.stopPropagation();
                               const booking = empBookings.find((b) => b.id === seg.bookingId);
@@ -3973,8 +3982,8 @@ export default function ResourcePlannerPage() {
                           <div
                             className="absolute pointer-events-none rounded-sm flex items-center px-2"
                             style={{
-                              top: calcLaneTop(0),
-                              height: LANE_TOTAL_H,
+                              top: calcLaneTop(0) + RIBBON_H,
+                              height: HOURS_LANE_H,
                               left: bounds.left,
                               width: bounds.width,
                               backgroundColor: color + "CC",
