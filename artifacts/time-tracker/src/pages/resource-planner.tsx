@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   useQuery,
@@ -125,6 +125,9 @@ const DAY_WIDTH: Record<ZoomLevel, number> = {
   quarter: 5,  // ~91 days ×  5 ≈ 455 px
   year: 2.5,   // 365 days × 2.5 ≈ 912 px
 };
+
+/** Weekend columns are this fraction of the weekday column width. */
+const WEEKEND_WIDTH_RATIO = 0.4;
 
 /** Snap a date to the start of the appropriate calendar unit. */
 function snapToZoom(date: Date, z: ZoomLevel): Date {
@@ -485,7 +488,7 @@ function getBarBounds(
   endDateStr: string,
   windowStart: Date,
   numDays: number,
-  dayWidth: number,
+  dayLefts: number[],
 ): { left: number; width: number } | null {
   const start = parseISO(startDateStr);
   const end = addDays(parseISO(endDateStr), 1); // exclusive
@@ -495,11 +498,13 @@ function getBarBounds(
   const visibleEnd = end > windowEnd ? windowEnd : end;
   if (visibleStart >= visibleEnd) return null;
 
-  const startOffset = differenceInDays(visibleStart, windowStart);
-  const duration = differenceInDays(visibleEnd, visibleStart);
+  const startOff = differenceInDays(visibleStart, windowStart);
+  const endOff = differenceInDays(visibleEnd, windowStart); // exclusive
+  const l = dayLefts[startOff] ?? 0;
+  const r = dayLefts[endOff] ?? dayLefts[dayLefts.length - 1] ?? 0;
   return {
-    left: startOffset * dayWidth,
-    width: Math.max(duration * dayWidth, 6),
+    left: l,
+    width: Math.max(r - l, 6),
   };
 }
 
@@ -2309,12 +2314,48 @@ export default function ResourcePlannerPage() {
   );
   const monthGroups = useMemo(() => getMonthGroups(days), [days]);
 
+  // Per-day widths: weekends are narrower than weekdays
+  const { dayWidths, dayLefts, contentWidth } = useMemo(() => {
+    const widths: number[] = [];
+    const lefts: number[] = [0];
+    for (let i = 0; i < numDays; i++) {
+      const dow = addDays(windowStart, i).getDay();
+      const w = (dow === 0 || dow === 6)
+        ? Math.max(2, dayWidth * WEEKEND_WIDTH_RATIO)
+        : dayWidth;
+      widths.push(w);
+      lefts.push(lefts[i] + w);
+    }
+    return { dayWidths: widths, dayLefts: lefts, contentWidth: lefts[numDays] ?? 0 };
+  }, [numDays, windowStart, dayWidth]);
+
+  // Pixel width of each month group (accounts for variable day widths)
+  const monthGroupWidths = useMemo(() => {
+    let offset = 0;
+    return monthGroups.map((m) => {
+      const w = (dayLefts[offset + m.dayCount] ?? dayLefts[dayLefts.length - 1] ?? 0)
+              - (dayLefts[offset] ?? 0);
+      offset += m.dayCount;
+      return w;
+    });
+  }, [monthGroups, dayLefts]);
+
+  // Map pixel offset → day index (for click handlers)
+  const pixelToDay = useCallback((px: number): number => {
+    let day = 0;
+    for (let d = 0; d < numDays - 1; d++) {
+      if ((dayLefts[d + 1] ?? Infinity) <= px) day = d + 1;
+      else break;
+    }
+    return Math.max(0, Math.min(day, numDays - 1));
+  }, [dayLefts, numDays]);
+
   const windowEnd = addDays(windowStart, numDays);
 
   // Today marker
   const todayInRange = today >= windowStart && today < windowEnd;
   const todayOffset = todayInRange
-    ? differenceInDays(today, windowStart) * dayWidth
+    ? (dayLefts[differenceInDays(today, windowStart)] ?? null)
     : null;
 
   // Data
@@ -2600,7 +2641,6 @@ export default function ResourcePlannerPage() {
   }
 
   const todayStr = format(today, "yyyy-MM-dd");
-  const contentWidth = numDays * dayWidth;
 
   const allActiveEmployees = useMemo(
     () => (employees as any[]).filter((e) => e.active !== false),
@@ -3275,7 +3315,7 @@ export default function ResourcePlannerPage() {
                       <div
                         key={i}
                         className="shrink-0 px-2 py-1 text-xs font-semibold text-muted-foreground border-r border-border/50 last:border-r-0"
-                        style={{ width: m.dayCount * dayWidth }}
+                        style={{ width: monthGroupWidths[i] }}
                       >
                         {m.label}
                       </div>
@@ -3284,30 +3324,33 @@ export default function ResourcePlannerPage() {
                 </div>
                 {/* Bottom row: day / week ticks */}
                 <div className="flex relative">
-                  {zoom === "week" && days.map((d, i) => (
-                    <div
-                      key={i}
-                      className="shrink-0 border-r border-border/40 last:border-r-0 flex flex-col items-center justify-center py-1"
-                      style={{ width: dayWidth }}
-                    >
-                      <span className="text-[11px] font-medium text-muted-foreground/70">
-                        {format(d, "EEE")}
-                      </span>
-                      <span className="text-xs font-semibold text-foreground/80">
-                        {format(d, "d")}
-                      </span>
-                    </div>
-                  ))}
+                  {zoom === "week" && days.map((d, i) => {
+                    const isWe = d.getDay() === 0 || d.getDay() === 6;
+                    return (
+                      <div
+                        key={i}
+                        className="shrink-0 border-r border-border/40 last:border-r-0 flex flex-col items-center justify-center py-1"
+                        style={{ width: dayWidths[i], opacity: isWe ? 0.45 : 1 }}
+                      >
+                        <span className="text-[11px] font-medium text-muted-foreground/70">
+                          {format(d, "EEE")}
+                        </span>
+                        <span className="text-xs font-semibold text-foreground/80">
+                          {format(d, "d")}
+                        </span>
+                      </div>
+                    );
+                  })}
                   {zoom === "month" && days.map((d, i) => (
                     <div
                       key={i}
                       className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center justify-center"
-                      style={{ width: dayWidth, height: 24 }}
+                      style={{ width: dayWidths[i], height: 24 }}
                     >
                       <span
                         className={`text-[11px] leading-none ${
                           d.getDay() === 0 || d.getDay() === 6
-                            ? "text-muted-foreground/40"
+                            ? "text-muted-foreground/30"
                             : "text-foreground/60"
                         }`}
                       >
@@ -3320,7 +3363,9 @@ export default function ResourcePlannerPage() {
                       const dayIdx = wi * 7;
                       const d = days[dayIdx];
                       if (!d) return null;
-                      const chunkWidth = Math.min(7, numDays - dayIdx) * dayWidth;
+                      const endIdx = Math.min(dayIdx + 7, numDays);
+                      const chunkWidth = (dayLefts[endIdx] ?? dayLefts[dayLefts.length - 1] ?? 0)
+                                       - (dayLefts[dayIdx] ?? 0);
                       return (
                         <div
                           key={wi}
@@ -3337,7 +3382,7 @@ export default function ResourcePlannerPage() {
                     <div
                       key={i}
                       className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center px-1"
-                      style={{ width: m.dayCount * dayWidth, height: 24 }}
+                      style={{ width: monthGroupWidths[i], height: 24 }}
                     >
                       <span className="text-[11px] text-foreground/60 truncate">
                         {m.label.split(" ")[0]}
@@ -3446,11 +3491,7 @@ export default function ResourcePlannerPage() {
                     onClick={(e) => {
                       const rect = e.currentTarget.getBoundingClientRect();
                       const offsetX = e.clientX - rect.left;
-                      const clickDayOffset = Math.floor(offsetX / dayWidth);
-                      const clampedOffset = Math.max(
-                        0,
-                        Math.min(clickDayOffset, numDays - 1),
-                      );
+                      const clampedOffset = pixelToDay(offsetX);
                       const clickedDate = format(
                         addDays(windowStart, clampedOffset),
                         "yyyy-MM-dd",
@@ -3464,7 +3505,7 @@ export default function ResourcePlannerPage() {
                         <div
                           key={i}
                           className="shrink-0 border-r border-border/30 last:border-r-0"
-                          style={{ width: m.dayCount * dayWidth, height: "100%" }}
+                          style={{ width: monthGroupWidths[i], height: "100%" }}
                         />
                       ))}
                     </div>
@@ -3473,7 +3514,8 @@ export default function ResourcePlannerPage() {
                     {Array.from({ length: numDays }, (_, offset) => {
                       const day = addDays(windowStart, offset);
                       const dayStr = format(day, "yyyy-MM-dd");
-                      const left = offset * dayWidth;
+                      const left = dayLefts[offset] ?? 0;
+                      const dw = dayWidths[offset] ?? dayWidth;
 
                       if (holidayDateSet.has(dayStr)) {
                         const holiday = (holidaysByEmployee[empId] ?? []).find(
@@ -3488,7 +3530,7 @@ export default function ResourcePlannerPage() {
                                   top: absenceLaneTop,
                                   height: ABSENCE_H,
                                   left,
-                                  width: dayWidth,
+                                  width: dw,
                                   backgroundColor: "rgba(156,163,175,0.18)",
                                   zIndex: 2,
                                 }}
@@ -3534,7 +3576,7 @@ export default function ResourcePlannerPage() {
                                   top: absenceLaneTop,
                                   height: ABSENCE_H,
                                   left,
-                                  width: dayWidth,
+                                  width: dw,
                                   backgroundColor: "rgba(251,146,60,0.14)",
                                   zIndex: 2,
                                 }}
@@ -3593,7 +3635,7 @@ export default function ResourcePlannerPage() {
                             top: calcLaneTop(0) + RIBBON_H,
                             height: HOURS_LANE_H,
                             left,
-                            width: dayWidth,
+                            width: dw,
                             border: "1px dashed rgba(0,0,0,0.08)",
                             borderRadius: 2,
                             zIndex: 1,
@@ -3617,8 +3659,8 @@ export default function ResourcePlannerPage() {
                       if (seg.lane >= MAX_VISIBLE_LANES) return null;
                       const isDragging = dragGhost?.bookingId === seg.bookingId;
                       const laneTop = calcLaneTop(seg.lane);
-                      const segLeft = seg.startOffset * dayWidth;
-                      const segWidth = (seg.endOffset - seg.startOffset + 1) * dayWidth;
+                      const segLeft = dayLefts[seg.startOffset] ?? 0;
+                      const segWidth = (dayLefts[seg.endOffset + 1] ?? dayLefts[dayLefts.length - 1] ?? 0) - segLeft;
                       const showCloseOut =
                         !isDragging &&
                         !seg.pastReleasedAt &&
@@ -3626,11 +3668,13 @@ export default function ResourcePlannerPage() {
                         segWidth > 32;
                       const segKey = `seg-${seg.bookingId}-${seg.startOffset}`;
 
-                      // Offsets (relative to segment start) of each Monday in the ribbon
-                      const mondayOffsets: number[] = [];
+                      // Pixel left positions (relative to segment start) of each Monday in ribbon
+                      const mondayPixelLefts: number[] = [];
                       for (let i = 1; i <= seg.endOffset - seg.startOffset; i++) {
                         const d = addDays(windowStart, seg.startOffset + i);
-                        if (d.getDay() === 1) mondayOffsets.push(i);
+                        if (d.getDay() === 1) {
+                          mondayPixelLefts.push((dayLefts[seg.startOffset + i] ?? 0) - segLeft);
+                        }
                       }
 
                       const barDiv = (
@@ -3707,12 +3751,12 @@ export default function ResourcePlannerPage() {
                               </span>
                             )}
                             {/* Repeat label at each Monday within the segment */}
-                            {dayWidth >= 16 && mondayOffsets.map((offset) => (
+                            {dayWidth >= 16 && mondayPixelLefts.map((pixLeft) => (
                               <span
-                                key={offset}
+                                key={pixLeft}
                                 className="absolute pointer-events-none select-none"
                                 style={{
-                                  left: offset * dayWidth + 5,
+                                  left: pixLeft + 5,
                                   top: 0,
                                   bottom: 0,
                                   display: "flex",
@@ -3772,17 +3816,26 @@ export default function ResourcePlannerPage() {
                             }}
                           >
                             {seg.dailyHours.map((h, i) => {
-                              const dayLeft = i * dayWidth;
+                              const absDay = seg.startOffset + i;
+                              const dw = dayWidths[absDay] ?? dayWidth;
+                              const dayLeft = (dayLefts[absDay] ?? 0) - segLeft;
+                              const actualDay = addDays(windowStart, absDay);
+                              const dowAbs = actualDay.getDay();
+                              const isWe = dowAbs === 0 || dowAbs === 6;
+                              const isHolDay = holidayDateSet.has(format(actualDay, "yyyy-MM-dd"));
+                              const isNonWorking = isWe || isHolDay;
                               const isOver = dailyCap > 0 && h > dailyCap;
                               const fillRatio = dailyCap > 0 ? Math.min(1, h / dailyCap) : 0;
                               const barPx = h > 0 ? Math.max(6, fillRatio * HOURS_LANE_H) : 0;
+                              const remaining = dailyCap > 0 && h > 0 && h < dailyCap
+                                ? dailyCap - h : 0;
                               return (
                                 <div
                                   key={i}
                                   style={{
                                     position: "absolute",
                                     left: dayLeft,
-                                    width: dayWidth,
+                                    width: dw,
                                     height: "100%",
                                     borderLeft: i > 0 ? `1px solid ${seg.color}20` : undefined,
                                   }}
@@ -3804,7 +3857,7 @@ export default function ResourcePlannerPage() {
                                         paddingTop: barPx >= 18 ? 3 : 0,
                                       }}
                                     >
-                                      {barPx >= 14 && dayWidth >= 22 && (
+                                      {barPx >= 14 && dw >= 22 && (
                                         <span
                                           style={{
                                             fontSize: 11,
@@ -3820,8 +3873,8 @@ export default function ResourcePlannerPage() {
                                       )}
                                     </div>
                                   )}
-                                  {/* 0h day: show free capacity as muted hint */}
-                                  {h === 0 && dailyCap > 0 && dayWidth >= 22 && (
+                                  {/* 0h weekday: show free capacity as muted hint */}
+                                  {h === 0 && dailyCap > 0 && dw >= 22 && !isNonWorking && (
                                     <span
                                       style={{
                                         position: "absolute",
@@ -3839,8 +3892,27 @@ export default function ResourcePlannerPage() {
                                       {dailyCap.toFixed(1).replace(/\.0$/, "")}h
                                     </span>
                                   )}
+                                  {/* Partial booking: remaining available hours below bar */}
+                                  {remaining > 0 && !isOver && !isNonWorking && dw >= 22 && barPx < HOURS_LANE_H && (
+                                    <span
+                                      style={{
+                                        position: "absolute",
+                                        bottom: 3,
+                                        left: 0,
+                                        right: 0,
+                                        fontSize: 11,
+                                        textAlign: "center",
+                                        color: "rgba(0,0,0,0.25)",
+                                        pointerEvents: "none",
+                                        userSelect: "none",
+                                        lineHeight: 1,
+                                      }}
+                                    >
+                                      {remaining.toFixed(1).replace(/\.0$/, "")}h
+                                    </span>
+                                  )}
                                   {/* Overbooked: show excess below bar */}
-                                  {isOver && dayWidth >= 28 && (
+                                  {isOver && dw >= 28 && (
                                     <div
                                       style={{
                                         position: "absolute",
@@ -3988,7 +4060,7 @@ export default function ResourcePlannerPage() {
                           dragGhost.endDate,
                           windowStart,
                           numDays,
-                          dayWidth,
+                          dayLefts,
                         );
                         if (!bounds) return null;
                         const dragged = empBookings.find(
