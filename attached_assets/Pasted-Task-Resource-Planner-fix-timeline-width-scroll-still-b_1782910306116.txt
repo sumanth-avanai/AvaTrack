@@ -1,0 +1,152 @@
+Task: Resource Planner — fix timeline width/scroll (still broken), zoom
+recentering, and redesign the booking visual (round 5)
+
+IMPORTANT: Do not modify any Booking, Employee, Project, Holiday, or
+Vacation data. This is a rendering/interaction fix only.
+
+CONTEXT: This is the fifth round of fixes to the Resource Planner timeline.
+Two things from earlier rounds are still not resolved and are the highest
+priority in this round:
+1. The timeline still does not fill the available screen width and does not
+   scroll as a truly continuous, infinite timeline — screenshots still show
+   dead/empty space and a view that looks clipped to a fixed date range.
+2. Scroll-to-zoom (mouse wheel over the grid changes zoom level) may still
+   not be working reliably.
+
+Additionally, this round replaces the booking-bar visual design entirely.
+Ignore/remove any previous implementation of "segment breaks at 0h days",
+"overlay text left/right", "thick/thin pulsing merged bar", or "single
+unified variable-height bar with role text inside" from earlier rounds —
+none of those are correct anymore. Implement the new two-part design
+described in section 3 below from scratch.
+
+1. TIMELINE MUST FILL THE VIEWPORT AND SCROLL CONTINUOUSLY (re-fix,
+   highest priority)
+- The timeline's day-column width is determined by the current zoom level
+  (Week/Month/Quarter/Year), not by an arbitrary fixed pixel width per
+  day that leaves unused space.
+- At any zoom level, the grid must render enough columns to fill the full
+  available horizontal viewport width — there must be NO empty/dead space
+  to the right (or left) of the rendered columns at any point, ever. If the
+  "current period" (e.g. current month) does not fill the viewport width on
+  its own, keep rendering additional days from the adjacent period(s)
+  (bleeding into next/previous month, week, quarter, or year as
+  appropriate) until the viewport is fully filled with real day columns.
+- The grid is horizontally scrollable indefinitely in both directions
+  (native scroll — drag, trackpad, scrollbar, or shift+wheel), not limited
+  to a fixed date range. Scrolling further left/right reveals more days
+  before/after the initially focused period, generated on demand or
+  pre-rendered with a reasonably wide buffer.
+- On initial load (or after Prev/Next/Today), the scroll position starts
+  with the current/target period's first day at the left edge of the
+  viewport, with additional (adjacent-period) days visible to fill any
+  remaining width to the right.
+- Verify this specifically at Month zoom (the case shown to still be
+  broken): December should fill essentially the whole visible width with a
+  few days of the next month visible at the right edge if there's room, and
+  no blank/white area anywhere in the grid.
+
+2. ZOOM LEVEL SWITCH RECENTERS ON THE CURRENT PERIOD
+- When the zoom level is changed (Week/Month/Quarter/Year, whether via the
+  buttons or via scroll-to-zoom), the timeline's scroll position resets so
+  that the current period (today's week/month/quarter/year, or the
+  currently-focused period if the user had navigated via Prev/Next) starts
+  at the left edge of the viewport — the same "fill remaining width with
+  adjacent period days" behavior from section 1 applies after this
+  recentering.
+
+3. RE-VERIFY SCROLL-TO-ZOOM
+- Scrolling the mouse wheel while hovering anywhere over the timeline grid
+  (headers, employee name column, or day cells) must change the zoom level
+  (Week → Month → Quarter → Year and back), clamped at both ends. If this
+  was already fixed in the previous round, re-verify it still works
+  together with the continuous-scroll behavior from section 1 — the
+  vertical wheel delta (deltaY) should drive zoom, while horizontal
+  panning (shift+wheel or trackpad horizontal scroll, deltaX) should
+  continue to scroll the timeline horizontally, not change zoom.
+
+4. NEW BOOKING VISUAL: PERIOD RIBBON + PROPORTIONAL HOURS LANE
+Each active assignment (one Booking record, or several immediately
+adjacent Booking records for the same employee/role that touch date-wise)
+renders as a stacked pair spanning its full date range with no breaks at
+0h days:
+
+  a) PERIOD RIBBON (top part)
+     - Constant height (e.g. ~20px), rendered as the project's color at
+       reduced opacity (e.g. ~55%), spanning every day of the
+       assignment's date range with no visual variation based on hours —
+       this ribbon exists purely to show "this assignment is active during
+       this period," not how much is booked.
+     - The role name is rendered as text inside this ribbon, repeating at
+       the start of every calendar week (every Monday) that the ribbon
+       spans, not just once at the assignment's start date — this keeps
+       the role visible regardless of horizontal scroll position.
+     - The ribbon is one continuous, unbroken shape for the assignment's
+       entire date range, regardless of which individual days have 0
+       booked hours.
+
+  b) HOURS LANE (directly below the ribbon)
+     - For each day, render a bar anchored to the TOP of this lane, with
+       height proportional to (hours booked that day / daily capacity for
+       that employee), e.g. 8 of 8h capacity = ~100% of the lane height,
+       4 of 8h = ~50%, 0h = no bar rendered at all for that day.
+     - The exact number of booked hours is written as text INSIDE the bar
+       (e.g. "8h", "4h"), when the bar is tall enough to contain it
+       legibly (respect the 11px minimum font size from prior rounds — if
+       a bar is too short to hold readable text, omit the text rather than
+       shrinking below 11px, and rely on the tooltip/click detail instead).
+     - On days with 0 booked hours (no bar rendered), show the day's full
+       available/free capacity as muted text (e.g. "8h"), top-aligned in
+       that day's column so the row of day numbers stays visually aligned
+       regardless of whether a given day has a bar or not.
+     - Overbooked days render the bar in a warning color, capped or
+       slightly exceeding 100% height, with the overage shown as "-Xh" in
+       red — consistent with the overbooking treatment from earlier
+       rounds.
+
+5. LANE HEIGHT / STACKING (still applies, adapted for the new two-part
+   visual)
+- Each concurrent assignment for an employee now occupies one
+  ribbon+hours-lane pair (not a single bar as in earlier rounds). If an
+  employee has multiple concurrent assignments, stack multiple
+  ribbon+hours-lane pairs vertically, and grow the employee's row height
+  to fit all of them — never let one assignment's pair overflow into
+  another employee's row or overlap another assignment's pair for the same
+  employee.
+- Absences (holiday/vacation/sick/other) continue to occupy their own
+  dedicated lane, separate from any ribbon+hours-lane pair, and never
+  overlap booking content, per the previous round's fix.
+- Employees with no bookings and no absences in the visible range keep the
+  existing single-lane "Available" row height.
+
+6. MINIMUM FONT SIZE (carry forward from earlier rounds)
+- No text anywhere in the timeline (role labels, hour numbers, overbooking
+  values) may render below 11px. If content does not fit at 11px, omit it
+  and rely on the tooltip/click detail instead of shrinking further.
+
+ACCEPTANCE CRITERIA
+- [ ] At every zoom level, the grid fills the full viewport width with no
+      empty/dead space, and is continuously scrollable indefinitely in
+      both directions.
+- [ ] Changing zoom level (via buttons or scroll wheel) recenters the
+      timeline so the current/focused period starts at the left edge of
+      the viewport.
+- [ ] Scroll-to-zoom works reliably anywhere over the grid, independent of
+      horizontal panning.
+- [ ] A booking spanning multiple weeks with sparse weekday hours (e.g.
+      Mon+Tue 8h for several weeks) renders as ONE continuous period
+      ribbon across its entire date range, with the role name reappearing
+      at the start of every week.
+- [ ] The hours lane below the ribbon shows bars anchored at the top,
+      height proportional to booked hours (8h ≈ full height, 4h ≈ half
+      height, 0h = no bar), with the booked-hour number inside the bar and
+      the free/available hours shown at the top of 0h-day columns.
+- [ ] Overbooked days show a warning-colored bar with "-Xh" in red.
+- [ ] Employees with multiple concurrent assignments get correctly
+      stacked ribbon+hours-lane pairs with no overlap into neighboring
+      rows or other assignments.
+- [ ] Absences remain in their own lane, never overlapping booking
+      content.
+- [ ] No text renders below 11px anywhere in the timeline.
+- [ ] Existing Bookings/Employees/Projects/Holidays/Vacations remain
+      unchanged in the database.
