@@ -2238,6 +2238,8 @@ export default function ResourcePlannerPage() {
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [filterSearch, setFilterSearch] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("alpha-asc");
+  // Scroll tracking for sticky-like segment labels
+  const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
 
   const dragStateRef = useRef<{
     bookingId: number;
@@ -3153,7 +3155,12 @@ export default function ResourcePlannerPage() {
         </div>
 
         {/* Planner grid */}
-        <div className="flex-1 overflow-auto relative">
+        <div
+          className="flex-1 overflow-auto relative"
+          onScroll={(e) =>
+            setTimelineScrollLeft(e.currentTarget.scrollLeft)
+          }
+        >
           {bookingsLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-background/50 z-50 text-sm text-muted-foreground">
               Loading bookings…
@@ -3526,66 +3533,95 @@ export default function ResourcePlannerPage() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Per-day proportional fill bars */}
-                          <div
-                            className="absolute inset-0 flex"
-                            style={{ borderRadius: 3, overflow: "hidden" }}
-                          >
-                            {seg.dailyHours.map((h, i) => {
-                              const fill =
-                                dailyCap > 0
-                                  ? Math.min(1, h / dailyCap)
-                                  : 0;
-                              const isOver =
-                                dailyCap > 0 && h > dailyCap;
+                          {/* Fill — proportional per-day only when cells are wide enough */}
+                          {dayWidth >= 60 ? (
+                            <div
+                              className="absolute inset-0 flex"
+                              style={{ borderRadius: 3, overflow: "hidden" }}
+                            >
+                              {seg.dailyHours.map((h, i) => {
+                                const fill =
+                                  dailyCap > 0
+                                    ? Math.min(1, h / dailyCap)
+                                    : 0;
+                                const isOver =
+                                  dailyCap > 0 && h > dailyCap;
+                                return (
+                                  <div
+                                    key={i}
+                                    style={{
+                                      width: dayWidth,
+                                      flexShrink: 0,
+                                      position: "relative",
+                                      borderLeft:
+                                        i > 0
+                                          ? "1px solid rgba(255,255,255,0.25)"
+                                          : undefined,
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        position: "absolute",
+                                        top: 0,
+                                        bottom: 0,
+                                        left: 0,
+                                        width: `${fill * 100}%`,
+                                        backgroundColor: isOver
+                                          ? "rgba(239,68,68,0.80)"
+                                          : `${seg.color}CC`,
+                                      }}
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div
+                              style={{
+                                position: "absolute",
+                                inset: 0,
+                                borderRadius: 3,
+                                backgroundColor: `${seg.color}CC`,
+                              }}
+                            />
+                          )}
+
+                          {/* Role/project name — sticky-like: tracks visible left edge */}
+                          {width > 36 &&
+                            (() => {
+                              const stickyLeft = Math.max(
+                                4,
+                                timelineScrollLeft - EMPLOYEE_COL - left + 4,
+                              );
+                              // Hide if the sticky position has gone past the right edge
+                              if (stickyLeft >= width - 8) return null;
                               return (
                                 <div
-                                  key={i}
+                                  className="absolute pointer-events-none"
                                   style={{
-                                    width: dayWidth,
-                                    flexShrink: 0,
-                                    position: "relative",
-                                    borderLeft:
-                                      i > 0
-                                        ? "1px solid rgba(255,255,255,0.25)"
-                                        : undefined,
+                                    top: 0,
+                                    bottom: 0,
+                                    left: stickyLeft,
+                                    right: 8,
+                                    zIndex: 2,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    overflow: "hidden",
                                   }}
                                 >
-                                  <div
+                                  <span
+                                    className="text-[11px] font-semibold truncate select-none leading-none"
                                     style={{
-                                      position: "absolute",
-                                      top: 0,
-                                      bottom: 0,
-                                      left: 0,
-                                      width: `${fill * 100}%`,
-                                      backgroundColor: isOver
-                                        ? "rgba(239,68,68,0.80)"
-                                        : `${seg.color}CC`,
+                                      color: seg.color,
+                                      filter:
+                                        "drop-shadow(0 0 3px rgba(255,255,255,0.9))",
                                     }}
-                                  />
+                                  >
+                                    {seg.roleName ?? seg.projectName}
+                                  </span>
                                 </div>
                               );
-                            })}
-                          </div>
-
-                          {/* Role/project name text */}
-                          {width > 20 && (
-                            <div
-                              className="absolute inset-0 flex items-center px-1.5 pointer-events-none"
-                              style={{ zIndex: 2 }}
-                            >
-                              <span
-                                className="text-[10px] font-semibold truncate select-none leading-none"
-                                style={{
-                                  color: seg.color,
-                                  filter:
-                                    "drop-shadow(0 0 3px rgba(255,255,255,0.9))",
-                                }}
-                              >
-                                {seg.roleName ?? seg.projectName}
-                              </span>
-                            </div>
-                          )}
+                            })()}
 
                           {/* Past-released indicator */}
                           {seg.pastReleasedAt && width > 24 && (
@@ -3785,8 +3821,8 @@ export default function ResourcePlannerPage() {
                       );
                     })}
 
-                    {/* Per-day free/over labels based on daily total across all bookings */}
-                    {dayWidth > 4 &&
+                    {/* Per-day free/over labels — only when day-cells are wide enough to read */}
+                    {dayWidth >= 60 &&
                       barH >= 14 &&
                       Array.from({ length: numWeeks * 7 }, (_, offset) => {
                         const day = addDays(windowStart, offset);
@@ -3817,9 +3853,9 @@ export default function ResourcePlannerPage() {
                               display: "flex",
                               alignItems: "flex-end",
                               justifyContent: "flex-end",
-                              paddingRight: 2,
-                              paddingBottom: 1,
-                              fontSize: 8,
+                              paddingRight: 4,
+                              paddingBottom: 2,
+                              fontSize: 11,
                               fontWeight: 700,
                               lineHeight: 1,
                               color: isOverDay
