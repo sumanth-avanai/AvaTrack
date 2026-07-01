@@ -2819,6 +2819,26 @@ export default function ResourcePlannerPage() {
     });
   }, [activeEmployees, excludedProjectIds, bookingsByEmployee, segmentsByEmployee]);
 
+  // ── Daily hours totals per employee/day (sum across ALL booking segments) ──
+  const dailyTotalsMap = useMemo(() => {
+    const result: Record<number, Record<string, number>> = {};
+    for (const [empIdStr, segs] of Object.entries(segmentsByEmployee)) {
+      const id = Number(empIdStr);
+      const dayTotals: Record<string, number> = {};
+      for (const seg of segs) {
+        for (let i = 0; i < seg.dailyHours.length; i++) {
+          const dateStr = format(
+            addDays(windowStart, seg.startOffset + i),
+            "yyyy-MM-dd",
+          );
+          dayTotals[dateStr] = (dayTotals[dateStr] ?? 0) + seg.dailyHours[i];
+        }
+      }
+      result[id] = dayTotals;
+    }
+    return result;
+  }, [segmentsByEmployee, windowStart]);
+
   // Window label
   const windowLabel = useMemo(() => {
     const startLabel = format(windowStart, "MMM yyyy");
@@ -3320,7 +3340,7 @@ export default function ResourcePlannerPage() {
                           ) : vacation.vacationType === "sick" ? (
                             <Thermometer className="h-3 w-3 text-red-400" />
                           ) : (
-                            <Minus className="h-3 w-3 text-gray-400" />
+                            <X className="h-3 w-3 text-gray-400" />
                           );
                         return (
                           <Tooltip key={`v-${offset}`}>
@@ -3378,7 +3398,29 @@ export default function ResourcePlannerPage() {
                         );
                       }
 
-                      return null;
+                      // Empty working day — dashed border cell
+                      const isoD =
+                        day.getDay() === 0 ? 6 : day.getDay() - 1;
+                      const isWorkingDay = empMask[isoD] === 1;
+                      const dayTotal =
+                        (dailyTotalsMap[empId] ?? {})[dayStr] ?? 0;
+                      if (!isWorkingDay || dayTotal > 0) return null;
+                      return (
+                        <div
+                          key={`empty-${offset}`}
+                          style={{
+                            position: "absolute",
+                            top: BAR_PAD_TOP,
+                            height: barH,
+                            left,
+                            width: dayWidth,
+                            border: "1px dashed rgba(0,0,0,0.10)",
+                            borderRadius: 2,
+                            zIndex: 1,
+                            pointerEvents: "none",
+                          }}
+                        />
+                      );
                     })}
 
                     {/* "Available" label when no visible segments */}
@@ -3444,13 +3486,6 @@ export default function ResourcePlannerPage() {
                                   : 0;
                               const isOver =
                                 dailyCap > 0 && h > dailyCap;
-                              const freeH =
-                                dailyCap > 0 ? dailyCap - h : null;
-                              const showFreeLabel =
-                                dayWidth > 28 &&
-                                barH >= 18 &&
-                                freeH !== null &&
-                                Math.abs(freeH) >= 0.1;
                               return (
                                 <div
                                   key={i}
@@ -3476,29 +3511,6 @@ export default function ResourcePlannerPage() {
                                         : `${seg.color}CC`,
                                     }}
                                   />
-                                  {showFreeLabel && (
-                                    <div
-                                      style={{
-                                        position: "absolute",
-                                        bottom: 2,
-                                        right: 2,
-                                        fontSize: 8,
-                                        fontWeight: 700,
-                                        lineHeight: 1,
-                                        color: isOver
-                                          ? "rgb(185,28,28)"
-                                          : "rgba(0,0,0,0.38)",
-                                        zIndex: 2,
-                                        pointerEvents: "none",
-                                        userSelect: "none",
-                                        whiteSpace: "nowrap",
-                                      }}
-                                    >
-                                      {isOver
-                                        ? `-${(-freeH!).toFixed(1).replace(/\.0$/, "")}h`
-                                        : `+${freeH!.toFixed(1).replace(/\.0$/, "")}h`}
-                                    </div>
-                                  )}
                                 </div>
                               );
                             })}
@@ -3656,11 +3668,27 @@ export default function ResourcePlannerPage() {
                                 )}
                               </div>
                               <div className="text-gray-700">
-                                {seg.dailyHours
-                                  .reduce((s, h) => s + h, 0)
-                                  .toFixed(1)
-                                  .replace(/\.0$/, "")}
-                                h in this segment
+                                {(() => {
+                                  const bk = empBookings.find(
+                                    (b) => b.id === seg.bookingId,
+                                  );
+                                  if (!bk) return null;
+                                  if (bk.weekdayHours) {
+                                    const wh = bk.weekdayHours as Record<
+                                      string,
+                                      number
+                                    >;
+                                    const days = ["Mo", "Tu", "We", "Th", "Fr"];
+                                    const parts = Object.entries(wh)
+                                      .filter(([, v]) => v > 0)
+                                      .map(
+                                        ([k, v]) =>
+                                          `${days[Number(k) - 1] ?? k}: ${v.toFixed(1).replace(/\.0$/, "")}h`,
+                                      );
+                                    return parts.join(" · ");
+                                  }
+                                  return `${(bk.hoursPerDay ?? 0).toFixed(1).replace(/\.0$/, "")}h/day`;
+                                })()}
                               </div>
                               {seg.notes && (
                                 <div className="text-gray-500 italic">
@@ -3701,6 +3729,59 @@ export default function ResourcePlannerPage() {
                         </Tooltip>
                       );
                     })}
+
+                    {/* Per-day free/over labels based on daily total across all bookings */}
+                    {dayWidth > 28 &&
+                      barH >= 18 &&
+                      Array.from({ length: numWeeks * 7 }, (_, offset) => {
+                        const day = addDays(windowStart, offset);
+                        const dayStr = format(day, "yyyy-MM-dd");
+                        const isoD =
+                          day.getDay() === 0 ? 6 : day.getDay() - 1;
+                        if (!empMask[isoD]) return null;
+                        if (
+                          holidayDateSet.has(dayStr) ||
+                          vacationDayMap.has(dayStr)
+                        )
+                          return null;
+                        const total =
+                          (dailyTotalsMap[empId] ?? {})[dayStr] ?? 0;
+                        if (total === 0 || dailyCap === 0) return null;
+                        const freeH = dailyCap - total;
+                        if (Math.abs(freeH) < 0.1) return null;
+                        const isOverDay = freeH < 0;
+                        return (
+                          <div
+                            key={`lbl-${offset}`}
+                            style={{
+                              position: "absolute",
+                              top: BAR_PAD_TOP + 2,
+                              left: offset * dayWidth,
+                              width: dayWidth,
+                              height: barH - 4,
+                              display: "flex",
+                              alignItems: "flex-end",
+                              justifyContent: "flex-end",
+                              paddingRight: 2,
+                              paddingBottom: 1,
+                              fontSize: 8,
+                              fontWeight: 700,
+                              lineHeight: 1,
+                              color: isOverDay
+                                ? "rgb(185,28,28)"
+                                : "rgba(0,0,0,0.42)",
+                              zIndex: 7,
+                              pointerEvents: "none",
+                              userSelect: "none",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {isOverDay
+                              ? `-${(-freeH).toFixed(1).replace(/\.0$/, "")}h`
+                              : `${freeH.toFixed(1).replace(/\.0$/, "")}h free`}
+                          </div>
+                        );
+                      })}
 
                     {/* Ghost bar for active drag */}
                     {dragGhost &&
