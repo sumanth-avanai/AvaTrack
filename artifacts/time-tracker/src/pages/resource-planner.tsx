@@ -8,12 +8,19 @@ import {
 } from "@tanstack/react-query";
 import {
   addDays,
+  addMonths,
   addWeeks,
+  addYears,
   differenceInDays,
   format,
+  getDaysInMonth,
   getISODay,
+  getQuarter,
   parseISO,
+  startOfMonth,
+  startOfQuarter,
   startOfWeek,
+  startOfYear,
 } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -111,24 +118,23 @@ interface ResourceBookingFull {
 type ZoomLevel = "week" | "month" | "quarter" | "year";
 type SortMode = "alpha-asc" | "alpha-desc" | "alloc-desc" | "alloc-asc";
 
-const CELL_WIDTH: Record<ZoomLevel, number> = {
-  week: 420, // 60 px/day — activates per-day fill & overlays
-  month: 80,
-  quarter: 50,
-  year: 18,
+/** Pixels per calendar day at each zoom level. */
+const DAY_WIDTH: Record<ZoomLevel, number> = {
+  week: 60,    // 7 days  × 60 = 420 px
+  month: 14,   // ~30 days × 14 ≈ 420 px
+  quarter: 5,  // ~91 days ×  5 ≈ 455 px
+  year: 2.5,   // 365 days × 2.5 ≈ 912 px
 };
-const NUM_WEEKS: Record<ZoomLevel, number> = {
-  week: 6,
-  month: 13,
-  quarter: 26,
-  year: 52,
-};
-const NAV_WEEKS: Record<ZoomLevel, number> = {
-  week: 2,
-  month: 4,
-  quarter: 13,
-  year: 26,
-};
+
+/** Snap a date to the start of the appropriate calendar unit. */
+function snapToZoom(date: Date, z: ZoomLevel): Date {
+  switch (z) {
+    case "week":    return startOfWeek(date, { weekStartsOn: 1 });
+    case "month":   return startOfMonth(date);
+    case "quarter": return startOfQuarter(date);
+    case "year":    return startOfYear(date);
+  }
+}
 const EMPLOYEE_COL = 200;
 const ROW_HEIGHT = 40;
 
@@ -231,14 +237,14 @@ function getDailyCapacity(weeklyCapacityHours: number, mask: number[]): number {
 function buildBookingSegments(
   booking: ResourceBookingFull,
   windowStartDate: Date,
-  numWeeks: number,
+  numDays: number,
   color: string,
   empMask: number[],
   holidayDateSet: Set<string>,
   vacationDateSet: Set<string>,
 ): SegmentBase[] {
   const segments: SegmentBase[] = [];
-  const totalDays = numWeeks * 7;
+  const totalDays = numDays;
   let curStart: number | null = null;
   let dailyHours: number[] = [];
 
@@ -465,18 +471,17 @@ function getBarBounds(
   startDateStr: string,
   endDateStr: string,
   windowStart: Date,
-  numWeeks: number,
-  cellWidth: number,
+  numDays: number,
+  dayWidth: number,
 ): { left: number; width: number } | null {
   const start = parseISO(startDateStr);
   const end = addDays(parseISO(endDateStr), 1); // exclusive
-  const windowEnd = addDays(windowStart, numWeeks * 7);
+  const windowEnd = addDays(windowStart, numDays);
 
   const visibleStart = start < windowStart ? windowStart : start;
   const visibleEnd = end > windowEnd ? windowEnd : end;
   if (visibleStart >= visibleEnd) return null;
 
-  const dayWidth = cellWidth / 7;
   const startOffset = differenceInDays(visibleStart, windowStart);
   const duration = differenceInDays(visibleEnd, visibleStart);
   return {
@@ -485,14 +490,14 @@ function getBarBounds(
   };
 }
 
-function getMonthGroups(weeks: Date[]): { label: string; count: number }[] {
-  const groups: { label: string; count: number }[] = [];
-  for (const week of weeks) {
-    const label = format(week, "MMM yyyy");
+function getMonthGroups(days: Date[]): { label: string; dayCount: number }[] {
+  const groups: { label: string; dayCount: number }[] = [];
+  for (const day of days) {
+    const label = format(day, "MMM yyyy");
     if (!groups.length || groups[groups.length - 1].label !== label) {
-      groups.push({ label, count: 1 });
+      groups.push({ label, dayCount: 1 });
     } else {
-      groups[groups.length - 1].count++;
+      groups[groups.length - 1].dayCount++;
     }
   }
   return groups;
@@ -2216,7 +2221,7 @@ export default function ResourcePlannerPage() {
     return d;
   }, []);
 
-  const [windowStart, setWindowStart] = useState(() => getMondayOfWeek(today));
+  const [windowStart, setWindowStart] = useState(() => startOfMonth(today));
   const [zoom, setZoom] = useState<ZoomLevel>("month");
   const [modal, setModal] = useState<AnyModalState | null>(null);
   const [vacationModal, setVacationModal] =
@@ -2243,27 +2248,42 @@ export default function ResourcePlannerPage() {
     originalEndDate: string;
     dayWidth: number;
   } | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<ZoomLevel>("month");
   const [dragGhost, setDragGhost] = useState<{
     bookingId: number;
     startDate: string;
     endDate: string;
   } | null>(null);
 
-  const cellWidth = CELL_WIDTH[zoom];
-  const numWeeks = NUM_WEEKS[zoom];
+  const dayWidth = DAY_WIDTH[zoom];
+  const numDays = useMemo(() => {
+    switch (zoom) {
+      case "week":    return 7;
+      case "month":   return getDaysInMonth(windowStart);
+      case "quarter": return differenceInDays(
+        addMonths(startOfQuarter(windowStart), 3),
+        startOfQuarter(windowStart),
+      );
+      case "year":    return differenceInDays(
+        startOfYear(addYears(windowStart, 1)),
+        startOfYear(windowStart),
+      );
+    }
+  }, [zoom, windowStart]);
 
-  const weeks = useMemo(
-    () => Array.from({ length: numWeeks }, (_, i) => addWeeks(windowStart, i)),
-    [windowStart, numWeeks],
+  const days = useMemo(
+    () => Array.from({ length: numDays }, (_, i) => addDays(windowStart, i)),
+    [windowStart, numDays],
   );
-  const monthGroups = useMemo(() => getMonthGroups(weeks), [weeks]);
+  const monthGroups = useMemo(() => getMonthGroups(days), [days]);
 
-  const windowEnd = addDays(windowStart, numWeeks * 7);
+  const windowEnd = addDays(windowStart, numDays);
 
   // Today marker
   const todayInRange = today >= windowStart && today < windowEnd;
   const todayOffset = todayInRange
-    ? (differenceInDays(today, windowStart) / 7) * cellWidth
+    ? differenceInDays(today, windowStart) * dayWidth
     : null;
 
   // Data
@@ -2424,7 +2444,7 @@ export default function ResourcePlannerPage() {
     ) {
       // Planner window boundaries (inclusive end = last visible day)
       const winStart = windowStart;
-      const winEnd = addDays(windowStart, numWeeks * 7 - 1);
+      const winEnd = addDays(windowStart, numDays - 1);
 
       let newStart = ds.originalStartDate;
       let newEnd = ds.originalEndDate;
@@ -2549,7 +2569,7 @@ export default function ResourcePlannerPage() {
   }
 
   const todayStr = format(today, "yyyy-MM-dd");
-  const contentWidth = numWeeks * cellWidth;
+  const contentWidth = numDays * dayWidth;
 
   const allActiveEmployees = useMemo(
     () => (employees as any[]).filter((e) => e.active !== false),
@@ -2782,7 +2802,7 @@ export default function ResourcePlannerPage() {
           ...buildBookingSegments(
             b,
             windowStart,
-            numWeeks,
+            numDays,
             color,
             empMask,
             holidayDateSet,
@@ -2797,13 +2817,27 @@ export default function ResourcePlannerPage() {
     activeEmployees,
     bookingsByEmployee,
     windowStart,
-    numWeeks,
+    numDays,
     holidayDateSetByEmployee,
     vacationDayMapByEmployee,
   ]);
 
-  // All active employees are always visible (project shelf highlights, never hides)
-  const visibleEmployees = activeEmployees;
+  // Employees with bookings matching the selected projects float to the top.
+  const visibleEmployees = useMemo(() => {
+    if (selectedProjectIds.size === 0) return activeEmployees;
+    const matching = activeEmployees.filter((emp: any) =>
+      (bookingsByEmployee[(emp as any).id] ?? []).some((b: ResourceBookingFull) =>
+        selectedProjectIds.has(b.projectId),
+      ),
+    );
+    const rest = activeEmployees.filter(
+      (emp: any) =>
+        !(bookingsByEmployee[(emp as any).id] ?? []).some(
+          (b: ResourceBookingFull) => selectedProjectIds.has(b.projectId),
+        ),
+    );
+    return [...matching, ...rest];
+  }, [activeEmployees, selectedProjectIds, bookingsByEmployee]);
 
   // ── Daily hours totals per employee/day (sum across ALL booking segments) ──
   const dailyTotalsMap = useMemo(() => {
@@ -2827,10 +2861,46 @@ export default function ResourcePlannerPage() {
 
   // Window label
   const windowLabel = useMemo(() => {
-    const startLabel = format(windowStart, "MMM yyyy");
-    const endLabel = format(addWeeks(windowStart, numWeeks - 1), "MMM yyyy");
-    return startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
-  }, [windowStart, numWeeks]);
+    switch (zoom) {
+      case "week":
+        return `${format(windowStart, "MMM d")} – ${format(addDays(windowStart, 6), "MMM d, yyyy")}`;
+      case "month":
+        return format(windowStart, "MMMM yyyy");
+      case "quarter":
+        return `Q${getQuarter(windowStart)} ${format(windowStart, "yyyy")}`;
+      case "year":
+        return format(windowStart, "yyyy");
+    }
+  }, [zoom, windowStart]);
+
+  // Keep zoomRef in sync for the wheel handler
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+  // Zoom change helper: snaps windowStart to the right boundary
+  const handleZoomChange = (newZoom: ZoomLevel) => {
+    setZoom(newZoom);
+    setWindowStart((prev) => snapToZoom(prev, newZoom));
+  };
+
+  // Scroll-to-zoom on the planner grid
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ZOOM_ORDER: ZoomLevel[] = ["week", "month", "quarter", "year"];
+    const handler = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // ignore horizontal scroll
+      e.preventDefault();
+      const curr = zoomRef.current;
+      const idx = ZOOM_ORDER.indexOf(curr);
+      const newIdx = Math.max(0, Math.min(ZOOM_ORDER.length - 1, e.deltaY > 0 ? idx + 1 : idx - 1));
+      const newZoom = ZOOM_ORDER[newIdx];
+      if (newZoom === curr) return;
+      setZoom(newZoom);
+      setWindowStart((ws) => snapToZoom(ws, newZoom));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, []);
 
   return (
     <AdminLayout>
@@ -2849,7 +2919,14 @@ export default function ResourcePlannerPage() {
               variant="outline"
               size="sm"
               onClick={() =>
-                setWindowStart((prev) => addWeeks(prev, -NAV_WEEKS[zoom]))
+                setWindowStart((prev) => {
+                  switch (zoom) {
+                    case "week":    return addWeeks(prev, -1);
+                    case "month":   return addMonths(prev, -1);
+                    case "quarter": return addMonths(prev, -3);
+                    case "year":    return addYears(prev, -1);
+                  }
+                })
               }
             >
               <ChevronLeft className="h-4 w-4" />
@@ -2862,7 +2939,14 @@ export default function ResourcePlannerPage() {
               variant="outline"
               size="sm"
               onClick={() =>
-                setWindowStart((prev) => addWeeks(prev, NAV_WEEKS[zoom]))
+                setWindowStart((prev) => {
+                  switch (zoom) {
+                    case "week":    return addWeeks(prev, 1);
+                    case "month":   return addMonths(prev, 1);
+                    case "quarter": return addMonths(prev, 3);
+                    case "year":    return addYears(prev, 1);
+                  }
+                })
               }
             >
               Next
@@ -2871,7 +2955,7 @@ export default function ResourcePlannerPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setWindowStart(getMondayOfWeek(today))}
+              onClick={() => setWindowStart(snapToZoom(today, zoom))}
             >
               Today
             </Button>
@@ -2927,17 +3011,17 @@ export default function ResourcePlannerPage() {
 
           {/* Zoom toggle */}
           <div className="flex items-center gap-1 border border-border rounded-md p-0.5">
-            {(["week", "month", "quarter"] as ZoomLevel[]).map((z) => (
+            {(["week", "month", "quarter", "year"] as ZoomLevel[]).map((z) => (
               <button
                 key={z}
-                onClick={() => setZoom(z)}
+                onClick={() => handleZoomChange(z)}
                 className={`px-3 py-1 text-xs rounded font-medium capitalize transition-colors ${
                   zoom === z
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                {z === "week" ? "Week" : z === "month" ? "Month" : "Quarter"}
+                {z === "week" ? "Week" : z === "month" ? "Month" : z === "quarter" ? "Quarter" : "Year"}
               </button>
             ))}
           </div>
@@ -3010,6 +3094,7 @@ export default function ResourcePlannerPage() {
 
         {/* Planner grid */}
         <div
+          ref={gridRef}
           className="flex-1 overflow-auto relative"
           onScroll={(e) =>
             setTimelineScrollLeft(e.currentTarget.scrollLeft)
@@ -3034,36 +3119,89 @@ export default function ResourcePlannerPage() {
                 </span>
               </div>
 
-              {/* Month + week labels */}
+              {/* Time labels */}
               <div style={{ width: contentWidth }}>
-                {/* Month row */}
+                {/* Top row: period / month groups */}
                 <div className="flex border-b border-border/50 bg-muted/30">
-                  {monthGroups.map((m, i) => (
+                  {zoom === "year" ? (
                     <div
-                      key={i}
-                      className="shrink-0 px-2 py-1 text-xs font-semibold text-muted-foreground border-r border-border/50 last:border-r-0"
-                      style={{ width: m.count * cellWidth }}
+                      className="shrink-0 px-2 py-1 text-xs font-semibold text-muted-foreground border-r border-border/50"
+                      style={{ width: contentWidth }}
                     >
-                      {m.label}
+                      {format(windowStart, "yyyy")}
                     </div>
-                  ))}
+                  ) : (
+                    monthGroups.map((m, i) => (
+                      <div
+                        key={i}
+                        className="shrink-0 px-2 py-1 text-xs font-semibold text-muted-foreground border-r border-border/50 last:border-r-0"
+                        style={{ width: m.dayCount * dayWidth }}
+                      >
+                        {m.label}
+                      </div>
+                    ))
+                  )}
                 </div>
-                {/* Week row */}
+                {/* Bottom row: day / week ticks */}
                 <div className="flex relative">
-                  {weeks.map((w, i) => (
+                  {zoom === "week" && days.map((d, i) => (
                     <div
                       key={i}
                       className="shrink-0 border-r border-border/40 last:border-r-0 flex flex-col items-center justify-center py-1"
-                      style={{ width: cellWidth }}
+                      style={{ width: dayWidth }}
                     >
-                      <span className="text-xs font-medium text-foreground/70">
-                        {format(w, "d")}
+                      <span className="text-[11px] font-medium text-muted-foreground/70">
+                        {format(d, "EEE")}
                       </span>
-                      {zoom === "month" && (
-                        <span className="text-[11px] text-muted-foreground/60">
-                          {format(w, "MMM")}
-                        </span>
-                      )}
+                      <span className="text-xs font-semibold text-foreground/80">
+                        {format(d, "d")}
+                      </span>
+                    </div>
+                  ))}
+                  {zoom === "month" && days.map((d, i) => (
+                    <div
+                      key={i}
+                      className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center justify-center"
+                      style={{ width: dayWidth, height: 24 }}
+                    >
+                      <span
+                        className={`text-[10px] leading-none ${
+                          d.getDay() === 0 || d.getDay() === 6
+                            ? "text-muted-foreground/40"
+                            : "text-foreground/60"
+                        }`}
+                      >
+                        {format(d, "d")}
+                      </span>
+                    </div>
+                  ))}
+                  {zoom === "quarter" &&
+                    Array.from({ length: Math.ceil(numDays / 7) }, (_, wi) => {
+                      const dayIdx = wi * 7;
+                      const d = days[dayIdx];
+                      if (!d) return null;
+                      const chunkWidth = Math.min(7, numDays - dayIdx) * dayWidth;
+                      return (
+                        <div
+                          key={wi}
+                          className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center px-1"
+                          style={{ width: chunkWidth, height: 24 }}
+                        >
+                          <span className="text-[10px] text-foreground/60">
+                            {format(d, "d")}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  {zoom === "year" && monthGroups.map((m, i) => (
+                    <div
+                      key={i}
+                      className="shrink-0 border-r border-border/30 last:border-r-0 flex items-center px-1"
+                      style={{ width: m.dayCount * dayWidth, height: 24 }}
+                    >
+                      <span className="text-[10px] text-foreground/60 truncate">
+                        {m.label.split(" ")[0]}
+                      </span>
                     </div>
                   ))}
                   {/* Today header marker */}
@@ -3092,7 +3230,6 @@ export default function ResourcePlannerPage() {
                 ? emp.workingDaysMask
                 : [1, 1, 1, 1, 1, 0, 0];
               const dailyCap = getDailyCapacity(cap, empMask);
-              const dayWidth = cellWidth / 7;
 
               const holidayDateSet =
                 holidayDateSetByEmployee[empId] ?? new Set<string>();
@@ -3168,7 +3305,7 @@ export default function ResourcePlannerPage() {
                       const clickDayOffset = Math.floor(offsetX / dayWidth);
                       const clampedOffset = Math.max(
                         0,
-                        Math.min(clickDayOffset, numWeeks * 7 - 1),
+                        Math.min(clickDayOffset, numDays - 1),
                       );
                       const clickedDate = format(
                         addDays(windowStart, clampedOffset),
@@ -3177,19 +3314,19 @@ export default function ResourcePlannerPage() {
                       openCreateVacationModal(emp, clickedDate, clickedDate);
                     }}
                   >
-                    {/* Week grid background */}
+                    {/* Month group grid background */}
                     <div className="flex h-full absolute inset-0">
-                      {weeks.map((_w, i) => (
+                      {monthGroups.map((m, i) => (
                         <div
                           key={i}
                           className="shrink-0 border-r border-border/30 last:border-r-0"
-                          style={{ width: cellWidth, height: "100%" }}
+                          style={{ width: m.dayCount * dayWidth, height: "100%" }}
                         />
                       ))}
                     </div>
 
                     {/* Per-day absence cells — holidays and vacations */}
-                    {Array.from({ length: numWeeks * 7 }, (_, offset) => {
+                    {Array.from({ length: numDays }, (_, offset) => {
                       const day = addDays(windowStart, offset);
                       const dayStr = format(day, "yyyy-MM-dd");
                       const left = offset * dayWidth;
@@ -3392,19 +3529,21 @@ export default function ResourcePlannerPage() {
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {/* Fill — proportional per-day only in Week zoom */}
+                          {/* Fill — top-anchored height per day in Week zoom, solid fill otherwise */}
                           {zoom === "week" ? (
                             <div
                               className="absolute inset-0 flex"
                               style={{ borderRadius: 3, overflow: "hidden" }}
                             >
                               {seg.dailyHours.map((h, i) => {
-                                const fill =
+                                const fillRatio =
                                   dailyCap > 0
                                     ? Math.min(1, h / dailyCap)
                                     : 0;
-                                const isOver =
-                                  dailyCap > 0 && h > dailyCap;
+                                const isOver = dailyCap > 0 && h > dailyCap;
+                                const isFull = dailyCap > 0 && h >= dailyCap;
+                                const freeH = Math.max(0, dailyCap - h);
+                                const overH = Math.max(0, h - dailyCap);
                                 return (
                                   <div
                                     key={i}
@@ -3412,24 +3551,70 @@ export default function ResourcePlannerPage() {
                                       width: dayWidth,
                                       flexShrink: 0,
                                       position: "relative",
+                                      height: "100%",
                                       borderLeft:
                                         i > 0
                                           ? "1px solid rgba(255,255,255,0.25)"
                                           : undefined,
                                     }}
                                   >
+                                    {/* Colored fill from top */}
                                     <div
                                       style={{
                                         position: "absolute",
                                         top: 0,
-                                        bottom: 0,
                                         left: 0,
-                                        width: `${fill * 100}%`,
+                                        right: 0,
+                                        height: h > 0 ? `${Math.max(fillRatio * 100, 4)}%` : 0,
                                         backgroundColor: isOver
                                           ? "rgba(239,68,68,0.80)"
                                           : `${seg.color}CC`,
                                       }}
                                     />
+                                    {/* Free hours label — below the fill, for partial days */}
+                                    {!isOver && !isFull && h > 0 && dailyCap > 0 && dayWidth >= 32 && (
+                                      <div
+                                        style={{
+                                          position: "absolute",
+                                          top: `${fillRatio * 100}%`,
+                                          left: 0,
+                                          right: 0,
+                                          display: "flex",
+                                          justifyContent: "center",
+                                          paddingTop: 2,
+                                          fontSize: 9,
+                                          lineHeight: 1,
+                                          color: "rgba(0,0,0,0.45)",
+                                          pointerEvents: "none",
+                                          userSelect: "none",
+                                          whiteSpace: "nowrap",
+                                        }}
+                                      >
+                                        {freeH.toFixed(1).replace(/\.0$/, "")}h
+                                      </div>
+                                    )}
+                                    {/* Overbooked label — at bottom */}
+                                    {isOver && dayWidth >= 32 && (
+                                      <div
+                                        style={{
+                                          position: "absolute",
+                                          bottom: 2,
+                                          left: 0,
+                                          right: 0,
+                                          display: "flex",
+                                          justifyContent: "center",
+                                          fontSize: 9,
+                                          lineHeight: 1,
+                                          color: "rgb(185,28,28)",
+                                          fontWeight: 700,
+                                          pointerEvents: "none",
+                                          userSelect: "none",
+                                          whiteSpace: "nowrap",
+                                        }}
+                                      >
+                                        -{overH.toFixed(1).replace(/\.0$/, "")}h
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -3680,60 +3865,6 @@ export default function ResourcePlannerPage() {
                       );
                     })}
 
-                    {/* Per-day free/over labels — only in Week zoom */}
-                    {zoom === "week" &&
-                      barH >= 14 &&
-                      Array.from({ length: numWeeks * 7 }, (_, offset) => {
-                        const day = addDays(windowStart, offset);
-                        const dayStr = format(day, "yyyy-MM-dd");
-                        const isoD =
-                          day.getDay() === 0 ? 6 : day.getDay() - 1;
-                        if (!empMask[isoD]) return null;
-                        if (
-                          holidayDateSet.has(dayStr) ||
-                          vacationDayMap.has(dayStr)
-                        )
-                          return null;
-                        const total =
-                          (dailyTotalsMap[empId] ?? {})[dayStr] ?? 0;
-                        if (total === 0 || dailyCap === 0) return null;
-                        const freeH = dailyCap - total;
-                        if (Math.abs(freeH) < 0.1) return null;
-                        const isOverDay = freeH < 0;
-                        return (
-                          <div
-                            key={`lbl-${offset}`}
-                            style={{
-                              position: "absolute",
-                              top: BAR_PAD_TOP + 2,
-                              left: offset * dayWidth,
-                              width: dayWidth,
-                              height: barH - 4,
-                              display: "flex",
-                              alignItems: "flex-end",
-                              justifyContent: "flex-end",
-                              paddingRight: 4,
-                              paddingBottom: 2,
-                              fontSize: 11,
-                              fontWeight: 700,
-                              lineHeight: 1,
-                              color: isOverDay
-                                ? "rgb(185,28,28)"
-                                : "rgba(0,0,0,0.42)",
-                              zIndex: 7,
-                              pointerEvents: "none",
-                              userSelect: "none",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {isOverDay
-                              ? `-${(-freeH).toFixed(1).replace(/\.0$/, "")}h`
-                              : dayWidth > 16
-                              ? `${freeH.toFixed(1).replace(/\.0$/, "")}h free`
-                              : `${freeH.toFixed(1).replace(/\.0$/, "")}h`}
-                          </div>
-                        );
-                      })}
 
                     {/* Ghost bar for active drag */}
                     {dragGhost &&
@@ -3745,8 +3876,8 @@ export default function ResourcePlannerPage() {
                           dragGhost.startDate,
                           dragGhost.endDate,
                           windowStart,
-                          numWeeks,
-                          cellWidth,
+                          numDays,
+                          dayWidth,
                         );
                         if (!bounds) return null;
                         const dragged = empBookings.find(
