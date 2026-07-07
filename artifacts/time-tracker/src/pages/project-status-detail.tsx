@@ -1,6 +1,8 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useGetProjectStatusDetail, getGetProjectStatusDetailQueryKey } from "@workspace/api-client-react";
+import type { FutureBooking, ProjectHealthUpdate } from "@workspace/api-client-react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +38,12 @@ import {
   Trash2,
   CalendarDays,
   DollarSign,
+  Shield,
+  ShieldAlert,
+  Smile,
+  Meh,
+  Frown,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, formatDistanceToNowStrict, isPast } from "date-fns";
@@ -102,13 +110,29 @@ interface FutureProjection {
   plannedRevenue: number;
 }
 
-interface ProjectStatusDetailResponse {
-  project: ProjectDetail;
-  history: HealthUpdate[];
-  monthlyData: MonthlyDataPoint[];
-  futureProjections: FutureProjection[];
-  updateCadenceDays: number;
-  budgetAlertThreshold: number;
+// ─── Client-side projection from raw bookings ─────────────────────────────────
+
+function computeFutureProjections(bookings: FutureBooking[], today: Date): FutureProjection[] {
+  const monthMap = new Map<string, number>();
+  const todayTime = today.getTime();
+  for (const b of bookings) {
+    if (!b.dayRate) continue;
+    const startMs = Math.max(new Date(b.startDate + "T00:00:00Z").getTime(), todayTime);
+    const endDate = new Date(b.endDate + "T00:00:00Z");
+    for (let ms = startMs; ms <= endDate.getTime(); ms += 86_400_000) {
+      const d = new Date(ms);
+      const dow = d.getUTCDay(); // 0=Sun … 6=Sat
+      if (dow === 0 || dow === 6) continue;
+      const month = d.toISOString().slice(0, 7);
+      const weekdayHours = b.weekdayHours as Record<string, number> | null;
+      const dailyHours = weekdayHours?.[String(dow)] ?? b.hoursPerDay;
+      const dailyRev = (dailyHours / 8) * b.dayRate;
+      monthMap.set(month, (monthMap.get(month) ?? 0) + dailyRev);
+    }
+  }
+  return Array.from(monthMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, plannedRevenue]) => ({ month, plannedRevenue: Math.round(plannedRevenue * 100) / 100 }));
 }
 
 // ─── Label / option maps ──────────────────────────────────────────────────────
@@ -674,41 +698,78 @@ function NextStepsChecklist({
 
 // ─── History entry ────────────────────────────────────────────────────────────
 
-function HistoryEntry({ entry, isFirst }: { entry: HealthUpdate; isFirst: boolean }) {
+function RiskChip({ riskLevel }: { riskLevel: string }) {
+  const cls =
+    riskLevel === "high"   ? "bg-red-500/20 text-red-400 ring-red-500/30" :
+    riskLevel === "medium" ? "bg-orange-500/20 text-orange-400 ring-orange-500/30" :
+                             "bg-green-500/20 text-green-400 ring-green-500/30";
+  const Icon = riskLevel === "high" ? ShieldAlert : Shield;
   return (
-    <div className="flex gap-4">
-      <div className="flex flex-col items-center">
+    <span className={cn("inline-flex items-center justify-center h-6 w-6 rounded-full ring-1 shrink-0", cls)}
+      title={`Risk: ${RISK_LEVEL_LABELS[riskLevel] ?? riskLevel}`}
+    >
+      <Icon className="h-3 w-3" strokeWidth={2} />
+    </span>
+  );
+}
+
+function SatisfactionChip({ satisfaction }: { satisfaction: string }) {
+  const cls =
+    satisfaction === "happy"    ? "bg-green-500/20 text-green-400 ring-green-500/30" :
+    satisfaction === "critical" ? "bg-red-500/20 text-red-400 ring-red-500/30" :
+                                  "bg-gray-500/20 text-gray-400 ring-gray-500/30";
+  const Icon =
+    satisfaction === "happy"    ? Smile :
+    satisfaction === "critical" ? Frown  : Meh;
+  return (
+    <span className={cn("inline-flex items-center justify-center h-6 w-6 rounded-full ring-1 shrink-0", cls)}
+      title={`Satisfaction: ${CLIENT_SATISFACTION_LABELS[satisfaction] ?? satisfaction}`}
+    >
+      <Icon className="h-3 w-3" strokeWidth={2} />
+    </span>
+  );
+}
+
+function HistoryEntry({ entry, isFirst }: { entry: ProjectHealthUpdate; isFirst: boolean }) {
+  return (
+    <div className="flex gap-3">
+      {/* Timeline spine */}
+      <div className="flex flex-col items-center pt-1 shrink-0">
         <div className={cn(
-          "h-2.5 w-2.5 rounded-full mt-1.5 shrink-0 ring-2 ring-background",
+          "h-2.5 w-2.5 rounded-full shrink-0 ring-2 ring-background",
           isFirst ? "bg-violet-400" : "bg-white/20",
         )} />
         <div className="w-px flex-1 bg-white/8 mt-1" />
       </div>
-      <div className="pb-6 min-w-0 flex-1">
-        <div className="flex items-center gap-2 mb-2 flex-wrap">
-          <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" strokeWidth={1.5} />
-          <span className="text-xs text-muted-foreground">
-            {format(new Date(entry.createdAt), "dd MMM yyyy, HH:mm")}
-          </span>
-          <span className="text-muted-foreground/30 text-xs">
-            · {formatDistanceToNowStrict(new Date(entry.createdAt), { addSuffix: true })}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-2 mb-2">
-          <StatusBadge value={entry.generalStatus} labels={GENERAL_STATUS_LABELS} cls={generalStatusCls} />
-          {entry.budgetStatus && (
-            <StatusBadge value={entry.budgetStatus} labels={BUDGET_STATUS_LABELS} cls={budgetStatusCls} />
-          )}
-          <StatusBadge value={entry.riskLevel} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} />
-          {entry.clientSatisfaction && (
-            <StatusBadge value={entry.clientSatisfaction} labels={CLIENT_SATISFACTION_LABELS} cls={clientSatisfactionCls} />
-          )}
-        </div>
-        {entry.comment && (
-          <p className="text-sm text-foreground/80 whitespace-pre-wrap bg-white/3 rounded-lg px-3 py-2 mt-2">
-            {entry.comment}
+
+      {/* Two-column content */}
+      <div className="pb-6 min-w-0 flex-1 grid grid-cols-[110px_1fr] gap-4">
+        {/* Left col: date + status plain text + icon chips */}
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground/60 mb-1.5 whitespace-nowrap">
+            {format(new Date(entry.createdAt), "dd MMM yyyy")}
           </p>
-        )}
+          <p className="text-sm font-medium mb-2 truncate">
+            {GENERAL_STATUS_LABELS[entry.generalStatus] ?? entry.generalStatus}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <RiskChip riskLevel={entry.riskLevel} />
+            {entry.clientSatisfaction && (
+              <SatisfactionChip satisfaction={entry.clientSatisfaction} />
+            )}
+          </div>
+        </div>
+
+        {/* Right col: comment */}
+        <div className="pt-5 min-w-0">
+          {entry.comment ? (
+            <p className="text-sm text-foreground/80 whitespace-pre-wrap">
+              {entry.comment}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground/40 italic">No comment</p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -838,18 +899,12 @@ export default function ProjectStatusDetail() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const { data, isLoading, isError } = useQuery<ProjectStatusDetailResponse>({
-    queryKey: ["project-status-detail", projectId],
-    queryFn: async () => {
-      const res = await fetch(`/api/project-status/${projectId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load project");
-      return res.json();
-    },
-    enabled: !isNaN(projectId),
+  const { data, isLoading, isError } = useGetProjectStatusDetail(projectId, {
+    query: { queryKey: getGetProjectStatusDetailQueryKey(projectId), enabled: !isNaN(projectId) },
   });
 
   function invalidate() {
-    queryClient.invalidateQueries({ queryKey: ["project-status-detail", projectId] });
+    queryClient.invalidateQueries({ queryKey: getGetProjectStatusDetailQueryKey(projectId) });
     queryClient.invalidateQueries({ queryKey: ["project-status"] });
   }
 
@@ -874,7 +929,8 @@ export default function ProjectStatusDetail() {
     );
   }
 
-  const { project, history, monthlyData, futureProjections } = data;
+  const { project, history, monthlyData, futureBookings } = data;
+  const futureProjections = computeFutureProjections(futureBookings ?? [], new Date());
   const latestEntry = history[0] ?? null;
   const dot = resolveColor(project.color, project.id);
 
@@ -884,20 +940,30 @@ export default function ProjectStatusDetail() {
     clientSatisfaction: project.clientSatisfaction ?? "__none__",
   };
 
-  // KPI values
-  const budgetPct =
-    project.budgetTotal && project.budgetTotal > 0 && project.loggedTotal != null
-      ? Math.round((project.loggedTotal / project.budgetTotal) * 100)
-      : null;
+  // KPI: Runtime
+  const runtimeLabel = (() => {
+    if (!project.startDate) return "Not set";
+    const start = format(new Date(project.startDate), "MMM yyyy");
+    if (!project.endDate) return `${start} – ongoing`;
+    return `${start} – ${format(new Date(project.endDate), "MMM yyyy")}`;
+  })();
 
+  // KPI: Next update due
   const nextDueDate = project.nextUpdateDue ? new Date(project.nextUpdateDue) : null;
   const nextDueLabel = nextDueDate
     ? (isPast(nextDueDate) ? `${format(nextDueDate, "dd MMM")} (overdue)` : format(nextDueDate, "dd MMM yyyy"))
     : "No updates yet";
+  const nextDueSub = nextDueDate
+    ? (project.updateOverdue ? "Overdue" : formatDistanceToNowStrict(nextDueDate, { addSuffix: true }))
+    : undefined;
 
-  const loggedLabel = project.loggedTotal != null
-    ? fmtEur(project.loggedTotal)
-    : "—";
+  // KPI: Last comment
+  const lastCommentLabel = project.lastCommentAt
+    ? format(new Date(project.lastCommentAt), "dd MMM yyyy")
+    : "No comments yet";
+  const lastCommentSub = project.lastCommentAt
+    ? formatDistanceToNowStrict(new Date(project.lastCommentAt), { addSuffix: true })
+    : undefined;
 
   return (
     <AdminLayout>
@@ -944,7 +1010,7 @@ export default function ProjectStatusDetail() {
             onClick={() => navigate(`/billing?project=${project.id}`)}
           >
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.5} />
-            Billing
+            Open in Billing
           </Button>
           <Button
             variant="outline"
@@ -953,7 +1019,7 @@ export default function ProjectStatusDetail() {
             onClick={() => navigate(`/reports`)}
           >
             <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.5} />
-            Reports
+            Open in Reports
           </Button>
           <Button
             size="sm"
@@ -969,28 +1035,22 @@ export default function ProjectStatusDetail() {
       {/* KPI strip */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         <KpiCard
-          label="Budget consumed"
-          value={budgetPct != null ? `${budgetPct}%` : "—"}
-          sub={project.budgetTotal ? `of ${fmtEur(project.budgetTotal)} total` : "No budget set"}
-          icon={<DollarSign className="h-4 w-4" />}
-          accent={
-            budgetPct == null ? undefined :
-            budgetPct >= 90 ? "red" :
-            budgetPct >= 70 ? "amber" : "green"
-          }
-        />
-        <KpiCard
-          label="Revenue logged"
-          value={loggedLabel}
-          sub={project.invoicedTotal != null ? `${fmtEur(project.invoicedTotal)} invoiced` : undefined}
-          icon={<Activity className="h-4 w-4" />}
+          label="Runtime"
+          value={runtimeLabel}
+          icon={<CalendarDays className="h-4 w-4" />}
         />
         <KpiCard
           label="Next update due"
           value={nextDueLabel}
-          sub={project.updateOverdue ? "Overdue" : (latestEntry ? `Last: ${format(new Date(latestEntry.createdAt), "dd MMM yyyy")}` : undefined)}
-          icon={<CalendarDays className="h-4 w-4" />}
+          sub={nextDueSub}
+          icon={<Clock className="h-4 w-4" />}
           accent={project.updateOverdue ? "amber" : undefined}
+        />
+        <KpiCard
+          label="Last comment"
+          value={lastCommentLabel}
+          sub={lastCommentSub}
+          icon={<MessageSquare className="h-4 w-4" />}
         />
       </div>
 
@@ -1004,18 +1064,18 @@ export default function ProjectStatusDetail() {
             <div className="flex flex-wrap gap-4 mb-4">
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs text-muted-foreground uppercase tracking-wide">General</span>
-                <StatusBadge value={project.generalStatus} labels={GENERAL_STATUS_LABELS} cls={generalStatusCls} size="lg" />
+                <StatusBadge value={project.generalStatus ?? null} labels={GENERAL_STATUS_LABELS} cls={generalStatusCls} size="lg" />
               </div>
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs text-muted-foreground uppercase tracking-wide">Risk</span>
                 <div className="flex items-center gap-1.5">
-                  <StatusBadge value={project.riskLevel} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} size="lg" />
-                  <TrendArrow direction={project.trendDirection} />
+                  <StatusBadge value={project.riskLevel ?? null} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} size="lg" />
+                  <TrendArrow direction={project.trendDirection as "up" | "down" | "stable" | null ?? null} />
                 </div>
               </div>
               <div className="flex flex-col gap-1.5">
                 <span className="text-xs text-muted-foreground uppercase tracking-wide">Satisfaction</span>
-                <StatusBadge value={project.clientSatisfaction} labels={CLIENT_SATISFACTION_LABELS} cls={clientSatisfactionCls} size="lg" />
+                <StatusBadge value={project.clientSatisfaction ?? null} labels={CLIENT_SATISFACTION_LABELS} cls={clientSatisfactionCls} size="lg" />
               </div>
             </div>
 
@@ -1046,10 +1106,10 @@ export default function ProjectStatusDetail() {
         <div className="rounded-xl border border-white/8 bg-white/2 p-5">
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4">Budget Breakdown</h2>
           <BudgetBreakdown
-            budgetTotal={project.budgetTotal}
-            loggedTotal={project.loggedTotal}
-            invoicedTotal={project.invoicedTotal}
-            budgetAlert={project.budgetAlert}
+            budgetTotal={project.budgetTotal ?? null}
+            loggedTotal={project.loggedTotal ?? null}
+            invoicedTotal={project.invoicedTotal ?? null}
+            budgetAlert={project.budgetAlert ?? false}
           />
         </div>
 
@@ -1058,7 +1118,7 @@ export default function ProjectStatusDetail() {
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-4">Next Steps</h2>
           <NextStepsChecklist
             projectId={projectId}
-            initialSteps={project.nextSteps}
+            initialSteps={project.nextSteps as NextStep[] | null ?? null}
             onSaved={invalidate}
           />
         </div>
@@ -1089,7 +1149,7 @@ export default function ProjectStatusDetail() {
           <BurnUpChart
             monthlyData={monthlyData}
             futureProjections={futureProjections}
-            budgetTotal={project.budgetTotal}
+            budgetTotal={project.budgetTotal ?? null}
           />
         </div>
       )}

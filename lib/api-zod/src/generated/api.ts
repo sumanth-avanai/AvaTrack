@@ -637,6 +637,152 @@ export const GetDashboardSummaryResponse = zod.object({
 });
 
 /**
+ * @summary List all projects with health status overview
+ */
+export const ListProjectStatusResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  color: zod.string().nullable(),
+  clientName: zod.string().nullable(),
+  pmName: zod.string().nullable(),
+  generalStatus: zod.string().nullable(),
+  riskLevel: zod.string().nullable(),
+  clientSatisfaction: zod.string().nullable(),
+  latestUpdateAt: zod.coerce.date().nullable(),
+  latestComment: zod.string().nullable(),
+  budgetTotal: zod.number().nullable(),
+  budgetConsumed: zod.number().nullable(),
+  budgetProgress: zod.number().nullable(),
+  trendDirection: zod.string().nullable(),
+  updateOverdue: zod.boolean(),
+  lastUpdateAge: zod.number().nullable(),
+  budgetAlert: zod.boolean(),
+  needsAttention: zod.boolean(),
+});
+export const ListProjectStatusResponse = zod.array(
+  ListProjectStatusResponseItem,
+);
+
+/**
+ * @summary Get detailed status for a single project
+ */
+export const GetProjectStatusDetailParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetProjectStatusDetailResponse = zod.object({
+  project: zod.object({
+    id: zod.number(),
+    name: zod.string(),
+    color: zod.string().nullish(),
+    clientId: zod.number().optional(),
+    clientName: zod.string().nullish(),
+    pmName: zod.string().nullish(),
+    startDate: zod.coerce.date().nullish(),
+    endDate: zod.coerce.date().nullish(),
+    generalStatus: zod.string().nullish(),
+    riskLevel: zod.string().nullish(),
+    clientSatisfaction: zod.string().nullish(),
+    nextSteps: zod
+      .array(
+        zod.object({
+          id: zod.string(),
+          text: zod.string(),
+          done: zod.boolean(),
+        }),
+      )
+      .nullish(),
+    budgetTotal: zod.number().nullish(),
+    loggedTotal: zod.number().nullish(),
+    invoicedTotal: zod.number().nullish(),
+    trendDirection: zod.string().nullish(),
+    nextUpdateDue: zod.coerce.date().nullish(),
+    updateOverdue: zod.boolean().optional(),
+    lastUpdateAge: zod.number().nullish(),
+    lastCommentAt: zod.coerce.date().nullish(),
+    budgetAlert: zod.boolean().optional(),
+    budgetProgress: zod.number().nullish(),
+  }),
+  history: zod.array(
+    zod.object({
+      id: zod.number(),
+      projectId: zod.number(),
+      generalStatus: zod.string(),
+      budgetStatus: zod.string().nullish(),
+      riskLevel: zod.string(),
+      clientSatisfaction: zod.string().nullish(),
+      comment: zod.string().nullish(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+  monthlyData: zod.array(
+    zod.object({
+      month: zod.string(),
+      loggedRevenue: zod.number(),
+      invoicedRevenue: zod.number(),
+    }),
+  ),
+  futureBookings: zod.array(
+    zod.object({
+      id: zod.number(),
+      employeeId: zod.number(),
+      employeeName: zod.string(),
+      startDate: zod.coerce.date(),
+      endDate: zod.coerce.date(),
+      hoursPerDay: zod.number(),
+      weekdayHours: zod.record(zod.string(), zod.number()).nullish(),
+      projectRoleId: zod.number().nullish(),
+      roleName: zod.string().nullish(),
+      dayRate: zod.number().nullish(),
+    }),
+  ),
+  updateCadenceDays: zod.number(),
+  budgetAlertThreshold: zod.number(),
+});
+
+/**
+ * @summary Add a health update entry to a project
+ */
+export const CreateProjectHealthUpdateParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const CreateProjectHealthUpdateBody = zod.object({
+  generalStatus: zod.enum([
+    "planned",
+    "in_progress",
+    "on_hold",
+    "completed",
+    "cancelled",
+  ]),
+  budgetStatus: zod.string().optional(),
+  riskLevel: zod.enum(["low", "medium", "high"]),
+  clientSatisfaction: zod.enum(["happy", "neutral", "critical"]).optional(),
+  comment: zod.string().optional(),
+});
+
+/**
+ * @summary Persist the next-steps checklist for a project
+ */
+export const PatchProjectNextStepsParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const PatchProjectNextStepsBody = zod.object({
+  nextSteps: zod.array(
+    zod.object({
+      id: zod.string(),
+      text: zod.string(),
+      done: zod.boolean(),
+    }),
+  ),
+});
+
+export const PatchProjectNextStepsResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
  * @summary Verify employee PIN for personal link access
  */
 export const VerifyEmployeePinBody = zod.object({

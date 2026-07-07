@@ -340,6 +340,175 @@ export interface DashboardSummary {
   employeeSummaries: EmployeeWeekSummary[];
 }
 
+export interface NextStepItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface ProjectStatusRow {
+  id: number;
+  name: string;
+  /** @nullable */
+  color: string | null;
+  /** @nullable */
+  clientName: string | null;
+  /** @nullable */
+  pmName: string | null;
+  /** @nullable */
+  generalStatus: string | null;
+  /** @nullable */
+  riskLevel: string | null;
+  /** @nullable */
+  clientSatisfaction: string | null;
+  /** @nullable */
+  latestUpdateAt: string | null;
+  /** @nullable */
+  latestComment: string | null;
+  /** @nullable */
+  budgetTotal: number | null;
+  /** @nullable */
+  budgetConsumed: number | null;
+  /** @nullable */
+  budgetProgress: number | null;
+  /** @nullable */
+  trendDirection: string | null;
+  updateOverdue: boolean;
+  /** @nullable */
+  lastUpdateAge: number | null;
+  budgetAlert: boolean;
+  needsAttention: boolean;
+}
+
+export interface ProjectHealthUpdate {
+  id: number;
+  projectId: number;
+  generalStatus: string;
+  /** @nullable */
+  budgetStatus?: string | null;
+  riskLevel: string;
+  /** @nullable */
+  clientSatisfaction?: string | null;
+  /** @nullable */
+  comment?: string | null;
+  createdAt: string;
+}
+
+export interface MonthlyDataPoint {
+  month: string;
+  loggedRevenue: number;
+  invoicedRevenue: number;
+}
+
+export type FutureBookingWeekdayHours = { [key: string]: number } | null;
+
+export interface FutureBooking {
+  id: number;
+  employeeId: number;
+  employeeName: string;
+  startDate: string;
+  endDate: string;
+  hoursPerDay: number;
+  weekdayHours?: FutureBookingWeekdayHours;
+  /** @nullable */
+  projectRoleId?: number | null;
+  /** @nullable */
+  roleName?: string | null;
+  /** @nullable */
+  dayRate?: number | null;
+}
+
+export type ProjectStatusDetailResponseProject = {
+  id: number;
+  name: string;
+  /** @nullable */
+  color?: string | null;
+  clientId?: number;
+  /** @nullable */
+  clientName?: string | null;
+  /** @nullable */
+  pmName?: string | null;
+  /** @nullable */
+  startDate?: string | null;
+  /** @nullable */
+  endDate?: string | null;
+  /** @nullable */
+  generalStatus?: string | null;
+  /** @nullable */
+  riskLevel?: string | null;
+  /** @nullable */
+  clientSatisfaction?: string | null;
+  nextSteps?: NextStepItem[] | null;
+  /** @nullable */
+  budgetTotal?: number | null;
+  /** @nullable */
+  loggedTotal?: number | null;
+  /** @nullable */
+  invoicedTotal?: number | null;
+  /** @nullable */
+  trendDirection?: string | null;
+  /** @nullable */
+  nextUpdateDue?: string | null;
+  updateOverdue?: boolean;
+  /** @nullable */
+  lastUpdateAge?: number | null;
+  /** @nullable */
+  lastCommentAt?: string | null;
+  budgetAlert?: boolean;
+  /** @nullable */
+  budgetProgress?: number | null;
+};
+
+export interface ProjectStatusDetailResponse {
+  project: ProjectStatusDetailResponseProject;
+  history: ProjectHealthUpdate[];
+  monthlyData: MonthlyDataPoint[];
+  futureBookings: FutureBooking[];
+  updateCadenceDays: number;
+  budgetAlertThreshold: number;
+}
+
+export type CreateHealthUpdateBodyGeneralStatus =
+  (typeof CreateHealthUpdateBodyGeneralStatus)[keyof typeof CreateHealthUpdateBodyGeneralStatus];
+
+export const CreateHealthUpdateBodyGeneralStatus = {
+  planned: "planned",
+  in_progress: "in_progress",
+  on_hold: "on_hold",
+  completed: "completed",
+  cancelled: "cancelled",
+} as const;
+
+export type CreateHealthUpdateBodyRiskLevel =
+  (typeof CreateHealthUpdateBodyRiskLevel)[keyof typeof CreateHealthUpdateBodyRiskLevel];
+
+export const CreateHealthUpdateBodyRiskLevel = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+} as const;
+
+export type CreateHealthUpdateBodyClientSatisfaction =
+  (typeof CreateHealthUpdateBodyClientSatisfaction)[keyof typeof CreateHealthUpdateBodyClientSatisfaction];
+
+export const CreateHealthUpdateBodyClientSatisfaction = {
+  happy: "happy",
+  neutral: "neutral",
+  critical: "critical",
+} as const;
+
+export interface CreateHealthUpdateBody {
+  generalStatus: CreateHealthUpdateBodyGeneralStatus;
+  budgetStatus?: string;
+  riskLevel: CreateHealthUpdateBodyRiskLevel;
+  clientSatisfaction?: CreateHealthUpdateBodyClientSatisfaction;
+  comment?: string;
+}
+
+export interface PatchNextStepsBody {
+  nextSteps: NextStepItem[];
+}
+
 export type ListClientsParams = {
   includeInactive?: boolean;
 };
@@ -378,4 +547,8 @@ export type GetProjectReportParams = {
 export type GetClientReportParams = {
   startDate: string;
   endDate: string;
+};
+
+export type PatchProjectNextSteps200 = {
+  ok: boolean;
 };

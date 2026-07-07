@@ -1,6 +1,5 @@
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   Table,
@@ -11,13 +10,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Activity,
   AlertTriangle,
@@ -29,29 +27,12 @@ import {
   Minus,
   Zap,
   BarChart2,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, formatDistanceToNowStrict } from "date-fns";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface ProjectStatusRow {
-  id: number;
-  name: string;
-  color: string | null;
-  clientName: string | null;
-  pmName: string | null;
-  generalStatus: string | null;
-  riskLevel: string | null;
-  clientSatisfaction: string | null;
-  latestUpdateAt: string | null;
-  budgetTotal: number | null;
-  budgetConsumed: number | null;
-  trendDirection: "up" | "down" | "stable" | null;
-  updateOverdue: boolean;
-  budgetAlert: boolean;
-  needsAttention: boolean;
-}
+import { useListProjectStatus } from "@workspace/api-client-react";
+import type { ProjectStatusRow } from "@workspace/api-client-react";
 
 // ─── Label maps ───────────────────────────────────────────────────────────────
 
@@ -278,15 +259,9 @@ export default function ProjectStatus() {
   const [pmFilter, setPmFilter]           = useState("__all__");
   const [quickFilter, setQuickFilter]     = useState<QuickFilter>("all");
   const [completedOpen, setCompletedOpen] = useState(false);
+  const [filterOpen, setFilterOpen]       = useState(false);
 
-  const { data, isLoading } = useQuery<ProjectStatusRow[]>({
-    queryKey: ["project-status"],
-    queryFn: async () => {
-      const res = await fetch("/api/project-status", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load project status");
-      return res.json();
-    },
-  });
+  const { data, isLoading } = useListProjectStatus();
 
   const rows = data ?? [];
 
@@ -302,11 +277,11 @@ export default function ProjectStatus() {
 
   // KPI counters
   const kpis = useMemo(() => {
-    const active     = rows.filter((r) => r.generalStatus !== "completed" && r.generalStatus !== "cancelled");
-    const attention  = active.filter((r) => r.needsAttention);
-    const highRisk   = active.filter((r) => r.riskLevel === "high");
-    const overdue    = active.filter((r) => r.updateOverdue);
-    return { total: active.length, attention: attention.length, highRisk: highRisk.length, overdue: overdue.length };
+    const active        = rows.filter((r) => r.generalStatus !== "completed" && r.generalStatus !== "cancelled");
+    const attention     = active.filter((r) => r.needsAttention);
+    const budgetAlerts  = active.filter((r) => r.budgetAlert);
+    const overdue       = active.filter((r) => r.updateOverdue);
+    return { total: active.length, attention: attention.length, budgetAlerts: budgetAlerts.length, overdue: overdue.length };
   }, [rows]);
 
   const filtered = useMemo(() => {
@@ -342,7 +317,7 @@ export default function ProjectStatus() {
     return filtered.filter((r) => r.generalStatus === "completed" || r.generalStatus === "cancelled");
   }, [filtered]);
 
-  const colSpan = 7;
+  const colSpan = 6;
 
   const tableHeader = (
     <TableHeader>
@@ -350,7 +325,6 @@ export default function ProjectStatus() {
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide pl-5">Project</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">PM</TableHead>
-        <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Status</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Health</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Budget</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Updated</TableHead>
@@ -393,12 +367,9 @@ export default function ProjectStatus() {
         <TableCell className="text-sm text-muted-foreground">{row.clientName ?? "—"}</TableCell>
         <TableCell className="text-sm text-muted-foreground">{row.pmName ?? "—"}</TableCell>
         <TableCell>
-          <StatusBadge value={row.generalStatus} labels={GENERAL_STATUS_LABELS} cls={generalStatusCls} />
-        </TableCell>
-        <TableCell>
           <div className="flex items-center gap-1.5">
             <StatusBadge value={row.riskLevel} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} />
-            <TrendArrow direction={row.trendDirection} />
+            <TrendArrow direction={row.trendDirection as "up" | "down" | "stable" | null} />
           </div>
         </TableCell>
         <TableCell>
@@ -439,10 +410,10 @@ export default function ProjectStatus() {
             accent={kpis.attention > 0 ? "amber" : "default"}
           />
           <KpiCard
-            label="High risk"
-            value={kpis.highRisk}
+            label="Budget alerts"
+            value={kpis.budgetAlerts}
             icon={<AlertTriangle className="h-4 w-4" strokeWidth={1.5} />}
-            accent={kpis.highRisk > 0 ? "red" : "default"}
+            accent={kpis.budgetAlerts > 0 ? "red" : "default"}
           />
           <KpiCard
             label="Update overdue"
@@ -462,29 +433,89 @@ export default function ProjectStatus() {
           className="w-52"
         />
 
-        <Select value={clientFilter} onValueChange={setClientFilter}>
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="All customers" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">All customers</SelectItem>
-            {clientOptions.map((c) => (
-              <SelectItem key={c} value={c}>{c}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Single Filter button + Popover */}
+        {(() => {
+          const activeCount = (clientFilter !== "__all__" ? 1 : 0) + (pmFilter !== "__all__" ? 1 : 0);
+          return (
+            <Popover open={filterOpen} onOpenChange={setFilterOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={cn("gap-1.5 h-9", activeCount > 0 && "border-violet-500/50 text-violet-300")}
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" strokeWidth={1.5} />
+                  Filter
+                  {activeCount > 0 && (
+                    <span className="inline-flex items-center justify-center h-4 min-w-4 rounded-full bg-violet-500/30 text-violet-200 text-[10px] font-bold px-1">
+                      {activeCount}
+                    </span>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-4" align="start">
+                <div className="space-y-4">
+                  {/* Customer group */}
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Customer</p>
+                    <div className="space-y-1">
+                      {["__all__", ...clientOptions].map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setClientFilter(opt)}
+                          className={cn(
+                            "w-full text-left px-2 py-1.5 rounded-md text-sm transition-colors",
+                            clientFilter === opt
+                              ? "bg-violet-500/20 text-violet-300"
+                              : "text-muted-foreground hover:bg-white/6 hover:text-foreground",
+                          )}
+                        >
+                          {opt === "__all__" ? "All customers" : opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
 
-        <Select value={pmFilter} onValueChange={setPmFilter}>
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="All PMs" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">All PMs</SelectItem>
-            {pmOptions.map((p) => (
-              <SelectItem key={p} value={p}>{p}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+                  {/* PM group */}
+                  {pmOptions.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">PM</p>
+                      <div className="space-y-1">
+                        {["__all__", ...pmOptions].map((opt) => (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => setPmFilter(opt)}
+                            className={cn(
+                              "w-full text-left px-2 py-1.5 rounded-md text-sm transition-colors",
+                              pmFilter === opt
+                                ? "bg-violet-500/20 text-violet-300"
+                                : "text-muted-foreground hover:bg-white/6 hover:text-foreground",
+                            )}
+                          >
+                            {opt === "__all__" ? "All PMs" : opt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Clear */}
+                  {activeCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => { setClientFilter("__all__"); setPmFilter("__all__"); }}
+                      className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+          );
+        })()}
 
         {/* Quick-filter chips */}
         <div className="flex items-center gap-2 ml-auto">
@@ -493,7 +524,7 @@ export default function ProjectStatus() {
           </FilterChip>
           <FilterChip active={quickFilter === "attention"} onClick={() => setQuickFilter("attention")}>
             <Zap className="h-3 w-3" />
-            Attention
+            Needs attention
             {kpis.attention > 0 && (
               <span className="inline-flex items-center justify-center h-4 min-w-4 rounded-full bg-amber-500/30 text-amber-300 text-[10px] font-bold px-1">
                 {kpis.attention}
@@ -502,7 +533,7 @@ export default function ProjectStatus() {
           </FilterChip>
           <FilterChip active={quickFilter === "overdue"} onClick={() => setQuickFilter("overdue")}>
             <Clock className="h-3 w-3" />
-            Overdue
+            Update overdue
             {kpis.overdue > 0 && (
               <span className="inline-flex items-center justify-center h-4 min-w-4 rounded-full bg-amber-500/30 text-amber-300 text-[10px] font-bold px-1">
                 {kpis.overdue}
