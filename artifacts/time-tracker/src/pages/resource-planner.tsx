@@ -47,8 +47,14 @@ import {
 import {
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
 import {
   CalendarRange,
@@ -1626,18 +1632,38 @@ function BookingModal({
                   <div className="font-semibold text-foreground flex items-center gap-1.5">
                     <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                     This slot · past vs. future
+                    <Popover>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                aria-label="About releasing past undelivered plan"
+                                className="inline-flex items-center justify-center rounded hover:bg-muted/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring p-0.5"
+                              >
+                                <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                              </button>
+                            </PopoverTrigger>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">About releasing past undelivered plan</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <PopoverContent side="bottom" className="max-w-xs w-80">
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          Today is the dividing line. Planned days{" "}
+                          <span className="font-medium text-foreground">before today</span> that were
+                          never logged are <span className="font-medium text-foreground">undelivered</span>{" "}
+                          and silently hold budget. Releasing them frees that reservation —{" "}
+                          <span className="font-medium text-foreground">future plan and logged work are always kept.</span>
+                        </p>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     as of today, {todayLabel}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  Today is the dividing line. Planned days{" "}
-                  <span className="font-medium text-foreground">before today</span> that were
-                  never logged are <span className="font-medium text-foreground">undelivered</span>{" "}
-                  and silently hold budget. Releasing them frees that reservation —{" "}
-                  <span className="font-medium text-foreground">future plan and logged work are always kept.</span>
-                </p>
                 {released ? (
                   <div className="flex items-center justify-between gap-2 rounded-md bg-muted/60 border border-border px-2.5 py-2">
                     <span className="flex items-center gap-1.5 text-muted-foreground">
