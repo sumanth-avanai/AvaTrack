@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, serial, timestamp, boolean, real, date, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, timestamp, boolean, real, date, integer, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { clientsTable } from "./clients";
@@ -19,6 +19,9 @@ export const projectsTable = pgTable("projects", {
   budgetStatus: varchar("budget_status", { length: 20 }),
   riskLevel: varchar("risk_level", { length: 20 }),
   clientSatisfaction: varchar("client_satisfaction", { length: 20 }),
+  // NEW: lightweight checklist — array of { id, text, done }. Null = no steps yet.
+  // TODO: if this grows beyond simple notes, consider a relational next_steps table instead.
+  nextSteps: jsonb("next_steps").$type<{ id: string; text: string; done: boolean }[]>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
