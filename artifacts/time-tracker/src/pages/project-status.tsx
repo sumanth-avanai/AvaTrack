@@ -119,6 +119,9 @@ function BudgetCell({
     return <span className="text-muted-foreground/40 text-xs">—</span>;
   }
   const consumed = budgetConsumed ?? 0;
+  if (consumed === 0) {
+    return <span className="text-muted-foreground/40 text-xs">No hours yet</span>;
+  }
   const pct = Math.round((consumed / budgetTotal) * 100);
   const barColor =
     pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-500" : "bg-green-500";
@@ -339,23 +342,14 @@ export default function ProjectStatus() {
     return (
       <TableRow
         className={cn(
-          "border-white/8 cursor-pointer transition-colors group relative",
+          "border-white/8 cursor-pointer transition-colors group relative border-l-2",
           needsAttention
-            ? "hover:bg-red-500/6"
-            : "hover:bg-white/4",
+            ? "hover:bg-red-500/6 border-l-red-500/60"
+            : "hover:bg-white/4 border-l-transparent",
         )}
         onClick={() => navigate(`/project-status/${row.id}`)}
       >
-        {/* Left accent border for attention rows */}
-        <TableCell className="pl-0 pr-3 py-3 w-1">
-          <div
-            className={cn(
-              "w-0.5 h-full min-h-[36px] rounded-full ml-2",
-              needsAttention ? "bg-red-500/60" : "bg-transparent",
-            )}
-          />
-        </TableCell>
-        <TableCell className="font-medium text-sm pl-2">
+        <TableCell className="font-medium text-sm pl-5">
           <div className="flex items-center gap-2">
             <span
               className="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-white/10"

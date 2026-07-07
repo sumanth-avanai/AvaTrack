@@ -364,9 +364,9 @@ function BudgetBreakdown({
       {/* 3-column grid */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: "Invoiced",  value: invoiced,  pct: (invoiced / budgetTotal) * 100, color: "text-violet-400" },
-          { label: "Logged",    value: logged,     pct: (logged   / budgetTotal) * 100, color: pctColor },
-          { label: "Remaining", value: remaining,  pct: (remaining / budgetTotal) * 100, color: "text-muted-foreground" },
+          { label: "Invoiced",         value: invoiced,  pct: (invoiced  / budgetTotal) * 100, color: "text-violet-400" },
+          { label: "Logged (unbilled)", value: unbilled,  pct: (unbilled  / budgetTotal) * 100, color: unbilled > 0 ? "text-amber-400" : "text-muted-foreground" },
+          { label: "Remaining",         value: remaining, pct: (remaining / budgetTotal) * 100, color: "text-muted-foreground" },
         ].map(({ label, value, pct, color }) => (
           <div key={label} className="rounded-lg bg-white/3 border border-white/6 p-3">
             <p className="text-xs text-muted-foreground mb-1">{label}</p>
@@ -950,11 +950,13 @@ export default function ProjectStatusDetail() {
 
   // KPI: Next update due
   const nextDueDate = project.nextUpdateDue ? new Date(project.nextUpdateDue) : null;
+  const msUntilDue = nextDueDate ? nextDueDate.getTime() - Date.now() : null;
+  const nearDue = msUntilDue !== null && msUntilDue > 0 && msUntilDue <= 3 * 24 * 60 * 60 * 1000;
   const nextDueLabel = nextDueDate
     ? (isPast(nextDueDate) ? `${format(nextDueDate, "dd MMM")} (overdue)` : format(nextDueDate, "dd MMM yyyy"))
     : "No updates yet";
   const nextDueSub = nextDueDate
-    ? (project.updateOverdue ? "Overdue" : formatDistanceToNowStrict(nextDueDate, { addSuffix: true }))
+    ? (project.updateOverdue ? "Overdue" : nearDue ? "Due soon" : formatDistanceToNowStrict(nextDueDate, { addSuffix: true }))
     : undefined;
 
   // KPI: Last comment
@@ -1044,7 +1046,7 @@ export default function ProjectStatusDetail() {
           value={nextDueLabel}
           sub={nextDueSub}
           icon={<Clock className="h-4 w-4" />}
-          accent={project.updateOverdue ? "amber" : undefined}
+          accent={(project.updateOverdue || nearDue) ? "amber" : undefined}
         />
         <KpiCard
           label="Last comment"
