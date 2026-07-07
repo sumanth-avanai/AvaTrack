@@ -780,6 +780,7 @@ function BookingModal({
   const unreleaseMut = useUnreleaseBooking();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmRelease, setConfirmRelease] = useState(initialConfirmRelease ?? false);
+  const [showBudgetInfo, setShowBudgetInfo] = useState(false);
 
   const isEdit = state.mode === "edit";
   const defaultProject = isEdit ? String(state.booking.projectId) : "";
@@ -1217,6 +1218,7 @@ function BookingModal({
     : (state as ModalState).employeeName;
 
   return (
+    <>
     <Dialog
       open
       onOpenChange={(o) => {
@@ -1795,11 +1797,24 @@ function BookingModal({
             return (
               <div className="rounded-md border border-border bg-muted/30 px-3 py-2.5 text-sm space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="font-semibold text-foreground">
+                  <div className="flex items-center gap-1.5 font-semibold text-foreground">
                     Role budget
                     {selectedRole ? (
                       <span className="font-normal text-muted-foreground"> — {selectedRole.name}</span>
                     ) : null}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label="Budget definitions and formulas"
+                          onClick={() => setShowBudgetInfo(true)}
+                          className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                        >
+                          <Info className="h-3.5 w-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Budget definitions &amp; formulas</TooltipContent>
+                    </Tooltip>
                   </div>
                   <span className="text-[11px] text-muted-foreground whitespace-nowrap">
                     live · matches Budget tab
@@ -1833,13 +1848,6 @@ function BookingModal({
                     <span className="text-foreground">{freeDays != null ? r1(freeDays) + "d" : "—"}</span>
                   </div>
                 </div>
-                <div className="text-[11px] text-muted-foreground border-t border-border/40 pt-1.5">
-                  Budgeted = Invoiced + Re-plannable + Unplanned. Remaining (Budgeted − Invoiced):{" "}
-                  <span className="text-foreground font-medium">
-                    {remainingBudgetDays != null ? r1(remainingBudgetDays) + "d" : "—"}
-                  </span>
-                </div>
-
                 {/* Live vs projected effect of THIS slot */}
                 {showProjected ? (
                   <div className="rounded-md bg-background/60 border border-border/60 px-2.5 py-1.5 space-y-0.5">
@@ -1952,13 +1960,6 @@ function BookingModal({
                   </div>
                 )}
 
-                {/* Legend — definitions (strictly per replit.md) */}
-                <div className="border-t border-border/40 pt-1.5 text-[11px] text-muted-foreground leading-relaxed">
-                  <span className="font-medium text-foreground">What these mean: </span>
-                  <b>Planned</b> = days booked. <b>Logged</b> = hours recorded ÷ 8. <b>Invoiced</b> = billed (locked).{" "}
-                  <b>Re-plannable</b> = planned but not yet delivered (movable). <b>Unplanned</b> = budget not yet committed.{" "}
-                  <b>Free</b> = Budgeted − Logged. All figures are 8h-day equivalents.
-                </div>
               </div>
             );
           })()}
@@ -2015,6 +2016,72 @@ function BookingModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {/* Budget definitions info Dialog — sibling portal, does not submit the booking */}
+    <Dialog open={showBudgetInfo} onOpenChange={setShowBudgetInfo}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Resource planning — how these numbers work</DialogTitle>
+        </DialogHeader>
+        <div className="overflow-y-auto max-h-[70vh] space-y-4 text-sm pr-1">
+          <p className="text-muted-foreground text-xs">
+            8 hours = 1 day. Every figure is an 8 h-day equivalent (days = hours ÷ 8).
+          </p>
+
+          <div className="space-y-1.5">
+            <div className="font-semibold text-foreground">Master identity</div>
+            <pre className="rounded bg-muted px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed">
+              {`Budget = Invoiced + Re-plannable + Unplanned`}
+            </pre>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="font-semibold text-foreground">Equations</div>
+            <pre className="rounded bg-muted px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed">
+              {`Re-plannable = Σ max(Planned − Logged, 0)   (per day, then ÷ 8)
+Re-plannable = Past Undelivered + Future Planned
+Unplanned    = Budget − Invoiced − Re-plannable
+Free         = Budget − Logged        (operational: real work left)
+Remaining    = Budget − Invoiced      (finance: budget not yet locked)`}
+            </pre>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="font-semibold text-foreground">Definitions</div>
+            <table className="w-full text-xs border-collapse">
+              <tbody>
+                {[
+                  ["Budget", "Days budgeted for the role."],
+                  ["Planned", "Days booked across all slots (Σ planned hours ÷ 8)."],
+                  ["Logged", "Hours recorded in timesheets ÷ 8."],
+                  ["Invoiced", "Logged days already billed. Locked; cannot be re-planned."],
+                  ["Re-plannable", "Planned but not yet delivered; movable."],
+                  ["Unplanned", "Budget not yet committed to a plan."],
+                  ["Free", "Real work left before the budget is burnt."],
+                  ["Remaining", "Budget not yet locked/billed (finance view)."],
+                ].map(([term, desc]) => (
+                  <tr key={term} className="border-b border-border/40 last:border-0">
+                    <td className="py-1.5 pr-3 font-medium text-foreground whitespace-nowrap align-top w-[130px]">{term}</td>
+                    <td className="py-1.5 text-muted-foreground align-top">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="font-semibold text-foreground">Rules</div>
+            <ul className="space-y-1.5 text-muted-foreground list-disc list-inside text-xs leading-relaxed">
+              <li>Only working days (per employee mask, excluding holidays and absences) count toward planned hours.</li>
+              <li>If logged hours exceed planned for a day, the over-logging floors at zero — it does not create negative re-plannable capacity.</li>
+              <li>Each resource booking is one slot; re-plannable is the sum across all slots for the role.</li>
+              <li>Past undelivered plan (end date passed, logged &lt; planned) is still re-plannable and can be released to free up budget.</li>
+            </ul>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 
