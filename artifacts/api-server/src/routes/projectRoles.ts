@@ -386,7 +386,8 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
     .where(
       and(
         eq(resourceBookingsTable.projectId, projectId),
-        sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
+        sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`,
+        sql`(${resourceBookingsTable.status} IS NULL OR ${resourceBookingsTable.status} != 'tentative')`
       )
     );
 
@@ -561,7 +562,10 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
     .where(
-      sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`
+      and(
+        sql`${resourceBookingsTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`,
+        sql`(${resourceBookingsTable.status} IS NULL OR ${resourceBookingsTable.status} != 'tentative')`
+      )
     );
 
   // Fetch time entries with invoiced status for reconciliation + per-employee booked days

@@ -51,7 +51,7 @@ router.get("/projects", async (req, res): Promise<void> => {
       createdAt: projectsTable.createdAt,
       roleCount: sql<number>`(select count(*)::int from ${projectRolesTable} where ${projectRolesTable.projectId} = ${projectsTable.id})`,
       budgetDays: sql<number | null>`(select case when count(*) filter (where pr.budgeted_days is not null) > 0 then coalesce(sum(pr.budgeted_days), 0) else null end from project_roles pr where pr.project_id = ${projectsTable.id})`,
-      bookedDays: sql<number>`(select coalesce(sum(cast((select count(*) from generate_series(rb.start_date::date, rb.end_date::date, '1 day'::interval) as gs(d) where extract(dow from gs.d) between 1 and 5) as float) * rb.hours_per_day / 8.0), 0) from resource_bookings rb where rb.project_id = ${projectsTable.id})`,
+      bookedDays: sql<number>`(select coalesce(sum(cast((select count(*) from generate_series(rb.start_date::date, rb.end_date::date, '1 day'::interval) as gs(d) where extract(dow from gs.d) between 1 and 5) as float) * rb.hours_per_day / 8.0), 0) from resource_bookings rb where rb.project_id = ${projectsTable.id} and (rb.status is null or rb.status != 'tentative'))`,
     })
     .from(projectsTable)
     .leftJoin(clientsTable, eq(projectsTable.clientId, clientsTable.id))
