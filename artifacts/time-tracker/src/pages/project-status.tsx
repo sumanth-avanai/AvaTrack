@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
@@ -24,10 +24,10 @@ import {
   Clock,
   TrendingUp,
   TrendingDown,
-  Minus,
   Zap,
   BarChart2,
   SlidersHorizontal,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, formatDistanceToNowStrict } from "date-fns";
@@ -35,14 +35,6 @@ import { useListProjectStatus } from "@workspace/api-client-react";
 import type { ProjectStatusRow } from "@workspace/api-client-react";
 
 // ─── Label maps ───────────────────────────────────────────────────────────────
-
-const GENERAL_STATUS_LABELS: Record<string, string> = {
-  planned:     "Planned",
-  in_progress: "In Progress",
-  on_hold:     "On Hold",
-  completed:   "Completed",
-  cancelled:   "Cancelled",
-};
 
 const RISK_LEVEL_LABELS: Record<string, string> = {
   low:    "Low",
@@ -56,17 +48,6 @@ const RISK_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 // ─── Badge & colour helpers ────────────────────────────────────────────────────
 
-function generalStatusCls(s: string | null) {
-  switch (s) {
-    case "planned":     return "bg-blue-500/15 text-blue-400 border-blue-500/25";
-    case "in_progress": return "bg-green-500/15 text-green-400 border-green-500/25";
-    case "on_hold":     return "bg-yellow-500/15 text-yellow-400 border-yellow-500/25";
-    case "completed":
-    case "cancelled":   return "bg-gray-500/15 text-gray-400 border-gray-500/25";
-    default:            return "bg-white/5 text-muted-foreground border-white/10";
-  }
-}
-
 function riskLevelCls(s: string | null) {
   switch (s) {
     case "low":    return "bg-green-500/15 text-green-400 border-green-500/25";
@@ -76,32 +57,24 @@ function riskLevelCls(s: string | null) {
   }
 }
 
-function StatusBadge({
-  value,
-  labels,
-  cls,
-}: {
-  value: string | null;
-  labels: Record<string, string>;
-  cls: (v: string | null) => string;
-}) {
-  if (!value) return <span className="text-muted-foreground/40 text-xs">—</span>;
-  return (
-    <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full border text-xs font-medium", cls(value))}>
-      {labels[value] ?? value}
-    </span>
-  );
-}
-
-// ─── Trend arrow ──────────────────────────────────────────────────────────────
+// ─── Trend arrow — only up/down; null and stable render nothing ───────────────
 
 function TrendArrow({ direction }: { direction: "up" | "down" | "stable" | null }) {
-  if (!direction) return null;
   if (direction === "up")
     return <TrendingUp className="h-3.5 w-3.5 text-red-400 shrink-0" strokeWidth={2} />;
   if (direction === "down")
     return <TrendingDown className="h-3.5 w-3.5 text-green-400 shrink-0" strokeWidth={2} />;
-  return <Minus className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" strokeWidth={2} />;
+  return null;
+}
+
+// ─── Euro formatter ───────────────────────────────────────────────────────────
+
+function fmtEuro(v: number): string {
+  if (v >= 1000) {
+    const k = v / 1000;
+    return `€${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}k`;
+  }
+  return `€${Math.round(v)}`;
 }
 
 // ─── Budget mini-bar ──────────────────────────────────────────────────────────
@@ -109,7 +82,6 @@ function TrendArrow({ direction }: { direction: "up" | "down" | "stable" | null 
 function BudgetCell({
   budgetTotal,
   budgetConsumed,
-  budgetAlert,
 }: {
   budgetTotal: number | null;
   budgetConsumed: number | null;
@@ -128,18 +100,20 @@ function BudgetCell({
   const textColor =
     pct >= 90 ? "text-red-400" : pct >= 70 ? "text-amber-400" : "text-green-400";
   return (
-    <div className="flex items-center gap-2 min-w-[80px]">
-      <div className="flex-1 h-1.5 bg-white/8 rounded-full overflow-hidden min-w-[48px] relative">
+    <div className="flex flex-col gap-1 min-w-[96px]">
+      <div className="h-1.5 bg-white/8 rounded-full overflow-hidden relative">
         <div
           className={cn("h-full rounded-full transition-all", barColor)}
           style={{ width: `${Math.min(100, pct)}%` }}
         />
-        {/* 90% alert marker */}
-        {budgetTotal > 0 && (
-          <div className="absolute top-0 bottom-0 w-px bg-white/20" style={{ left: "90%" }} />
-        )}
+        <div className="absolute top-0 bottom-0 w-px bg-white/20" style={{ left: "90%" }} />
       </div>
-      <span className={cn("text-xs font-medium tabular-nums", textColor)}>{pct}%</span>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {fmtEuro(consumed)} / {fmtEuro(budgetTotal)}
+        </span>
+        <span className={cn("text-xs font-medium tabular-nums", textColor)}>{pct}%</span>
+      </div>
     </div>
   );
 }
@@ -252,6 +226,62 @@ function FilterChip({
   );
 }
 
+// ─── Group-by segmented control ───────────────────────────────────────────────
+
+type GroupMode = "none" | "customer" | "pm";
+
+const GROUP_OPTIONS: { label: string; value: GroupMode }[] = [
+  { label: "None",     value: "none" },
+  { label: "Customer", value: "customer" },
+  { label: "PM",       value: "pm" },
+];
+
+function GroupByControl({
+  value,
+  onChange,
+}: {
+  value: GroupMode;
+  onChange: (v: GroupMode) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="flex items-center gap-1 text-xs text-muted-foreground/70 whitespace-nowrap">
+        <Layers className="h-3.5 w-3.5" strokeWidth={1.5} />
+        Group by
+      </span>
+      <div className="inline-flex items-center rounded-md border border-white/10 bg-white/4 p-0.5 gap-0.5">
+        {GROUP_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={cn(
+              "px-2.5 py-1 rounded text-xs font-medium transition-colors",
+              value === opt.value
+                ? "bg-white/12 text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── localStorage helpers ─────────────────────────────────────────────────────
+
+const LS_GROUP_KEY    = "ps:groupBy";
+const LS_COLLAPSED_KEY = "ps:collapsed";
+
+function lsGet(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function lsSet(key: string, val: string) {
+  try { localStorage.setItem(key, val); } catch {}
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ProjectStatus() {
@@ -263,6 +293,22 @@ export default function ProjectStatus() {
   const [quickFilter, setQuickFilter]     = useState<QuickFilter>("all");
   const [completedOpen, setCompletedOpen] = useState(false);
   const [filterOpen, setFilterOpen]       = useState(false);
+
+  // Group-by state — initialised from localStorage
+  const [groupMode, setGroupMode] = useState<GroupMode>(() => {
+    const v = lsGet(LS_GROUP_KEY);
+    return (v === "customer" || v === "pm") ? v : "none";
+  });
+
+  // Per-group collapsed state — initialised from localStorage
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(lsGet(LS_COLLAPSED_KEY) ?? "{}") as Record<string, boolean>; }
+    catch { return {}; }
+  });
+
+  // Persist preferences
+  useEffect(() => { lsSet(LS_GROUP_KEY, groupMode); }, [groupMode]);
+  useEffect(() => { lsSet(LS_COLLAPSED_KEY, JSON.stringify(collapsedGroups)); }, [collapsedGroups]);
 
   const { data, isLoading } = useListProjectStatus();
 
@@ -280,10 +326,10 @@ export default function ProjectStatus() {
 
   // KPI counters
   const kpis = useMemo(() => {
-    const active        = rows.filter((r) => r.generalStatus !== "completed" && r.generalStatus !== "cancelled");
-    const attention     = active.filter((r) => r.needsAttention);
-    const budgetAlerts  = active.filter((r) => r.budgetAlert);
-    const overdue       = active.filter((r) => r.updateOverdue);
+    const active       = rows.filter((r) => r.generalStatus !== "completed" && r.generalStatus !== "cancelled");
+    const attention    = active.filter((r) => r.needsAttention);
+    const budgetAlerts = active.filter((r) => r.budgetAlert);
+    const overdue      = active.filter((r) => r.updateOverdue);
     return { total: active.length, attention: attention.length, budgetAlerts: budgetAlerts.length, overdue: overdue.length };
   }, [rows]);
 
@@ -305,10 +351,8 @@ export default function ProjectStatus() {
         return true;
       })
       .sort((a, b) => {
-        // Needs-attention rows float to top
         if (a.needsAttention && !b.needsAttention) return -1;
         if (!a.needsAttention && b.needsAttention)  return 1;
-        // Then sort by risk
         const riskA = RISK_ORDER[a.riskLevel ?? ""] ?? 3;
         const riskB = RISK_ORDER[b.riskLevel ?? ""] ?? 3;
         if (riskA !== riskB) return riskA - riskB;
@@ -320,14 +364,49 @@ export default function ProjectStatus() {
     return filtered.filter((r) => r.generalStatus === "completed" || r.generalStatus === "cancelled");
   }, [filtered]);
 
-  const colSpan = 6;
+  // Grouping
+  type GroupData = { name: string; rows: ProjectStatusRow[] };
+  const { groups, ungroupedRows } = useMemo<{ groups: GroupData[]; ungroupedRows: ProjectStatusRow[] }>(() => {
+    if (groupMode === "none") return { groups: [], ungroupedRows: activeRows };
+
+    const groupMap = new Map<string, ProjectStatusRow[]>();
+    const ungrouped: ProjectStatusRow[] = [];
+
+    for (const row of activeRows) {
+      const key = groupMode === "customer" ? row.clientName : row.pmName;
+      if (!key) {
+        ungrouped.push(row);
+      } else {
+        if (!groupMap.has(key)) groupMap.set(key, []);
+        groupMap.get(key)!.push(row);
+      }
+    }
+
+    const groups = Array.from(groupMap.entries())
+      .map(([name, rows]) => ({ name, rows }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { groups, ungroupedRows: ungrouped };
+  }, [activeRows, groupMode]);
+
+  // Visible columns
+  const hideCustomer = groupMode === "customer";
+  const hidePm       = groupMode === "pm";
+  const colSpan      = 6 - (hideCustomer ? 1 : 0) - (hidePm ? 1 : 0);
+
+  // Toggle group collapse
+  function toggleGroup(name: string) {
+    setCollapsedGroups((prev) => ({ ...prev, [name]: !prev[name] }));
+  }
+
+  // ── Sub-components ──────────────────────────────────────────────────────────
 
   const tableHeader = (
     <TableHeader>
       <TableRow className="border-white/8 hover:bg-transparent">
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide pl-5">Project</TableHead>
-        <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer</TableHead>
-        <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">PM</TableHead>
+        {!hideCustomer && <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer</TableHead>}
+        {!hidePm       && <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">PM</TableHead>}
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Health</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Budget</TableHead>
         <TableHead className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Updated</TableHead>
@@ -335,17 +414,63 @@ export default function ProjectStatus() {
     </TableHeader>
   );
 
+  function GroupHeaderRow({ group }: { group: GroupData }) {
+    const isCollapsed     = !!collapsedGroups[group.name];
+    const attentionCount  = group.rows.filter((r) => r.needsAttention).length;
+    const overdueOnly     = group.rows.filter((r) => r.updateOverdue && !r.needsAttention).length;
+
+    return (
+      <TableRow
+        className="border-white/8 bg-white/2 hover:bg-white/4 cursor-pointer select-none"
+        onClick={() => toggleGroup(group.name)}
+      >
+        <TableCell colSpan={colSpan} className="py-2.5 pl-3">
+          <div className="flex items-center gap-2">
+            {isCollapsed
+              ? <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" strokeWidth={1.5} />
+              : <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" strokeWidth={1.5} />
+            }
+            <span className="text-sm font-semibold">{group.name}</span>
+            <span className="text-xs text-muted-foreground/50">
+              {group.rows.length} project{group.rows.length !== 1 ? "s" : ""}
+            </span>
+            {(attentionCount > 0 || overdueOnly > 0) && (
+              <div className="ml-auto flex items-center gap-3 pr-2">
+                {attentionCount > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-amber-400">
+                    <Zap className="h-3 w-3" />
+                    {attentionCount} needs attention
+                  </span>
+                )}
+                {overdueOnly > 0 && (
+                  <span className="flex items-center gap-1 text-xs text-amber-400/70">
+                    <Clock className="h-3 w-3" />
+                    {overdueOnly} overdue
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
   function ProjectRow({ row }: { row: ProjectStatusRow }) {
     const dot = resolveColor(row.color, row.id);
-    const needsAttention = row.needsAttention;
+
+    const borderCls =
+      (row.riskLevel === "high" || row.budgetAlert)
+        ? "border-l-red-500/60 hover:bg-red-500/6"
+        : row.updateOverdue
+        ? "border-l-amber-500/60 hover:bg-amber-500/6"
+        : "border-l-transparent hover:bg-white/4";
 
     return (
       <TableRow
         className={cn(
           "border-white/8 cursor-pointer transition-colors group relative border-l-2",
-          needsAttention
-            ? "hover:bg-red-500/6 border-l-red-500/60"
-            : "hover:bg-white/4 border-l-transparent",
+          borderCls,
         )}
         onClick={() => navigate(`/project-status/${row.id}`)}
       >
@@ -358,12 +483,22 @@ export default function ProjectStatus() {
             {row.name}
           </div>
         </TableCell>
-        <TableCell className="text-sm text-muted-foreground">{row.clientName ?? "—"}</TableCell>
-        <TableCell className="text-sm text-muted-foreground">{row.pmName ?? "—"}</TableCell>
+        {!hideCustomer && <TableCell className="text-sm text-muted-foreground">{row.clientName ?? "—"}</TableCell>}
+        {!hidePm       && <TableCell className="text-sm text-muted-foreground">{row.pmName ?? "—"}</TableCell>}
         <TableCell>
           <div className="flex items-center gap-1.5">
-            <StatusBadge value={row.riskLevel} labels={RISK_LEVEL_LABELS} cls={riskLevelCls} />
-            <TrendArrow direction={row.trendDirection as "up" | "down" | "stable" | null} />
+            {row.riskLevel ? (
+              <>
+                <span className={cn("inline-flex items-center px-2 py-0.5 rounded-full border text-xs font-medium", riskLevelCls(row.riskLevel))}>
+                  {RISK_LEVEL_LABELS[row.riskLevel] ?? row.riskLevel}
+                </span>
+                <TrendArrow direction={row.trendDirection as "up" | "down" | "stable" | null} />
+              </>
+            ) : (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full border text-xs font-medium bg-white/5 text-muted-foreground/50 border-white/10">
+                Not assessed
+              </span>
+            )}
           </div>
         </TableCell>
         <TableCell>
@@ -379,6 +514,8 @@ export default function ProjectStatus() {
       </TableRow>
     );
   }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <AdminLayout>
@@ -427,7 +564,7 @@ export default function ProjectStatus() {
           className="w-52"
         />
 
-        {/* Single Filter button + Popover */}
+        {/* Filter popover */}
         {(() => {
           const activeCount = (clientFilter !== "__all__" ? 1 : 0) + (pmFilter !== "__all__" ? 1 : 0);
           return (
@@ -449,7 +586,6 @@ export default function ProjectStatus() {
               </PopoverTrigger>
               <PopoverContent className="w-64 p-4" align="start">
                 <div className="space-y-4">
-                  {/* Customer group */}
                   <div>
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Customer</p>
                     <div className="space-y-1">
@@ -471,7 +607,6 @@ export default function ProjectStatus() {
                     </div>
                   </div>
 
-                  {/* PM group */}
                   {pmOptions.length > 0 && (
                     <div>
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">PM</p>
@@ -495,7 +630,6 @@ export default function ProjectStatus() {
                     </div>
                   )}
 
-                  {/* Clear */}
                   {activeCount > 0 && (
                     <button
                       type="button"
@@ -510,6 +644,9 @@ export default function ProjectStatus() {
             </Popover>
           );
         })()}
+
+        {/* Group by */}
+        <GroupByControl value={groupMode} onChange={setGroupMode} />
 
         {/* Quick-filter chips */}
         <div className="flex items-center gap-2 ml-auto">
@@ -544,18 +681,30 @@ export default function ProjectStatus() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={colSpan + 1} className="text-center text-muted-foreground py-12 text-sm">
+                <TableCell colSpan={colSpan} className="text-center text-muted-foreground py-12 text-sm">
                   Loading…
                 </TableCell>
               </TableRow>
             ) : activeRows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={colSpan + 1} className="text-center text-muted-foreground py-12 text-sm">
+                <TableCell colSpan={colSpan} className="text-center text-muted-foreground py-12 text-sm">
                   {rows.length === 0 ? "No projects found." : "No active projects match your filters."}
                 </TableCell>
               </TableRow>
-            ) : (
+            ) : groupMode === "none" ? (
               activeRows.map((row) => <ProjectRow key={row.id} row={row} />)
+            ) : (
+              <>
+                {groups.map((group) => (
+                  <React.Fragment key={group.name}>
+                    <GroupHeaderRow group={group} />
+                    {!collapsedGroups[group.name] &&
+                      group.rows.map((row) => <ProjectRow key={row.id} row={row} />)
+                    }
+                  </React.Fragment>
+                ))}
+                {ungroupedRows.map((row) => <ProjectRow key={row.id} row={row} />)}
+              </>
             )}
           </TableBody>
         </Table>

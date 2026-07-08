@@ -120,7 +120,7 @@ router.get("/project-status", async (req, res): Promise<void> => {
     const lastUpdateAge = lastUpdate ? daysBetween(now, lastUpdate) : null;
     const updateOverdue = !lastUpdate || lastUpdateAge! >= UPDATE_CADENCE_DAYS;
 
-    const needsAttention = r.riskLevel === "high" || budgetAlert || updateOverdue;
+    const needsAttention = r.riskLevel === "high" || budgetAlert;
 
     const RISK_NUM: Record<string, number> = { low: 0, medium: 1, high: 2 };
     let trendDirection: "up" | "down" | "stable" | null = null;
