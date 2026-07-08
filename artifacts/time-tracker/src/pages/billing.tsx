@@ -753,7 +753,7 @@ function ProjectPicker({ projects, clients, selectedId, onSelect }: ProjectPicke
       ? projects
       : projects.filter(
           (p) =>
-            p.name.toLowerCase().includes(q) ||
+            (p.name ?? "").toLowerCase().includes(q) ||
             (p.clientId != null && (clientMap.get(p.clientId) ?? "").toLowerCase().includes(q)),
         );
 
@@ -766,7 +766,7 @@ function ProjectPicker({ projects, clients, selectedId, onSelect }: ProjectPicke
 
     return Array.from(groups.values())
       .sort((a, b) => a.clientName.localeCompare(b.clientName))
-      .map((g) => ({ ...g, projects: [...g.projects].sort((a, b) => a.name.localeCompare(b.name)) }));
+      .map((g) => ({ ...g, projects: [...g.projects].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")) }));
   }, [projects, clientMap, search]);
 
   const selected    = selectedId != null ? projects.find((p) => p.id === selectedId) : null;
