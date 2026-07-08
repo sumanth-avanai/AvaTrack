@@ -659,6 +659,85 @@ function addBookableDays(
   return d;
 }
 
+// Find the next working day at or after `d` (respects mask + holidays + absences)
+function findNextWorkingDay(
+  d: Date,
+  mask: number[],
+  holidayDates: Set<string>,
+  vacations: VacationRange[],
+): Date {
+  let cur = new Date(d);
+  for (let i = 0; i < 365; i++) {
+    const ds = format(cur, "yyyy-MM-dd");
+    const dow = getISODay(cur) - 1; // 0=Mon … 6=Sun
+    if (
+      mask[dow] &&
+      !holidayDates.has(ds) &&
+      !vacations.some((v) => v.startDate <= ds && ds <= v.endDate)
+    ) {
+      return cur;
+    }
+    cur = addDays(cur, 1);
+  }
+  return cur;
+}
+
+// Calculate the end date for N working days starting from (and including) start
+function calcEndFromNWorkingDays(
+  start: Date,
+  nDays: number,
+  mask: number[],
+  holidayDates: Set<string>,
+  vacations: VacationRange[],
+): Date {
+  let counted = 0;
+  let cur = new Date(start);
+  for (let i = 0; i < 730; i++) {
+    const ds = format(cur, "yyyy-MM-dd");
+    const dow = getISODay(cur) - 1;
+    if (
+      mask[dow] &&
+      !holidayDates.has(ds) &&
+      !vacations.some((v) => v.startDate <= ds && ds <= v.endDate)
+    ) {
+      counted++;
+      if (counted >= nDays) return cur;
+    }
+    cur = addDays(cur, 1);
+  }
+  return cur;
+}
+
+// Calculate end date for Budget mode: walk working days until target reached or cap hit
+function calcBudgetEnd(
+  start: Date,
+  targetDays: number,
+  mask: number[],
+  holidayDates: Set<string>,
+  vacations: VacationRange[],
+  capDate: string | null,
+): { endDate: Date; reachedDays: number; skippedHolidays: number } {
+  let accumulated = 0;
+  let skippedHolidays = 0;
+  let cur = new Date(start);
+  const capD = capDate ? parseISO(capDate) : null;
+  for (let i = 0; i < 730; i++) {
+    if (capD && cur > capD) break;
+    const ds = format(cur, "yyyy-MM-dd");
+    const dow = getISODay(cur) - 1;
+    if (mask[dow]) {
+      if (holidayDates.has(ds)) {
+        skippedHolidays++;
+      } else if (!vacations.some((v) => v.startDate <= ds && ds <= v.endDate)) {
+        accumulated++;
+        if (accumulated >= targetDays) break;
+      }
+    }
+    cur = addDays(cur, 1);
+  }
+  return { endDate: cur, reachedDays: accumulated, skippedHolidays };
+}
+
 // ── Weekday-hours helpers ─────────────────────────────────────────────────────
 const DAY_LABELS: Record<string, string> = {
   "1": "Mo",
@@ -865,6 +944,13 @@ function BookingModal({
   const [budgetUnit, setBudgetUnit] = useState<"tage" | "stunden">("tage");
   const [budgetCapDate, setBudgetCapDate] = useState("");
 
+  // Weekly pattern picker — used in Dauer Wo/Mo and Budget modes
+  // Keys: "1"=Mon … "7"=Sun; only "1"–"5" are stored in weekdayHours
+  const [patternDays, setPatternDays] = useState<Set<string>>(
+    new Set(["1", "2", "3", "4", "5"]),
+  );
+  const [patternHoursPerDay, setPatternHoursPerDay] = useState<number>(8);
+
   // Edit modal — slot list expanded
   const [showSlotList, setShowSlotList] = useState(false);
 
@@ -996,6 +1082,46 @@ function BookingModal({
     },
     enabled: !!employeeId,
   });
+
+  // ── Zeitraum auto-zero: detect holidays/absences in range and note them ───────
+  // Computes a list of calendar dates (in range) that are holidays or absences.
+  // Only for New-booking Zeitraum mode with weekday template active.
+  const zeitraumAutoZeroedDates = useMemo(() => {
+    if (isEdit || scheduleMode !== "zeitraum" || !weekdayMode || !startDate || !endDate || endDate < startDate) return [] as Array<{ date: string; label: string; reason: string }>;
+    const result: Array<{ date: string; label: string; reason: string }> = [];
+    const s = parseISO(startDate);
+    const e = parseISO(endDate);
+    for (let d = new Date(s); d <= e; d = addDays(d, 1)) {
+      const ds = format(d, "yyyy-MM-dd");
+      const dow = getISODay(d); // 1=Mon … 7=Sun
+      if (dow > 5) continue; // Sat/Sun: not in weekday template
+      const label = format(d, "EEE d MMM");
+      if (holidayDates.has(ds)) {
+        const hEntry = holidays.find((h: any) => String(h.date).slice(0, 10) === ds);
+        result.push({ date: ds, label, reason: `public holiday${hEntry ? ` (${hEntry.name})` : ""}` });
+      } else if ((vacations as VacationRange[]).some((v) => v.startDate <= ds && ds <= v.endDate)) {
+        result.push({ date: ds, label, reason: "approved absence" });
+      }
+    }
+    return result;
+  }, [isEdit, scheduleMode, weekdayMode, startDate, endDate, holidayDates, holidays, vacations]);
+
+  // Apply the auto-zero to weekdayHours when the auto-zeroed set changes
+  const prevAutoZeroKeyRef = useRef("");
+  useEffect(() => {
+    const key = zeitraumAutoZeroedDates.map((d) => d.date).join(",");
+    if (key === prevAutoZeroKeyRef.current) return;
+    prevAutoZeroKeyRef.current = key;
+    if (zeitraumAutoZeroedDates.length === 0) return;
+    const zeroKeys = new Set(zeitraumAutoZeroedDates.map((d) => String(getISODay(parseISO(d.date)))));
+    setWeekdayHours((prev) => {
+      const next = { ...prev };
+      for (const k of zeroKeys) {
+        if (k in next) next[k] = 0;
+      }
+      return next;
+    });
+  }, [zeitraumAutoZeroedDates]);
 
   // ── Role budget status (for live budget validation) ─────────────────────────
   interface RoleBudgetBooking {
@@ -1222,8 +1348,20 @@ function BookingModal({
   const roleRequired = !!projectId && hasRoles;
 
   // For create mode: need at least one assignee when not in dauer/budget derived mode
+  // Modes that use the weekly pattern picker (4e) instead of the flat hours/weekday template
+  const usesPatternPicker =
+    !isEdit &&
+    (scheduleMode === "budget" ||
+      (scheduleMode === "dauer" && durationUnit !== "tage"));
   const datesValid = startDate && endDate && startDate <= endDate;
-  const hoursValid = weekdayMode ? !allWeekdayZero : hoursPerDay > 0;
+  const hoursValid = usesPatternPicker
+    ? patternHoursPerDay > 0 &&
+      Array.from(patternDays).some(
+        (k) => parseInt(k) >= 1 && parseInt(k) <= 5 && !!workingDaysMask[Number(k) - 1],
+      )
+    : weekdayMode
+    ? !allWeekdayZero
+    : hoursPerDay > 0;
   const canSubmit =
     projectId &&
     (!roleRequired || roleId) &&
@@ -1235,20 +1373,33 @@ function BookingModal({
 
   async function handleSubmit() {
     if (!canSubmit) return;
+    // Build the hours payload — pattern modes override the weekday template
+    const hoursPayload = usesPatternPicker
+      ? {
+          weekdayHours: Object.fromEntries(
+            (["1", "2", "3", "4", "5"] as const).map((k) => [
+              k,
+              patternDays.has(k) && workingDaysMask[Number(k) - 1]
+                ? patternHoursPerDay
+                : 0,
+            ]),
+          ) as Record<string, number>,
+        }
+      : weekdayMode
+      ? {
+          weekdayHours: Object.fromEntries(
+            (["1", "2", "3", "4", "5"] as const)
+              .filter((k) => workingDaysMask[Number(k) - 1])
+              .map((k) => [k, weekdayHours[k] ?? 0]),
+          ) as Record<string, number>,
+        }
+      : { hoursPerDay, weekdayHours: null };
     const basePayload = {
       projectId: parseInt(projectId, 10),
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
       endDate,
-      ...(weekdayMode
-        ? {
-            weekdayHours: Object.fromEntries(
-              (["1", "2", "3", "4", "5"] as const)
-                .filter((k) => workingDaysMask[Number(k) - 1])
-                .map((k) => [k, weekdayHours[k] ?? 0]),
-            ) as Record<string, number>,
-          }
-        : { hoursPerDay, weekdayHours: null }),
+      ...hoursPayload,
       notes: notes.trim() || null,
       status: bookingStatus,
     };
@@ -1456,7 +1607,23 @@ function BookingModal({
                     return Array.from(clientGroups.entries()).map(([clientName, projs]) => (
                       <div key={clientName}>
                         <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">{clientName}</div>
-                        {projs.map((p) => (
+                        {projs.map((p) => {
+                          // Highlight matched substrings in medium weight (500)
+                          const highlightText = (text: string, q: string) => {
+                            if (!q) return <span>{text}</span>;
+                            const idx = text.toLowerCase().indexOf(q);
+                            if (idx === -1) return <span>{text}</span>;
+                            return (
+                              <>
+                                {text.slice(0, idx)}
+                                <span className="font-medium text-foreground">
+                                  {text.slice(idx, idx + q.length)}
+                                </span>
+                                {text.slice(idx + q.length)}
+                              </>
+                            );
+                          };
+                          return (
                           <button
                             key={p.id}
                             type="button"
@@ -1466,13 +1633,14 @@ function BookingModal({
                               setProjectSearch("");
                             }}
                             className={`w-full text-left px-4 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center justify-between ${
-                              String(p.id) === projectId ? "bg-accent/50 font-medium" : ""
+                              String(p.id) === projectId ? "bg-accent/50" : ""
                             }`}
                           >
-                            <span className="truncate">{p.name}</span>
+                            <span className="truncate">{highlightText(p.name, projectSearch.toLowerCase())}</span>
                             {String(p.id) === projectId && <Check className="h-3.5 w-3.5 shrink-0 text-primary ml-2" />}
                           </button>
-                        ))}
+                          );
+                        })}
                       </div>
                     ));
                   })()}
@@ -1692,20 +1860,99 @@ function BookingModal({
                   </div>
                 </div>
               </div>
-              {/* Calculated end date for Dauer */}
-              {startDate && (() => {
-                let calDays = durationValue;
-                if (durationUnit === "wo") calDays = Math.ceil(durationValue * 7);
-                if (durationUnit === "mo") calDays = Math.ceil(durationValue * 30);
-                const calcEnd = addDays(parseISO(startDate), calDays - 1);
+
+              {/* Dauer "Tage" — working-day engine with auto-shift banner */}
+              {durationUnit === "tage" && startDate && (() => {
+                const rawStart = parseISO(startDate);
+                const effectiveStart = findNextWorkingDay(rawStart, workingDaysMask, holidayDates, vacations as VacationRange[]);
+                const calcEnd = calcEndFromNWorkingDays(effectiveStart, durationValue, workingDaysMask, holidayDates, vacations as VacationRange[]);
                 const calcEndStr = format(calcEnd, "yyyy-MM-dd");
+                const effectiveStartStr = format(effectiveStart, "yyyy-MM-dd");
+                const wasShifted = effectiveStartStr !== startDate;
                 if (endDate !== calcEndStr) setEndDate(calcEndStr);
                 return (
-                  <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
-                    Calculated end date: <span className="font-medium text-foreground">{format(calcEnd, "d MMM yyyy")}</span>
+                  <div className="space-y-1.5">
+                    {wasShifted && (
+                      <div className="flex items-start gap-1.5 text-xs text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/30 rounded px-2 py-1.5">
+                        <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          Booked on {format(rawStart, "d MMM yyyy")} shifted to{" "}
+                          <span className="font-medium">{format(effectiveStart, "d MMM yyyy")}</span> — start date fell on a weekend/holiday, moved to the next working day automatically.
+                        </span>
+                      </div>
+                    )}
+                    <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+                      Calculated end date: <span className="font-medium text-foreground">{format(calcEnd, "d MMM yyyy")}</span>
+                      {wasShifted && <span className="ml-1">(from {format(effectiveStart, "d MMM")})</span>}
+                    </div>
                   </div>
                 );
               })()}
+
+              {/* Dauer "Wo"/"Mo" — weekly pattern picker + calendar-day end */}
+              {(durationUnit === "wo" || durationUnit === "mo") && (
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Weekly pattern</Label>
+                    <div className="flex gap-1 flex-wrap">
+                      {(["1","2","3","4","5","6","7"] as const).map((k) => {
+                        const labels: Record<string,string> = { "1":"Mo","2":"Tu","3":"We","4":"Th","5":"Fr","6":"Sa","7":"Su" };
+                        const inMask = workingDaysMask[Number(k) - 1];
+                        const selected = patternDays.has(k);
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            disabled={!inMask}
+                            onClick={() =>
+                              setPatternDays((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(k)) next.delete(k); else next.add(k);
+                                return next;
+                              })
+                            }
+                            className={`w-9 h-8 rounded-md border text-xs font-medium transition-colors ${
+                              !inMask
+                                ? "opacity-30 cursor-not-allowed border-border text-muted-foreground"
+                                : selected
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                            }`}
+                          >
+                            {labels[k]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground shrink-0">Hours/day</Label>
+                      <Input
+                        type="number"
+                        min={0.5}
+                        max={24}
+                        step={0.5}
+                        className="w-20 h-8 text-center text-sm"
+                        value={patternHoursPerDay}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          if (!isNaN(v) && v > 0) setPatternHoursPerDay(v);
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {startDate && (() => {
+                    const calDays = durationUnit === "wo" ? durationValue * 7 : durationValue * 30;
+                    const calcEnd = addDays(parseISO(startDate), calDays - 1);
+                    const calcEndStr = format(calcEnd, "yyyy-MM-dd");
+                    if (endDate !== calcEndStr) setEndDate(calcEndStr);
+                    return (
+                      <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+                        Calculated end date: <span className="font-medium text-foreground">{format(calcEnd, "d MMM yyyy")}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           )}
 
@@ -1750,32 +1997,102 @@ function BookingModal({
                   </div>
                 </div>
               </div>
+
+              {/* Weekly pattern picker */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Cap date (optional)</Label>
+                <Label className="text-xs text-muted-foreground">Weekly pattern</Label>
+                <div className="flex gap-1 flex-wrap">
+                  {(["1","2","3","4","5","6","7"] as const).map((k) => {
+                    const labels: Record<string,string> = { "1":"Mo","2":"Tu","3":"We","4":"Th","5":"Fr","6":"Sa","7":"Su" };
+                    const inMask = workingDaysMask[Number(k) - 1];
+                    const selected = patternDays.has(k);
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        disabled={!inMask}
+                        onClick={() =>
+                          setPatternDays((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(k)) next.delete(k); else next.add(k);
+                            return next;
+                          })
+                        }
+                        className={`w-9 h-8 rounded-md border text-xs font-medium transition-colors ${
+                          !inMask
+                            ? "opacity-30 cursor-not-allowed border-border text-muted-foreground"
+                            : selected
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                        }`}
+                      >
+                        {labels[k]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground shrink-0">Hours/day</Label>
+                  <Input
+                    type="number"
+                    min={0.5}
+                    max={24}
+                    step={0.5}
+                    className="w-20 h-8 text-center text-sm"
+                    value={patternHoursPerDay}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      if (!isNaN(v) && v > 0) setPatternHoursPerDay(v);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Cap date (optional — latest end)</Label>
                 <Input
                   type="date"
                   value={budgetCapDate}
                   onChange={(e) => setBudgetCapDate(e.target.value)}
                 />
               </div>
-              {/* Budget mode calculated end date */}
+
+              {/* Budget mode: proper working-day engine */}
               {startDate && (() => {
                 const targetDays = budgetUnit === "tage" ? budgetTarget : Math.ceil(budgetTarget / 8);
-                const calDays = Math.ceil(targetDays * (7 / 5));
-                const calcEnd = addDays(parseISO(startDate), calDays - 1);
-                const calcEndStr = format(calcEnd, "yyyy-MM-dd");
-                const capExceeded = !!(budgetCapDate && calcEndStr > budgetCapDate);
-                const finalEnd = capExceeded ? budgetCapDate : calcEndStr;
+                const { endDate: calcEnd, reachedDays, skippedHolidays } = calcBudgetEnd(
+                  parseISO(startDate),
+                  targetDays,
+                  workingDaysMask,
+                  holidayDates,
+                  vacations as VacationRange[],
+                  budgetCapDate || null,
+                );
+                const finalEnd = format(calcEnd, "yyyy-MM-dd");
+                const capHit = !!(budgetCapDate && reachedDays < targetDays);
                 if (endDate !== finalEnd) setEndDate(finalEnd);
                 return (
-                  <div className="space-y-1">
-                    <div className="text-xs bg-muted/50 rounded px-2 py-1.5 text-muted-foreground">
-                      Calculated end date: <span className="font-medium text-foreground">{format(parseISO(finalEnd), "d MMM yyyy")}</span>
+                  <div className="space-y-1.5">
+                    <div className="text-xs bg-muted/50 rounded px-2 py-1.5 text-muted-foreground space-y-0.5">
+                      <div>
+                        Calculated end date:{" "}
+                        <span className="font-medium text-foreground">{format(calcEnd, "d MMM yyyy")}</span>
+                      </div>
+                      <div>
+                        Bookable days to target:{" "}
+                        <span className="font-medium text-foreground">{reachedDays}d</span>
+                        {skippedHolidays > 0 && (
+                          <span className="ml-1">({skippedHolidays} holiday{skippedHolidays > 1 ? "s" : ""} skipped)</span>
+                        )}
+                      </div>
                     </div>
-                    {capExceeded && (
-                      <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                        Target may not be fully reached before cap date
+                    {capHit && (
+                      <div className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 rounded px-2 py-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          Only {reachedDays} of {targetDays} day{targetDays !== 1 ? "s" : ""} reachable by{" "}
+                          {format(parseISO(budgetCapDate), "d MMM yyyy")}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1784,8 +2101,8 @@ function BookingModal({
             </div>
           )}
 
-          {/* Hours per day / weekday mode */}
-          <div className="space-y-2">
+          {/* Hours per day / weekday mode — hidden for pattern-picker modes (Dauer Wo/Mo, Budget) */}
+          {!usesPatternPicker && <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>Hours per day</Label>
               <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none text-muted-foreground hover:text-foreground transition-colors">
@@ -1930,9 +2247,28 @@ function BookingModal({
                     All days are set to 0h — booking has no hours.
                   </div>
                 )}
+
+                {/* Zeitraum auto-zero note */}
+                {zeitraumAutoZeroedDates.length > 0 && (
+                  <div className="flex items-start gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded px-2 py-1.5">
+                    <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500" />
+                    <span>
+                      {zeitraumAutoZeroedDates.slice(0, 3).map((d, i) => (
+                        <span key={d.date}>
+                          {i > 0 && "; "}
+                          <span className="font-medium">{d.label}</span>{" "}
+                          is a {d.reason} — hours set to 0 automatically.
+                        </span>
+                      ))}
+                      {zeitraumAutoZeroedDates.length > 3 && (
+                        <span> (+{zeitraumAutoZeroedDates.length - 3} more)</span>
+                      )}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Notes — collapsible */}
           {notesExpanded ? (
