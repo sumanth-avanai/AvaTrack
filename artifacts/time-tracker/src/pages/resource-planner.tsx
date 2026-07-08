@@ -72,6 +72,7 @@ import {
   Sun,
   Star,
   Thermometer,
+  Ban,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -1083,45 +1084,57 @@ function BookingModal({
     enabled: !!employeeId,
   });
 
-  // ── Zeitraum auto-zero: detect holidays/absences in range and note them ───────
-  // Computes a list of calendar dates (in range) that are holidays or absences.
-  // Only for New-booking Zeitraum mode with weekday template active.
-  const zeitraumAutoZeroedDates = useMemo(() => {
-    if (isEdit || scheduleMode !== "zeitraum" || !weekdayMode || !startDate || !endDate || endDate < startDate) return [] as Array<{ date: string; label: string; reason: string }>;
-    const result: Array<{ date: string; label: string; reason: string }> = [];
+  // ── Zeitraum per-date grid (New booking only) ────────────────────────────────
+  // User overrides per specific calendar date; holidays/absences default to 0.
+  const [perDateHours, setPerDateHours] = useState<Record<string, number>>({});
+
+  // Derive the full per-date grid as a computed array.
+  // Uses perDateHours for user overrides; falls back to weekday template / flat rate;
+  // auto-sets holidays and absences to 0h without touching the weekday template.
+  interface ZeitraumDateEntry {
+    ds: string;
+    label: string;
+    effectiveHours: number;
+    isHoliday: boolean;
+    holidayName?: string;
+    isAbsence: boolean;
+    isBlocked: boolean;
+  }
+  const zeitraumPerDateGrid = useMemo((): ZeitraumDateEntry[] => {
+    if (isEdit || scheduleMode !== "zeitraum" || !startDate || !endDate || endDate < startDate) return [];
+    const result: ZeitraumDateEntry[] = [];
     const s = parseISO(startDate);
     const e = parseISO(endDate);
     for (let d = new Date(s); d <= e; d = addDays(d, 1)) {
       const ds = format(d, "yyyy-MM-dd");
-      const dow = getISODay(d); // 1=Mon … 7=Sun
-      if (dow > 5) continue; // Sat/Sun: not in weekday template
-      const label = format(d, "EEE d MMM");
-      if (holidayDates.has(ds)) {
-        const hEntry = holidays.find((h: any) => String(h.date).slice(0, 10) === ds);
-        result.push({ date: ds, label, reason: `public holiday${hEntry ? ` (${hEntry.name})` : ""}` });
-      } else if ((vacations as VacationRange[]).some((v) => v.startDate <= ds && ds <= v.endDate)) {
-        result.push({ date: ds, label, reason: "approved absence" });
-      }
+      const dow = getISODay(d); // 1=Mon…7=Sun
+      if (!workingDaysMask[dow - 1]) continue; // skip non-working days
+      const isHoliday = holidayDates.has(ds);
+      const hEntry = isHoliday
+        ? (holidays as any[]).find((h) => String(h.date).slice(0, 10) === ds)
+        : undefined;
+      const isAbsence = (vacations as VacationRange[]).some(
+        (v) => v.startDate <= ds && ds <= v.endDate,
+      );
+      const isBlocked = isHoliday || isAbsence;
+      const defaultH = weekdayMode
+        ? (weekdayHours[String(dow)] ?? hoursPerDay)
+        : hoursPerDay;
+      const effectiveHours = isBlocked
+        ? (perDateHours[ds] ?? 0)
+        : (perDateHours[ds] ?? defaultH);
+      result.push({
+        ds,
+        label: format(d, "EEE d MMM"),
+        effectiveHours,
+        isHoliday,
+        holidayName: hEntry?.name as string | undefined,
+        isAbsence,
+        isBlocked,
+      });
     }
     return result;
-  }, [isEdit, scheduleMode, weekdayMode, startDate, endDate, holidayDates, holidays, vacations]);
-
-  // Apply the auto-zero to weekdayHours when the auto-zeroed set changes
-  const prevAutoZeroKeyRef = useRef("");
-  useEffect(() => {
-    const key = zeitraumAutoZeroedDates.map((d) => d.date).join(",");
-    if (key === prevAutoZeroKeyRef.current) return;
-    prevAutoZeroKeyRef.current = key;
-    if (zeitraumAutoZeroedDates.length === 0) return;
-    const zeroKeys = new Set(zeitraumAutoZeroedDates.map((d) => String(getISODay(parseISO(d.date)))));
-    setWeekdayHours((prev) => {
-      const next = { ...prev };
-      for (const k of zeroKeys) {
-        if (k in next) next[k] = 0;
-      }
-      return next;
-    });
-  }, [zeitraumAutoZeroedDates]);
+  }, [isEdit, scheduleMode, startDate, endDate, workingDaysMask, holidayDates, holidays, vacations, perDateHours, weekdayMode, weekdayHours, hoursPerDay]);
 
   // ── Role budget status (for live budget validation) ─────────────────────────
   interface RoleBudgetBooking {
@@ -1373,27 +1386,53 @@ function BookingModal({
 
   async function handleSubmit() {
     if (!canSubmit) return;
-    // Build the hours payload — pattern modes override the weekday template
-    const hoursPayload = usesPatternPicker
-      ? {
-          weekdayHours: Object.fromEntries(
-            (["1", "2", "3", "4", "5"] as const).map((k) => [
-              k,
-              patternDays.has(k) && workingDaysMask[Number(k) - 1]
-                ? patternHoursPerDay
-                : 0,
-            ]),
-          ) as Record<string, number>,
-        }
-      : weekdayMode
-      ? {
-          weekdayHours: Object.fromEntries(
-            (["1", "2", "3", "4", "5"] as const)
-              .filter((k) => workingDaysMask[Number(k) - 1])
-              .map((k) => [k, weekdayHours[k] ?? 0]),
-          ) as Record<string, number>,
-        }
-      : { hoursPerDay, weekdayHours: null };
+    // Build the hours payload
+    let hoursPayload: { hoursPerDay?: number; weekdayHours: Record<string, number> | null };
+    if (usesPatternPicker) {
+      // Pattern picker (Dauer Wo/Mo + Budget): expand selected days at patternHoursPerDay
+      hoursPayload = {
+        weekdayHours: Object.fromEntries(
+          (["1", "2", "3", "4", "5"] as const).map((k) => [
+            k,
+            patternDays.has(k) && workingDaysMask[Number(k) - 1]
+              ? patternHoursPerDay
+              : 0,
+          ]),
+        ) as Record<string, number>,
+      };
+    } else if (!isEdit && scheduleMode === "zeitraum" && zeitraumPerDateGrid.length > 0) {
+      // Zeitraum new booking: derive weekdayHours from the per-date grid by
+      // averaging non-blocked dates per weekday so individual holiday/absence
+      // overrides don't pollute unrelated days.
+      const buckets: Record<string, { sum: number; count: number }> = {};
+      for (const entry of zeitraumPerDateGrid) {
+        if (entry.isBlocked) continue; // holidays/absences excluded
+        const dow = String(getISODay(parseISO(entry.ds)));
+        if (!buckets[dow]) buckets[dow] = { sum: 0, count: 0 };
+        buckets[dow].sum += entry.effectiveHours;
+        buckets[dow].count++;
+      }
+      hoursPayload = {
+        weekdayHours: Object.fromEntries(
+          (["1", "2", "3", "4", "5"] as const).map((k) => [
+            k,
+            buckets[k] && buckets[k].count > 0
+              ? buckets[k].sum / buckets[k].count
+              : 0,
+          ]),
+        ) as Record<string, number>,
+      };
+    } else if (weekdayMode) {
+      hoursPayload = {
+        weekdayHours: Object.fromEntries(
+          (["1", "2", "3", "4", "5"] as const)
+            .filter((k) => workingDaysMask[Number(k) - 1])
+            .map((k) => [k, weekdayHours[k] ?? 0]),
+        ) as Record<string, number>,
+      };
+    } else {
+      hoursPayload = { hoursPerDay, weekdayHours: null };
+    }
     const basePayload = {
       projectId: parseInt(projectId, 10),
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
@@ -2057,13 +2096,23 @@ function BookingModal({
                 />
               </div>
 
-              {/* Budget mode: proper working-day engine */}
+              {/* Budget mode: proper working-day engine (pattern-aware) */}
               {startDate && (() => {
-                const targetDays = budgetUnit === "tage" ? budgetTarget : Math.ceil(budgetTarget / 8);
+                // Combine workingDaysMask with selected patternDays so only chosen
+                // pattern days count toward the target (keys "1"=Mon … "7"=Sun,
+                // mask index 0=Mon … 6=Sun, so key = String(i+1)).
+                const effectiveMask = workingDaysMask.map((v, i) =>
+                  v && patternDays.has(String(i + 1)) ? 1 : 0,
+                );
+                // Convert hours → days using patternHoursPerDay, not a hardcoded 8
+                const targetDays =
+                  budgetUnit === "tage"
+                    ? budgetTarget
+                    : budgetTarget / (patternHoursPerDay > 0 ? patternHoursPerDay : 8);
                 const { endDate: calcEnd, reachedDays, skippedHolidays } = calcBudgetEnd(
                   parseISO(startDate),
                   targetDays,
-                  workingDaysMask,
+                  effectiveMask,
                   holidayDates,
                   vacations as VacationRange[],
                   budgetCapDate || null,
@@ -2105,7 +2154,8 @@ function BookingModal({
           {!usesPatternPicker && <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>Hours per day</Label>
-              <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none text-muted-foreground hover:text-foreground transition-colors">
+              {/* "Set per weekday" toggle hidden in Zeitraum mode — per-date grid is used instead */}
+              <label className={`flex items-center gap-1.5 text-sm cursor-pointer select-none text-muted-foreground hover:text-foreground transition-colors ${scheduleMode === "zeitraum" && !isEdit ? "hidden" : ""}`}>
                 <Checkbox
                   checked={weekdayMode}
                   onCheckedChange={(checked) => {
@@ -2133,7 +2183,95 @@ function BookingModal({
               </label>
             </div>
 
-            {!weekdayMode ? (
+            {/* ── Zeitraum new-booking: per-calendar-date grid ─────────────────────
+                Holiday/absence dates auto-show 0h with gray treatment.
+                All other dates default to hoursPerDay; user can override individually. */}
+            {scheduleMode === "zeitraum" && !isEdit ? (
+              <div className="space-y-2">
+                {/* Default hours quick-set (drives initial value for non-blocked dates) */}
+                <div className="flex gap-2">
+                  {[2, 4, 6, 8].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setHoursPerDay(preset);
+                        setHoursPerDayInput(String(preset));
+                      }}
+                      className={`flex-1 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                        hoursPerDay === preset
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "border-border text-muted-foreground hover:text-foreground hover:border-foreground/30"
+                      }`}
+                    >
+                      {preset}h
+                    </button>
+                  ))}
+                  <Input
+                    type="number"
+                    min={0.5}
+                    max={24}
+                    step={0.5}
+                    className="w-20 text-center"
+                    value={hoursPerDayInput}
+                    onChange={(e) => {
+                      setHoursPerDayInput(e.target.value);
+                      const v = parseFloat(e.target.value);
+                      if (!isNaN(v) && v > 0) setHoursPerDay(v);
+                    }}
+                  />
+                </div>
+                {/* Per-calendar-date grid — scrollable */}
+                {zeitraumPerDateGrid.length > 0 && (
+                  <div className="max-h-44 overflow-y-auto border rounded-md divide-y divide-border/50">
+                    {zeitraumPerDateGrid.map(({ ds, label, effectiveHours, isBlocked, isHoliday, holidayName, isAbsence }) => (
+                      <div
+                        key={ds}
+                        className={`flex items-center gap-2 px-2.5 py-1 text-xs ${isBlocked ? "bg-muted/40" : ""}`}
+                      >
+                        <span className={`w-24 shrink-0 ${isBlocked ? "text-muted-foreground" : "text-foreground"}`}>
+                          {label}
+                        </span>
+                        {isBlocked ? (
+                          <span className="flex items-center gap-1 text-muted-foreground italic">
+                            <Ban className="h-3 w-3 shrink-0" />
+                            0h —{" "}
+                            {isHoliday
+                              ? holidayName ?? "public holiday"
+                              : "absence"}
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type="number"
+                              min={0}
+                              max={24}
+                              step={0.5}
+                              className="w-16 h-6 text-center text-xs px-1"
+                              value={effectiveHours}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                setPerDateHours((prev) => ({
+                                  ...prev,
+                                  [ds]: isNaN(v) ? 0 : Math.max(0, Math.min(24, v)),
+                                }));
+                              }}
+                            />
+                            <span className="text-muted-foreground">h</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Summary of blocked dates */}
+                {zeitraumPerDateGrid.filter((d) => d.isBlocked).length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {zeitraumPerDateGrid.filter((d) => d.isBlocked).length} date(s) auto-set to 0h (holidays / absences).
+                  </p>
+                )}
+              </div>
+            ) : !weekdayMode ? (
               <div className="flex gap-2">
                 {[2, 4, 6, 8].map((preset) => (
                   <button
@@ -2245,25 +2383,6 @@ function BookingModal({
                   <div className="flex items-center gap-1.5 text-xs text-destructive">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                     All days are set to 0h — booking has no hours.
-                  </div>
-                )}
-
-                {/* Zeitraum auto-zero note */}
-                {zeitraumAutoZeroedDates.length > 0 && (
-                  <div className="flex items-start gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded px-2 py-1.5">
-                    <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500" />
-                    <span>
-                      {zeitraumAutoZeroedDates.slice(0, 3).map((d, i) => (
-                        <span key={d.date}>
-                          {i > 0 && "; "}
-                          <span className="font-medium">{d.label}</span>{" "}
-                          is a {d.reason} — hours set to 0 automatically.
-                        </span>
-                      ))}
-                      {zeitraumAutoZeroedDates.length > 3 && (
-                        <span> (+{zeitraumAutoZeroedDates.length - 3} more)</span>
-                      )}
-                    </span>
                   </div>
                 )}
               </div>
