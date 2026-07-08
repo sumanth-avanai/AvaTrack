@@ -1117,6 +1117,32 @@ export default function Billing() {
     onError: () => toast({ title: "Failed to update billing status", variant: "destructive" }),
   });
 
+  // ── Chart helpers (Section 1 cumulative chart) ───────────────────────────────
+
+  const chartYMax = useMemo(() => {
+    if (!lifetimeData?.monthlyData?.length) return 10_000;
+    const rawMax = Math.max(
+      lifetimeData.budget ?? 0,
+      ...lifetimeData.monthlyData.map((d) => d.loggedCumulative),
+      ...lifetimeData.monthlyData.map((d) => d.invoicedCumulative),
+      0,
+    );
+    const step = rawMax <= 5_000 ? 1_000
+      : rawMax <= 50_000 ? 10_000
+      : rawMax <= 200_000 ? 25_000
+      : rawMax <= 500_000 ? 50_000
+      : 100_000;
+    return Math.ceil(rawMax / step) * step || step;
+  }, [lifetimeData]);
+
+  const chartLegendPayload = useMemo(() => [
+    ...(lifetimeData?.budget && lifetimeData.budget > 0
+      ? [{ value: "Budget", type: "line" as const, id: "budget", color: "rgba(255,255,255,0.4)" }]
+      : []),
+    { value: "Logged",   type: "square" as const, id: "logged",   color: "#06B6D4" },
+    { value: "Invoiced", type: "square" as const, id: "invoiced", color: "#4ade80" },
+  ], [lifetimeData?.budget]);
+
   // ── Filtered roles ────────────────────────────────────────────────────────────
 
   const filteredRoles = useMemo<BillingRole[]>(() => {
@@ -1417,95 +1443,71 @@ export default function Billing() {
                 />
               </div>
 
-              {lifetimeData.monthlyData.length > 1 && (() => {
-                // Compute y-axis ceiling that always includes the budget line
-                const rawMax = Math.max(
-                  lifetimeData.budget ?? 0,
-                  ...lifetimeData.monthlyData.map((d) => d.loggedCumulative),
-                  ...lifetimeData.monthlyData.map((d) => d.invoicedCumulative),
-                  0,
-                );
-                const chartStep = rawMax <= 5_000 ? 1_000
-                  : rawMax <= 50_000 ? 10_000
-                  : rawMax <= 200_000 ? 25_000
-                  : rawMax <= 500_000 ? 50_000
-                  : 100_000;
-                const chartYMax = Math.ceil(rawMax / chartStep) * chartStep || chartStep;
-
-                const legendPayload = [
-                  ...(lifetimeData.budget > 0
-                    ? [{ value: "Budget", type: "line" as const, id: "budget", color: "rgba(255,255,255,0.4)" }]
-                    : []),
-                  { value: "Logged",   type: "square" as const, id: "logged",   color: "#06B6D4" },
-                  { value: "Invoiced", type: "square" as const, id: "invoiced", color: "#4ade80" },
-                ];
-
-                return (
-                  <div className="rounded-xl border border-white/8 bg-white/2 p-4" style={{ height: 260 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={lifetimeData.monthlyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                        <XAxis
-                          dataKey="month"
-                          tickFormatter={(v: string) => {
-                            const [y, m] = v.split("-").map(Number);
-                            return new Date(y, m - 1).toLocaleString("en-US", { month: "short" });
-                          }}
-                          tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
-                          tickLine={false}
-                          axisLine={false}
+              {lifetimeData.monthlyData.length > 1 && (
+                <div className="rounded-xl border border-white/8 bg-white/2 p-4" style={{ height: 260 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={lifetimeData.monthlyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                      <XAxis
+                        dataKey="month"
+                        tickFormatter={(v: string) => {
+                          const [y, m] = v.split("-").map(Number);
+                          return new Date(y, m - 1).toLocaleString("en-US", { month: "short" });
+                        }}
+                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        domain={[0, chartYMax]}
+                        tickFormatter={(v: number) =>
+                          v === 0 ? "€0" : `€${Math.round(v / 1000)}k`
+                        }
+                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={52}
+                      />
+                      <RechartsTooltip
+                        contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, fontSize: 12 }}
+                        formatter={(value: number, name: string) => [eur(value), name]}
+                      />
+                      <Legend
+                        payload={chartLegendPayload}
+                        wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+                        formatter={(value) => <span style={{ color: "rgba(255,255,255,0.6)" }}>{value}</span>}
+                      />
+                      {lifetimeData.budget > 0 && (
+                        <ReferenceLine
+                          y={lifetimeData.budget}
+                          stroke="rgba(255,255,255,0.3)"
+                          strokeDasharray="6 3"
                         />
-                        <YAxis
-                          domain={[0, chartYMax]}
-                          tickFormatter={(v: number) =>
-                            v === 0 ? "€0" : `€${Math.round(v / 1000)}k`
-                          }
-                          tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
-                          tickLine={false}
-                          axisLine={false}
-                          width={52}
-                        />
-                        <RechartsTooltip
-                          contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, fontSize: 12 }}
-                          formatter={(value: number, name: string) => [eur(value), name]}
-                        />
-                        <Legend
-                          payload={legendPayload}
-                          wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
-                          formatter={(value) => <span style={{ color: "rgba(255,255,255,0.6)" }}>{value}</span>}
-                        />
-                        {lifetimeData.budget > 0 && (
-                          <ReferenceLine
-                            y={lifetimeData.budget}
-                            stroke="rgba(255,255,255,0.3)"
-                            strokeDasharray="6 3"
-                          />
-                        )}
-                        <Area
-                          type="monotone"
-                          dataKey="loggedCumulative"
-                          name="Logged"
-                          stroke="#06B6D4"
-                          fill="rgba(6,182,212,0.15)"
-                          strokeWidth={2}
-                          dot={{ r: 3, fill: "#06B6D4", strokeWidth: 0 }}
-                          activeDot={{ r: 4 }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="invoicedCumulative"
-                          name="Invoiced"
-                          stroke="#4ade80"
-                          fill="rgba(74,222,128,0.12)"
-                          strokeWidth={2}
-                          dot={{ r: 3, fill: "#4ade80", strokeWidth: 0 }}
-                          activeDot={{ r: 4 }}
-                        />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                );
-              })()}
+                      )}
+                      <Area
+                        type="monotone"
+                        dataKey="loggedCumulative"
+                        name="Logged"
+                        stroke="#06B6D4"
+                        fill="rgba(6,182,212,0.15)"
+                        strokeWidth={2}
+                        dot={{ r: 3, fill: "#06B6D4", strokeWidth: 0 }}
+                        activeDot={{ r: 4 }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="invoicedCumulative"
+                        name="Invoiced"
+                        stroke="#4ade80"
+                        fill="rgba(74,222,128,0.12)"
+                        strokeWidth={2}
+                        dot={{ r: 3, fill: "#4ade80", strokeWidth: 0 }}
+                        activeDot={{ r: 4 }}
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
           ) : lifetimeQuery.isLoading ? (
             <div className="text-sm text-muted-foreground py-6 text-center">Loading overview…</div>
