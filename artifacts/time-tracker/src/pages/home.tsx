@@ -40,10 +40,11 @@ export default function Home() {
     query: { queryKey: getGetDashboardSummaryQueryKey() },
   });
 
-  const { data: clients = [] } = useListClients(
+  const { data: clientsData } = useListClients(
     { includeInactive: false },
     { query: { queryKey: getListClientsQueryKey({ includeInactive: false }) } }
   );
+  const clients = Array.isArray(clientsData) ? clientsData : [];
 
   const createEmployee = useCreateEmployee();
   const createClient   = useCreateClient();
@@ -55,7 +56,7 @@ export default function Home() {
     { label: "Active Employees",        value: summary?.employeeSummaries?.length ?? 0,                                          icon: Users,        color: "text-emerald-500", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
     { label: "Hours Logged This Week",  value: summary?.totalBookedHours   != null ? `${summary.totalBookedHours}h`   : "—",    icon: Clock,        color: "text-violet-500",  bg: "bg-violet-50 dark:bg-violet-950/30" },
     { label: "Billable This Week",      value: summary?.billableBookedHours != null ? `${summary.billableBookedHours}h` : "—",  icon: BarChart3,    color: "text-amber-500",   bg: "bg-amber-50 dark:bg-amber-950/30" },
-    { label: "Week",                    value: summary ? format(new Date(summary.weekStartDate), "MMM d") + " – " + format(new Date(summary.weekEndDate), "MMM d") : "—", icon: FolderKanban, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-950/30" },
+    { label: "Week",                    value: (summary?.weekStartDate && summary?.weekEndDate) ? format(new Date(summary.weekStartDate), "MMM d") + " – " + format(new Date(summary.weekEndDate), "MMM d") : "—", icon: FolderKanban, color: "text-blue-500", bg: "bg-blue-50 dark:bg-blue-950/30" },
   ];
 
   function handleCreateEmployee(e: React.FormEvent<HTMLFormElement>) {
