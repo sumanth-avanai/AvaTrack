@@ -1,0 +1,61 @@
+CONTEXT
+AvaTrack is an internal project management / time-tracking tool (React + Vite + 
+Tailwind frontend, Express API, PostgreSQL + Drizzle ORM). This task fixes the 
+cumulative chart in Section 1 (Project overview) of the Billing page. No other 
+part of the Billing page should be changed.
+
+CRITICAL: Do not alter, migrate, or delete any existing data. This is a 
+rendering/display fix only — no changes to underlying data or calculations.
+
+BUG BEING FIXED
+The current cumulative chart renders without axis labels, gridlines, or a 
+legend, making it unreadable: no month labels on the x-axis, no value scale 
+on the y-axis, and the dashed Budget reference line is not visible (likely 
+because the y-axis max is too low to include the budget value, pushing the 
+line off the top of the visible area).
+
+REQUIRED CHANGES
+
+1. X-axis: show month labels (e.g. Jan, Feb, Mar ...) spanning from the 
+   project's start month to the current month.
+
+2. Y-axis: show a value scale with gridlines, formatted as currency in 
+   thousands (e.g. €0, €50k, €100k, €150k, €200k). The scale's max must be 
+   set high enough to always include the Budget value, so the dashed Budget 
+   line is always visible within the chart area (e.g. max = Budget value 
+   rounded up to the next sensible step, not just the max of Logged/Invoiced 
+   data).
+
+3. Budget line: render as a flat, dashed reference line at the fixed budget 
+   value, using a neutral/gray color so it reads as a "committed ceiling" 
+   rather than data.
+
+4. Data series: keep the two existing cumulative filled areas — Logged and 
+   Invoiced — each in their existing distinct colors (Logged in blue, 
+   Invoiced in green, consistent with the rest of the app), rendered as 
+   before but now against the corrected axes.
+
+5. Data point markers: show a visible point marker at each monthly data point 
+   for both Logged and Invoiced series (not just at the start/end of the 
+   line), so the monthly progression is legible, not just the overall shape.
+
+6. Legend: add a small legend above or below the chart labeling Budget, 
+   Logged, and Invoiced with their respective colors/line styles, so the 
+   chart is self-explanatory without relying on the KPI cards above it.
+
+No changes to: the KPI cards above the chart, the Ready to invoice table 
+below it, the period selector, the project picker, or any calculation logic. 
+This task only touches how the existing chart data is rendered.
+
+ACCEPTANCE CRITERIA
+[ ] X-axis shows month labels across the project's timeline
+[ ] Y-axis shows a currency-formatted value scale with gridlines
+[ ] The dashed Budget line is visible within the chart at all times (never 
+    clipped off the top)
+[ ] Logged and Invoiced series remain as cumulative filled areas in their 
+    existing colors
+[ ] A point marker is visible at every monthly data point on both series
+[ ] A legend clearly labels Budget, Logged, and Invoiced
+[ ] No other part of the Billing page (KPI cards, table, selectors, data 
+    calculations) is affected by this change
+[ ] All UI copy is in English, sentence case
