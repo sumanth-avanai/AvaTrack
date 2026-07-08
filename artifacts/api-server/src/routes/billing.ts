@@ -825,13 +825,17 @@ router.post("/projects/:projectId/invoices", async (req, res): Promise<void> => 
 
       const dayRate = role?.dayRate ?? 0;
 
-      // Fetch unbilled hours for this item to compute amount
+      // Fetch unbilled hours for this item to compute amount.
+      // Exclusion order matters: check each "already-settled" status first so
+      // legacy entries (billing_status IS NULL but invoiced_at IS NOT NULL) are
+      // correctly excluded before the catch-all ELSE branch.
       const [agg] = await tx
         .select({
           unbilledHours: sql<number>`COALESCE(SUM(CASE
-            WHEN ${timeEntriesTable.billingStatus} IS NULL OR (${timeEntriesTable.billingStatus} != 'invoiced' AND ${timeEntriesTable.billingStatus} != 'invest') THEN ${timeEntriesTable.hours}
-            WHEN ${timeEntriesTable.billingStatus} IS NULL AND ${timeEntriesTable.invoicedAt} IS NULL THEN ${timeEntriesTable.hours}
-            ELSE 0
+            WHEN ${timeEntriesTable.billingStatus} = 'invoiced'                                               THEN 0
+            WHEN ${timeEntriesTable.billingStatus} = 'invest'                                                 THEN 0
+            WHEN ${timeEntriesTable.billingStatus} IS NULL AND ${timeEntriesTable.invoicedAt} IS NOT NULL     THEN 0
+            ELSE ${timeEntriesTable.hours}
           END), 0)`,
         })
         .from(timeEntriesTable)
