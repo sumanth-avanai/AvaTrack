@@ -1,0 +1,172 @@
+CONTEXT
+AvaTrack is an internal project management / time-tracking tool (React + Vite + 
+Tailwind frontend, Express API, PostgreSQL + Drizzle ORM). This task reworks the 
+Billing page for a single project.
+
+CRITICAL: Do not alter, migrate, or delete any existing data (time entries, 
+projects, roles, employees, existing invoice records) as part of this change. 
+Only add new fields/tables as specified below and change UI/query logic. Any 
+migration must be additive and backward-compatible (sensible defaults, no data 
+loss).
+
+BACKGROUND / BUG BEING FIXED
+Currently all five summary metrics on the Billing page (Budget, Logged, 
+Invoiced, Unbilled, Remaining) incorrectly recompute based on the selected 
+Period filter. This produces wrong values, e.g. "Invoiced" showing 0 € when 
+filtering to "Last Month" even though invoices exist for that project overall. 
+The fix is to split the page into two independently-scoped sections and 
+replace the current Client + Project dropdown pair and single Period dropdown 
+with the components below.
+
+---
+
+HEADER — Project picker (replaces separate Client + Project dropdowns)
+
+- Single combobox showing the current selection as a breadcrumb: 
+  "{Client name} › {Project name}".
+- Clicking opens a popover with a text search input at the top and a list of 
+  all projects grouped under their client name (alphabetical groups, 
+  alphabetical projects within each group — no "recently used" section for 
+  now).
+- Typing filters both client and project names in real time.
+- Selecting a project updates the breadcrumb and reloads the whole page for 
+  that project.
+- This is a single-select entity picker, NOT a multi-select filter panel — do 
+  not reuse the Resource Planner's checkbox-based filter component for this; 
+  it's a different interaction (jump to one project vs. filter a list).
+- "Export CSV" button stays in its current position, unaffected.
+
+---
+
+SECTION 1 — Project overview (period-independent)
+
+Always reflects the full project lifetime, regardless of any period filter in 
+Section 2.
+
+KPI row (4 metric cards):
+- Budget = fixed contract value (unchanged, already correct)
+- Total invoiced = SUM of amounts across all entries/roles ever marked as 
+  invoiced (all time)
+- Total logged = SUM of all logged amounts across the full project lifetime 
+  (all time)
+- Remaining = Budget − Total logged (all time, NOT period-scoped)
+
+Chart (below the KPI row):
+- Cumulative line/area chart over the project's full timeline (monthly 
+  buckets)
+- Three series:
+  - Budget: flat dashed reference line at the fixed budget value
+  - Logged: cumulative sum of logged amounts, filled area
+  - Invoiced: cumulative sum of invoiced amounts, filled area
+- X-axis: months from project start to current month
+- Read-only overview visual; standard chart tooltips only
+
+---
+
+SECTION 2 — Ready to invoice (period-scoped)
+
+Period selector — replaces the old single dropdown:
+- Prev/next chevron buttons flanking a label showing the current period 
+  (e.g. "July 2026")
+- A secondary dropdown next to it for jumping directly to "Last month" or 
+  "Custom range" (date range picker)
+- Default on page load: current month ("This Month" equivalent)
+- Changing this selector never affects Section 1's KPIs or chart
+
+Table columns: checkbox | Role/Employee | Logged (period) | Unbilled (period) | 
+Status
+
+Formulas (period-scoped — computed only over entries within the selected 
+period):
+- Logged (period) = SUM of logged amounts for that role/employee within the 
+  selected period. Historical fact; does not change once the period has 
+  passed.
+- Unbilled (period) = SUM of logged amounts within the selected period for 
+  entries/blocks whose invoiced status is NOT set. Can be less than Logged 
+  (period) if already partially billed.
+- Status: "Open" if any unbilled amount remains for that row in the period, 
+  "Invoiced" if fully covered by a prior invoice action.
+
+ASSUMPTION TO CONFIRM DURING IMPLEMENTATION: invoiced status is tracked per 
+role/employee block (matching the existing "Mark as" dropdown), not per 
+individual daily time entry. This means Unbilled cannot be split within a row 
+that has mixed invoiced/non-invoiced days in the same period — treat each row 
+as fully invoiced or fully open per period. If the schema already tracks 
+status at the daily-entry level, move the Unbilled formula to that finer 
+grain instead.
+
+Checkbox selection default: pre-select all rows with Status = "Open" in the 
+current period; leave "Invoiced" rows unchecked.
+
+Below the table: "Invoice history" expandable link (unchanged), and a 
+"Generate invoice" button, enabled only when at least one row is checked.
+
+---
+
+SECTION 3 — Generate invoice flow
+
+Clicking "Generate invoice" opens a confirmation modal (records that an 
+invoice was created elsewhere — does NOT generate a PDF or document):
+
+Modal contents:
+- Header: "Mark as invoiced"
+- Subheader: selected period + count of selected positions
+- Summary list: each selected role/employee with its amount, plus a total
+- Optional text input: "Invoice reference (optional)" — free text, e.g. 
+  "INV-2026-0143"
+- Cancel / Confirm buttons
+
+On Confirm:
+- Set invoiced status = true for all selected role/employee blocks within the 
+  selected period
+- Create a new entry in Invoice history with: date created (now), period 
+  covered, total amount, list of included role/employee positions, and the 
+  optional reference string (nullable)
+- Close modal, refresh Section 2 table (selected rows now show Status = 
+  "Invoiced" and Unbilled = 0 for that period) and Section 1 KPIs/chart 
+  (Total invoiced increases accordingly)
+
+No actual PDF/document is generated — intentionally out of scope, may be 
+added later as a separate feature.
+
+---
+
+DATA MODEL NOTES
+- Add an "invoiced" boolean/status field to the role/employee billing block 
+  entity if it doesn't already exist at that granularity (confirm actual 
+  existing schema first — see ASSUMPTION above).
+- Invoice history entries need: id, project_id, created_at, period_start, 
+  period_end, total_amount, reference (nullable string), and a reference to 
+  which role/employee blocks were included (prefer a join table over a JSON 
+  snapshot if the schema supports it, for future reporting).
+
+---
+
+ACCEPTANCE CRITERIA
+[ ] Project picker shows a single searchable combobox grouped by client, 
+    replacing the separate Client and Project dropdowns
+[ ] Selecting a project via search or click updates the whole page correctly
+[ ] Budget, Total invoiced, and Remaining in Section 1 do NOT change when 
+    Section 2's period selector changes
+[ ] Total invoiced in Section 1 equals the sum of all Invoice history entries 
+    for the project, all time
+[ ] Section 1 chart renders three series (Budget flat line, Logged cumulative 
+    area, Invoiced cumulative area) across the project's monthly timeline
+[ ] Period selector in Section 2 supports prev/next navigation, defaults to 
+    the current month, and offers "Last month" / "Custom range" via the 
+    secondary dropdown
+[ ] Section 2's Logged (period) reflects only entries within the selected 
+    period and does not change after the period has passed
+[ ] Section 2's Unbilled (period) drops to 0 for a role/employee once that 
+    row has been included in a confirmed invoice for that period
+[ ] Rows already fully invoiced for the selected period default to unchecked; 
+    open rows default to checked
+[ ] "Generate invoice" button is disabled when no rows are selected
+[ ] Confirmation modal shows correct summary, total, and accepts an optional 
+    free-text reference
+[ ] Confirming the modal updates status in Section 2, adds an entry to 
+    Invoice history, and updates Section 1 KPIs — without a page reload 
+    losing state
+[ ] No existing time entries, projects, roles, employees, or invoice history 
+    records are modified, deleted, or reformatted by this change
+[ ] All UI copy is in English, sentence case, no exclamation marks
