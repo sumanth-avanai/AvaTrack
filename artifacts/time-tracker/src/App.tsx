@@ -1,6 +1,6 @@
 import { useEffect, useState, Component, type ReactNode } from "react";
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -19,6 +19,12 @@ import ProjectStatus from "@/pages/project-status";
 import ProjectStatusDetail from "@/pages/project-status-detail";
 import { useAppAuth } from "@/hooks/use-app-auth";
 import { DirtyGuardProvider } from "@/contexts/dirty-guard";
+
+// React 19 concurrent rendering: use microtasks instead of setTimeout(0) so
+// simultaneous query completions are batched by React's automatic batching
+// rather than firing as separate interleaved useSyncExternalStore
+// notifications (which causes "Invalid hook call" in React 19).
+notifyManager.setScheduler(queueMicrotask);
 
 class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {

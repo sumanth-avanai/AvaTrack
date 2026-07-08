@@ -2895,9 +2895,10 @@ export default function ResourcePlannerPage() {
   const qc = useQueryClient();
   const colorPatchedRef = useRef(false);
   useEffect(() => {
-    if (colorPatchedRef.current || !(allProjectsForPatch as any[]).length)
+    const patchList = Array.isArray(allProjectsForPatch) ? allProjectsForPatch : [];
+    if (colorPatchedRef.current || !patchList.length)
       return;
-    const colorless = (allProjectsForPatch as any[]).filter(
+    const colorless = patchList.filter(
       (p: any) => !p.color,
     );
     if (!colorless.length) {

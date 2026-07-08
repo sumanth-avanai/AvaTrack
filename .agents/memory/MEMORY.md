@@ -1,1 +1,1 @@
-- [Vite stale deps cache causes Invalid hook call](vite-stale-deps-recharts.md) — clearing `.vite/deps/` fixes "Invalid hook call" when adding new UI libs like recharts.
+- [React 19 + React Query useSyncExternalStore crash](react19-rq-scheduler.md) — root fix: notifyManager.setScheduler(queueMicrotask) in App.tsx; guards needed on all .map/.filter of query data.
