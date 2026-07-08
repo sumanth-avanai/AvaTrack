@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, real, date, integer, index, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, serial, timestamp, real, date, integer, index, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { employeesTable } from "./employees";
@@ -15,6 +15,7 @@ export const resourceBookingsTable = pgTable("resource_bookings", {
   hoursPerDay: real("hours_per_day").notNull(),
   weekdayHours: jsonb("weekday_hours").$type<Record<string, number>>(),
   notes: text("notes"),
+  status: varchar("status", { length: 20 }),
   pastReleasedAt: timestamp("past_released_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
@@ -25,6 +26,8 @@ export const resourceBookingsTable = pgTable("resource_bookings", {
 
 export const insertResourceBookingSchema = createInsertSchema(resourceBookingsTable).omit({
   id: true, createdAt: true, updatedAt: true,
+}).extend({
+  status: z.enum(["tentative", "confirmed"]).nullable().optional(),
 });
 export type InsertResourceBooking = z.infer<typeof insertResourceBookingSchema>;
 export type ResourceBooking = typeof resourceBookingsTable.$inferSelect;

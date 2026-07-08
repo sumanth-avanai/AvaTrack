@@ -114,6 +114,7 @@ interface ResourceBookingFull {
   hoursPerDay: number;
   weekdayHours: Record<string, number> | null;
   notes: string | null;
+  status: string | null;
   pastReleasedAt: string | null;
   employeeName: string;
   weeklyCapacityHours: number;
@@ -238,6 +239,7 @@ interface SegmentBase {
   bookingStartDate: string;
   bookingEndDate: string;
   notes: string | null;
+  status: string | null;
   pastReleasedAt: string | null;
   projectRoleId: number | null;
   projectId: number;
@@ -293,6 +295,7 @@ function buildBookingSegments(
     bookingStartDate: booking.startDate,
     bookingEndDate: booking.endDate,
     notes: booking.notes,
+    status: booking.status ?? null,
     pastReleasedAt: booking.pastReleasedAt,
     projectRoleId: booking.projectRoleId,
     projectId: booking.projectId,
@@ -737,11 +740,12 @@ function calcBookingHoursClient(
 // ── Booking Modal ──────────────────────────────────────────────────────────────
 interface ModalState {
   mode: "create";
-  employeeId: number;
-  employeeName: string;
-  capacity: number;
-  workingDaysMask: number[];
-  holidayCalendarCode: string | null;
+  /** Pre-filled employee (from row "+" button). Null = toolbar button (empty assignees). */
+  employeeId?: number | null;
+  employeeName?: string | null;
+  capacity?: number;
+  workingDaysMask?: number[];
+  holidayCalendarCode?: string | null;
 }
 interface EditModalState {
   mode: "edit";
@@ -819,6 +823,51 @@ function BookingModal({
       : { "1": 8, "2": 8, "3": 8, "4": 8, "5": 8 },
   );
 
+  // Status toggle (Tentative / Confirmed)
+  const [bookingStatus, setBookingStatus] = useState<"tentative" | "confirmed">(
+    isEdit ? ((state as EditModalState).booking.status === "tentative" ? "tentative" : "confirmed") : "confirmed",
+  );
+
+  // Notes expansion (collapsed by default when empty)
+  const [notesExpanded, setNotesExpanded] = useState(
+    isEdit ? !!(state as EditModalState).booking.notes : false,
+  );
+
+  // Assignees (create only) — initialized from prefilled employee if any
+  type AssigneeEntry = { id: number; name: string; capacity: number; workingDaysMask: number[]; holidayCalendarCode: string | null };
+  const prefilledEmpId = !isEdit ? (state as ModalState).employeeId ?? null : null;
+  const prefilledEmpName = !isEdit ? (state as ModalState).employeeName ?? null : null;
+  const prefilledCapacity = !isEdit ? (state as ModalState).capacity ?? 40 : 40;
+  const prefilledMask = !isEdit ? (state as ModalState).workingDaysMask ?? [1,1,1,1,1,0,0] : [1,1,1,1,1,0,0];
+  const prefilledCalCode = !isEdit ? (state as ModalState).holidayCalendarCode ?? null : null;
+  const [assignees, setAssignees] = useState<AssigneeEntry[]>(
+    !isEdit && prefilledEmpId != null
+      ? [{ id: prefilledEmpId, name: prefilledEmpName ?? "Unknown", capacity: prefilledCapacity, workingDaysMask: prefilledMask, holidayCalendarCode: prefilledCalCode }]
+      : [],
+  );
+  const [assigneesOpen, setAssigneesOpen] = useState(false);
+  const [assigneeSearch, setAssigneeSearch] = useState("");
+
+  // Project combobox state
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
+
+  // Schedule mode (create only)
+  type ScheduleMode = "zeitraum" | "dauer" | "budget";
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("zeitraum");
+
+  // Dauer mode
+  const [durationValue, setDurationValue] = useState<number>(5);
+  const [durationUnit, setDurationUnit] = useState<"tage" | "wo" | "mo">("tage");
+
+  // Budget mode
+  const [budgetTarget, setBudgetTarget] = useState<number>(10);
+  const [budgetUnit, setBudgetUnit] = useState<"tage" | "stunden">("tage");
+  const [budgetCapDate, setBudgetCapDate] = useState("");
+
+  // Edit modal — slot list expanded
+  const [showSlotList, setShowSlotList] = useState(false);
+
   // Fetch roles for the selected project
   const { data: projectRoles, isLoading: rolesLoading } = useQuery<
     ProjectRole[]
@@ -841,9 +890,10 @@ function BookingModal({
     setRoleId("");
   }
 
-  const employeeId = isEdit
+  // For create mode with multiple assignees, use first assignee as the "primary" for role/availability checks
+  const employeeId: number | undefined = isEdit
     ? state.booking.employeeId
-    : (state as ModalState).employeeId;
+    : (assignees[0]?.id ?? undefined);
 
   // Partition roles into assigned (for this employee) vs. the rest
   const assignedRoles = useMemo(
@@ -867,9 +917,17 @@ function BookingModal({
       setRoleId(String(assignedRoles[0].id));
     }
   }, [assignedRoles, roleId]);
-  const capacity = state.capacity;
-  const workingDaysMask = state.workingDaysMask;
-  const holidayCalendarCode = state.holidayCalendarCode;
+  // For create mode, use first assignee's data; fall back to defaults if no assignee yet
+  const primaryAssignee = !isEdit ? assignees[0] : null;
+  const capacity: number = isEdit
+    ? (state as EditModalState).capacity
+    : (primaryAssignee?.capacity ?? 40);
+  const workingDaysMask: number[] = isEdit
+    ? (state as EditModalState).workingDaysMask
+    : (primaryAssignee?.workingDaysMask ?? [1,1,1,1,1,0,0]);
+  const holidayCalendarCode: string | null = isEdit
+    ? (state as EditModalState).holidayCalendarCode
+    : (primaryAssignee?.holidayCalendarCode ?? null);
 
   // ── Holiday calendar resolution ─────────────────────────────────────────────
   const { data: holidayCalendars } = useListHolidayCalendars({
@@ -1163,28 +1221,27 @@ function BookingModal({
   const hasRoles = rolesAvailable && projectRoles.length > 0;
   const roleRequired = !!projectId && hasRoles;
 
+  // For create mode: need at least one assignee when not in dauer/budget derived mode
+  const datesValid = startDate && endDate && startDate <= endDate;
+  const hoursValid = weekdayMode ? !allWeekdayZero : hoursPerDay > 0;
   const canSubmit =
     projectId &&
     (!roleRequired || roleId) &&
-    startDate &&
-    endDate &&
-    startDate <= endDate &&
-    (weekdayMode ? !allWeekdayZero : hoursPerDay > 0) &&
+    datesValid &&
+    hoursValid &&
+    (!isEdit ? assignees.length > 0 : true) &&
     !createMut.isPending &&
     !updateMut.isPending;
 
   async function handleSubmit() {
     if (!canSubmit) return;
-    const payload = {
-      employeeId,
+    const basePayload = {
       projectId: parseInt(projectId, 10),
       projectRoleId: roleId ? parseInt(roleId, 10) : null,
       startDate,
       endDate,
       ...(weekdayMode
         ? {
-            // Persist hours only for actual working days; non-working weekdays
-            // are ignored by the budget math, so never store stale values.
             weekdayHours: Object.fromEntries(
               (["1", "2", "3", "4", "5"] as const)
                 .filter((k) => workingDaysMask[Number(k) - 1])
@@ -1193,16 +1250,31 @@ function BookingModal({
           }
         : { hoursPerDay, weekdayHours: null }),
       notes: notes.trim() || null,
+      status: bookingStatus,
     };
     try {
       if (isEdit) {
-        await updateMut.mutateAsync({ id: state.booking.id, data: payload });
+        await updateMut.mutateAsync({ id: state.booking.id, data: { ...basePayload, employeeId: state.booking.employeeId } });
         toast({ title: "Booking updated" });
+        onClose();
       } else {
-        await createMut.mutateAsync(payload);
-        toast({ title: "Booking created" });
+        // Create one booking per assignee
+        let succeeded = 0;
+        for (const a of assignees) {
+          try {
+            await createMut.mutateAsync({ ...basePayload, employeeId: a.id });
+            succeeded++;
+          } catch {
+            // continue with remaining assignees
+          }
+        }
+        if (succeeded === assignees.length) {
+          toast({ title: assignees.length === 1 ? "Booking created" : `${succeeded} bookings created` });
+        } else {
+          toast({ title: `${succeeded} of ${assignees.length} bookings created`, variant: "destructive" });
+        }
+        onClose();
       }
-      onClose();
     } catch {
       toast({ title: "Failed to save booking", variant: "destructive" });
     }
@@ -1221,7 +1293,11 @@ function BookingModal({
 
   const empName = isEdit
     ? state.booking.employeeName
-    : (state as ModalState).employeeName;
+    : assignees.length === 1
+      ? assignees[0].name
+      : assignees.length > 1
+        ? `${assignees[0].name} +${assignees.length - 1}`
+        : null;
 
   return (
     <>
@@ -1234,34 +1310,175 @@ function BookingModal({
       <DialogContent className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {isEdit ? "Edit booking" : "New booking"} — {empName}
+            {isEdit ? `Edit booking${empName ? ` — ${empName}` : ""}` : "New booking"}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Project */}
+
+          {/* ── People & project section ─────────────────────────────────────── */}
+          {!isEdit && (
+            <p className="text-xs text-muted-foreground font-medium -mb-2">People &amp; project</p>
+          )}
+
+          {/* Assignees (New only) */}
+          {!isEdit && (
+            <div className="space-y-1.5">
+              <Label>Assignees</Label>
+              <div className="flex flex-wrap items-center gap-1.5 min-h-9 px-2 py-1.5 rounded-md border border-input bg-background">
+                {assignees.map((a) => (
+                  <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold uppercase">
+                      {a.name.split(" ").map((n) => n[0]).slice(0, 2).join("")}
+                    </span>
+                    {a.name}
+                    <button
+                      type="button"
+                      onClick={() => setAssignees((prev) => prev.filter((x) => x.id !== a.id))}
+                      className="ml-0.5 hover:text-destructive"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                <Popover open={assigneesOpen} onOpenChange={setAssigneesOpen}>
+                  <PopoverTrigger asChild>
+                    <button type="button" className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground">
+                      <Plus className="h-3 w-3" /> Add person
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-0" align="start">
+                    <div className="p-2 border-b">
+                      <Input
+                        placeholder="Search people…"
+                        value={assigneeSearch}
+                        onChange={(e) => setAssigneeSearch(e.target.value)}
+                        className="h-7 text-xs"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="max-h-48 overflow-y-auto py-1">
+                      {(() => {
+                        const remaining = employees
+                          .filter((e) => !assignees.some((a) => a.id === e.id))
+                          .filter((e) => !assigneeSearch || (e.name ?? "").toLowerCase().includes(assigneeSearch.toLowerCase()));
+                        if (remaining.length === 0) {
+                          return <p className="px-3 py-2 text-xs text-muted-foreground">No more employees</p>;
+                        }
+                        return remaining.map((e) => (
+                          <button
+                            key={e.id}
+                            type="button"
+                            onClick={() => {
+                              const empData = (employees as any[]).find((x) => x.id === e.id);
+                              setAssignees((prev) => [
+                                ...prev,
+                                {
+                                  id: e.id,
+                                  name: e.name ?? "Unknown",
+                                  capacity: empData?.weeklyCapacityHours ?? 40,
+                                  workingDaysMask: Array.isArray(empData?.workingDaysMask)
+                                    ? empData.workingDaysMask
+                                    : [1, 1, 1, 1, 1, 0, 0],
+                                  holidayCalendarCode: empData?.holidayCalendarCode ?? null,
+                                },
+                              ]);
+                              setAssigneesOpen(false);
+                              setAssigneeSearch("");
+                            }}
+                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                          >
+                            {e.name}
+                          </button>
+                        ));
+                      })()}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              {assignees.length === 0 && (
+                <p className="text-xs text-muted-foreground">Add at least one person to create a booking.</p>
+              )}
+            </div>
+          )}
+
+          {/* Project — searchable combobox */}
           <div className="space-y-1.5">
             <Label>Project</Label>
-            <Select value={projectId} onValueChange={setProjectId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select project…" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects
-                  .filter((p) => p.active)
-                  .map((p) => (
-                    <SelectItem key={p.id} value={String(p.id)}>
-                      <span
-                        className="truncate block max-w-[380px]"
-                        title={`${p.name}${p.clientName ? ` (${p.clientName})` : ""}`}
-                      >
-                        {p.name}
-                        {p.clientName ? ` (${p.clientName})` : ""}
-                      </span>
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
+            <Popover open={projectOpen} onOpenChange={setProjectOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  className="w-full justify-between font-normal h-10 text-sm"
+                >
+                  {projectId
+                    ? (() => {
+                        const p = projects.find((x) => String(x.id) === projectId);
+                        return p ? (
+                          <span className="truncate">{p.name}{p.clientName ? ` (${p.clientName})` : ""}</span>
+                        ) : "Select project…";
+                      })()
+                    : <span className="text-muted-foreground">Select project…</span>}
+                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[440px] p-0" align="start">
+                <div className="p-2 border-b">
+                  <Input
+                    placeholder="Search projects…"
+                    value={projectSearch}
+                    onChange={(e) => setProjectSearch(e.target.value)}
+                    className="h-8"
+                    autoFocus
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {(() => {
+                    const search = projectSearch.toLowerCase();
+                    const filtered = projects
+                      .filter((p) => p.active)
+                      .filter(
+                        (p) =>
+                          !search ||
+                          p.name.toLowerCase().includes(search) ||
+                          (p.clientName ?? "").toLowerCase().includes(search),
+                      );
+                    if (filtered.length === 0) {
+                      return <p className="px-3 py-2 text-sm text-muted-foreground">No projects found</p>;
+                    }
+                    const clientGroups = new Map<string, typeof filtered>();
+                    for (const p of filtered) {
+                      const key = p.clientName ?? "(No client)";
+                      if (!clientGroups.has(key)) clientGroups.set(key, []);
+                      clientGroups.get(key)!.push(p);
+                    }
+                    return Array.from(clientGroups.entries()).map(([clientName, projs]) => (
+                      <div key={clientName}>
+                        <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">{clientName}</div>
+                        {projs.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => {
+                              setProjectId(String(p.id));
+                              setProjectOpen(false);
+                              setProjectSearch("");
+                            }}
+                            className={`w-full text-left px-4 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex items-center justify-between ${
+                              String(p.id) === projectId ? "bg-accent/50 font-medium" : ""
+                            }`}
+                          >
+                            <span className="truncate">{p.name}</span>
+                            {String(p.id) === projectId && <Check className="h-3.5 w-3.5 shrink-0 text-primary ml-2" />}
+                          </button>
+                        ))}
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
 
           {/* Role — shown once a project is selected */}
@@ -1360,7 +1577,60 @@ function BookingModal({
             </div>
           )}
 
-          {/* Date range */}
+          {/* Status toggle — both New and Edit */}
+          <div className="space-y-1.5">
+            <Label>Status</Label>
+            <div className="flex rounded-md border border-input overflow-hidden w-fit h-9">
+              {(["confirmed", "tentative"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setBookingStatus(s)}
+                  className={`px-4 text-sm font-medium transition-colors ${
+                    bookingStatus === s
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {s === "tentative" ? "Tentative" : "Confirmed"}
+                </button>
+              ))}
+            </div>
+            {bookingStatus === "tentative" && (
+              <p className="text-xs text-muted-foreground">Tentative bookings are not counted against role budget.</p>
+            )}
+          </div>
+
+          {/* ── Schedule section ─────────────────────────────────────────────── */}
+          {!isEdit && (
+            <>
+              <div className="border-t border-border/50 -mx-1" />
+              <p className="text-xs text-muted-foreground font-medium -mb-2">Schedule</p>
+
+              {/* Schedule mode switcher (New only) */}
+              <div className="space-y-1.5">
+                <div className="flex rounded-md border border-input overflow-hidden w-full h-9">
+                  {(["zeitraum", "dauer", "budget"] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setScheduleMode(m)}
+                      className={`flex-1 text-sm font-medium transition-colors ${
+                        scheduleMode === m
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {m === "zeitraum" ? "Date range" : m === "dauer" ? "Duration" : "Budget"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Date range — shown in Edit mode always, in New mode only for Zeitraum */}
+          {(isEdit || scheduleMode === "zeitraum") && (
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Start date</Label>
@@ -1379,6 +1649,140 @@ function BookingModal({
               />
             </div>
           </div>
+          )}
+
+          {/* Dauer mode (New only) */}
+          {!isEdit && scheduleMode === "dauer" && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Start date</Label>
+                  <Input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Duration</Label>
+                  <div className="flex gap-1.5">
+                    <Input
+                      type="number"
+                      min={1}
+                      className="flex-1"
+                      value={durationValue}
+                      onChange={(e) => setDurationValue(Math.max(1, parseInt(e.target.value) || 1))}
+                    />
+                    <div className="flex rounded-md border border-input overflow-hidden h-10">
+                      {(["tage", "wo", "mo"] as const).map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setDurationUnit(u)}
+                          className={`px-2.5 text-xs font-medium transition-colors ${
+                            durationUnit === u
+                              ? "bg-primary text-primary-foreground"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {u === "tage" ? "Days" : u === "wo" ? "Wks" : "Mo"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Calculated end date for Dauer */}
+              {startDate && (() => {
+                let calDays = durationValue;
+                if (durationUnit === "wo") calDays = Math.ceil(durationValue * 7);
+                if (durationUnit === "mo") calDays = Math.ceil(durationValue * 30);
+                const calcEnd = addDays(parseISO(startDate), calDays - 1);
+                const calcEndStr = format(calcEnd, "yyyy-MM-dd");
+                if (endDate !== calcEndStr) setEndDate(calcEndStr);
+                return (
+                  <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+                    Calculated end date: <span className="font-medium text-foreground">{format(calcEnd, "d MMM yyyy")}</span>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Budget mode (New only) */}
+          {!isEdit && scheduleMode === "budget" && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Start date</Label>
+                  <Input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Target</Label>
+                  <div className="flex gap-1.5">
+                    <Input
+                      type="number"
+                      min={1}
+                      className="flex-1"
+                      value={budgetTarget}
+                      onChange={(e) => setBudgetTarget(Math.max(1, parseInt(e.target.value) || 1))}
+                    />
+                    <div className="flex rounded-md border border-input overflow-hidden h-10">
+                      {(["tage", "stunden"] as const).map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setBudgetUnit(u)}
+                          className={`px-2.5 text-xs font-medium transition-colors ${
+                            budgetUnit === u
+                              ? "bg-primary text-primary-foreground"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {u === "tage" ? "Days" : "Hours"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Cap date (optional)</Label>
+                <Input
+                  type="date"
+                  value={budgetCapDate}
+                  onChange={(e) => setBudgetCapDate(e.target.value)}
+                />
+              </div>
+              {/* Budget mode calculated end date */}
+              {startDate && (() => {
+                const targetDays = budgetUnit === "tage" ? budgetTarget : Math.ceil(budgetTarget / 8);
+                const calDays = Math.ceil(targetDays * (7 / 5));
+                const calcEnd = addDays(parseISO(startDate), calDays - 1);
+                const calcEndStr = format(calcEnd, "yyyy-MM-dd");
+                const capExceeded = !!(budgetCapDate && calcEndStr > budgetCapDate);
+                const finalEnd = capExceeded ? budgetCapDate : calcEndStr;
+                if (endDate !== finalEnd) setEndDate(finalEnd);
+                return (
+                  <div className="space-y-1">
+                    <div className="text-xs bg-muted/50 rounded px-2 py-1.5 text-muted-foreground">
+                      Calculated end date: <span className="font-medium text-foreground">{format(parseISO(finalEnd), "d MMM yyyy")}</span>
+                    </div>
+                    {capExceeded && (
+                      <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        Target may not be fully reached before cap date
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* Hours per day / weekday mode */}
           <div className="space-y-2">
@@ -1530,19 +1934,42 @@ function BookingModal({
             )}
           </div>
 
-          {/* Notes */}
-          <div className="space-y-1.5">
-            <Label>Notes (optional)</Label>
-            <Textarea
-              rows={2}
-              placeholder="Internal notes…"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
+          {/* Notes — collapsible */}
+          {notesExpanded ? (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Note</Label>
+                {!notes && (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setNotesExpanded(false)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <Textarea
+                rows={2}
+                placeholder="Internal notes…"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                autoFocus
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNotesExpanded(true)}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add note
+            </button>
+          )}
 
-          {/* Booking summary */}
-          {bookingSummary && (
+          {/* Booking summary — New mode only */}
+          {!isEdit && bookingSummary && (
             <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-sm space-y-1">
               <div className="font-medium text-foreground mb-1 flex items-center gap-1.5">
                 <CalendarRange className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1617,133 +2044,7 @@ function BookingModal({
             </div>
           )}
 
-          {/* ── This slot: past vs. future, anchored to today + release ───────── */}
-          {isEdit && (() => {
-            const todayStr = new Date().toISOString().slice(0, 10);
-            const todayLabel = format(new Date(), "MMM d, yyyy");
-            const released = !!(state as EditModalState).booking.pastReleasedAt;
-            const bStart = (state as EditModalState).booking.startDate;
-            const bEnd = (state as EditModalState).booking.endDate;
-            const hasPast = bStart < todayStr;
-            const hasFuture = bEnd >= todayStr;
-            return (
-              <div className="rounded-md border border-border bg-card px-3 py-2.5 text-sm space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="font-semibold text-foreground flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                    This slot · past vs. future
-                    <Popover>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <PopoverTrigger asChild>
-                              <button
-                                type="button"
-                                aria-label="About releasing past undelivered plan"
-                                className="inline-flex items-center justify-center rounded hover:bg-muted/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring p-0.5"
-                              >
-                                <Info className="h-3.5 w-3.5 text-muted-foreground" />
-                              </button>
-                            </PopoverTrigger>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">About releasing past undelivered plan</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <PopoverContent side="bottom" className="max-w-xs w-80">
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          Today is the dividing line. Planned days{" "}
-                          <span className="font-medium text-foreground">before today</span> that were
-                          never logged are <span className="font-medium text-foreground">undelivered</span>{" "}
-                          and silently hold budget. Releasing them frees that reservation —{" "}
-                          <span className="font-medium text-foreground">future plan and logged work are always kept.</span>
-                        </p>
-                      </PopoverContent>
-                    </Popover>
-                  </div>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    as of today, {todayLabel}
-                  </span>
-                </div>
-                {released ? (
-                  <div className="flex items-center justify-between gap-2 rounded-md bg-muted/60 border border-border px-2.5 py-2">
-                    <span className="flex items-center gap-1.5 text-muted-foreground">
-                      <Clock className="h-3.5 w-3.5" /> Past undelivered plan released
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 h-7"
-                      disabled={unreleaseMut.isPending}
-                      onClick={async () => {
-                        try {
-                          await unreleaseMut.mutateAsync((state as EditModalState).booking.id);
-                          toast({ title: "Release undone" });
-                          onClose();
-                        } catch {
-                          toast({ title: "Failed to undo release", variant: "destructive" });
-                        }
-                      }}
-                    >
-                      <Undo2 className="h-3.5 w-3.5" />
-                      {unreleaseMut.isPending ? "Undoing…" : "Undo release"}
-                    </Button>
-                  </div>
-                ) : pastPlanDays > 0 ? (
-                  confirmRelease ? (
-                    <div className="flex items-center gap-2 flex-wrap rounded-md bg-muted/60 border border-border px-2.5 py-2">
-                      <span className="text-xs text-muted-foreground">
-                        Release {Math.round(pastPlanDays * 10) / 10}d of past undelivered plan? Future plan &amp; logged work are kept.
-                      </span>
-                      <Button
-                        size="sm"
-                        className="h-7"
-                        disabled={releaseMut.isPending}
-                        onClick={async () => {
-                          try {
-                            const updated = await releaseMut.mutateAsync((state as EditModalState).booking.id);
-                            toast({ title: "Past plan released" });
-                            if (onBookingUpdated) {
-                              setConfirmRelease(false);
-                              onBookingUpdated(updated);
-                            } else {
-                              onClose();
-                            }
-                          } catch {
-                            toast({ title: "Failed to release past plan", variant: "destructive" });
-                          }
-                        }}
-                      >
-                        {releaseMut.isPending ? "Releasing…" : "Confirm release"}
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-7" onClick={() => setConfirmRelease(false)}>
-                        Cancel
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full justify-center gap-1.5"
-                      onClick={() => setConfirmRelease(true)}
-                    >
-                      <Clock className="h-3.5 w-3.5" />
-                      Release {Math.round(pastPlanDays * 10) / 10}d past undelivered plan
-                    </Button>
-                  )
-                ) : (
-                  <div className="text-xs text-muted-foreground flex items-center gap-1.5">
-                    <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
-                    {hasPast
-                      ? "No undelivered past days to release."
-                      : "This slot has no past days yet."}
-                    {hasFuture ? " Future plan is intact." : ""}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          {/* ── Shared role plan — identical for every slot on this role ───────── */}
+          {/* ── Compact role-budget bar (7a / 7b / 7c) ── */}
           {roleId && roleBudgetStatus && (() => {
             const {
               budgetedDays,
@@ -1752,11 +2053,9 @@ function BookingModal({
               reservedDays,
               unplannedDays,
               freeDays,
-              remainingBudgetDays,
               bookings: roleBookings,
             } = roleBudgetStatus;
             const r1 = (n: number) => Math.round(n * 10) / 10;
-            const thisDays = booksAgainstBudget ?? 0;
             const selectedRole = projectRoles?.find((r) => String(r.id) === roleId);
             const empName = isEdit
               ? (employees.find((e) => e.id === employeeId)?.name ?? "Employee")
@@ -1766,226 +2065,230 @@ function BookingModal({
               return (
                 <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground flex items-start gap-2">
                   <Info className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>
-                    No budget defined for this role — slots aren't checked against a budget.
-                    Set a budgeted-days figure on the role to enable tracking.
-                  </span>
+                  <span>No budget defined for this role — slots aren't checked against a budget. Set a budgeted-days figure on the role to enable tracking.</span>
                 </div>
               );
             }
 
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const released = isEdit ? !!(state as EditModalState).booking.pastReleasedAt : false;
             const unplanned = unplannedDays ?? 0;
             const statusColor = (val: number) =>
-              val > 10
-                ? "text-green-700 dark:text-green-400"
-                : val >= 0
-                  ? "text-yellow-700 dark:text-yellow-400"
-                  : "text-destructive";
+              val > 10 ? "text-green-700 dark:text-green-400"
+              : val >= 0 ? "text-yellow-700 dark:text-yellow-400"
+              : "text-destructive";
 
-            const todayStr = new Date().toISOString().slice(0, 10);
-
-            // Live vs projected: roleBudgetStatus already includes the saved
-            // slot (edit) or excludes the not-yet-created slot (create). To
-            // preview unsaved edits without double-counting, project Unplanned
-            // by only the CHANGE in this slot's budget-days.
-            const released = isEdit
-              ? !!(state as EditModalState).booking.pastReleasedAt
-              : false;
-            const effDays = (
-              s: string,
-              e: string,
-              hpd: number,
-              wh: Record<string, number> | null,
-            ): number => {
+            const effDays = (s: string, e: string, hpd: number, wh: Record<string, number> | null): number => {
               if (!s || !e || e < s) return 0;
-              if (!released)
-                return calcBookingHoursClient(s, e, hpd, wh, workingDaysMask, holidayDates, vacations).budgetDays;
+              if (!released) return calcBookingHoursClient(s, e, hpd, wh, workingDaysMask, holidayDates, vacations).budgetDays;
               if (e < todayStr) return 0;
               return calcBookingHoursClient(s >= todayStr ? s : todayStr, e, hpd, wh, workingDaysMask, holidayDates, vacations).budgetDays;
             };
-            const savedSlotDays = isEdit
-              ? effDays(
-                  (state as EditModalState).booking.startDate,
-                  (state as EditModalState).booking.endDate,
-                  (state as EditModalState).booking.hoursPerDay,
-                  (state as EditModalState).booking.weekdayHours,
-                )
-              : 0;
+            const savedSlotDays = isEdit ? effDays(
+              (state as EditModalState).booking.startDate,
+              (state as EditModalState).booking.endDate,
+              (state as EditModalState).booking.hoursPerDay,
+              (state as EditModalState).booking.weekdayHours,
+            ) : 0;
             const editedSlotDays = booksAgainstBudget ?? 0;
             const slotDelta = r1(editedSlotDays - savedSlotDays);
             const unplannedProjected = r1(unplanned - slotDelta);
-            const showProjected = Math.abs(slotDelta) >= 0.05;
+            const showProjected = isEdit && Math.abs(slotDelta) >= 0.05;
+
+            const pastPlanDays = (() => {
+              if (!isEdit || released) return 0;
+              const b = (state as EditModalState).booking;
+              if (b.startDate >= todayStr) return 0;
+              const pastEnd = b.endDate < todayStr
+                ? b.endDate
+                : new Date(new Date(todayStr).getTime() - 86400000).toISOString().slice(0, 10);
+              return calcBookingHoursClient(b.startDate, pastEnd, b.hoursPerDay, b.weekdayHours, workingDaysMask, holidayDates, vacations).budgetDays;
+            })();
+
             const mySlots = allBookings
               .filter((b) => b.employeeId === employeeId && String(b.projectRoleId) === roleId)
               .sort((a, b) => a.startDate.localeCompare(b.startDate));
             const currentId = isEdit ? (state as EditModalState).booking.id : null;
 
+            // Bar geometry
+            const overshoot = Math.max(0, -unplanned);
+            const barTotal = (budgetedDays ?? 0) + overshoot;
+            const budgetedNum = budgetedDays ?? 0;
+            const invPct = barTotal > 0 ? Math.min((invoicedDays / barTotal) * 100, 100) : 0;
+            const resPct = barTotal > 0 ? Math.min((reservedDays / barTotal) * 100, 100 - invPct) : 0;
+            const budgetLinePct = barTotal > 0 ? (budgetedNum / barTotal) * 100 : 100;
+            const pastMarkerPct = barTotal > 0 && pastPlanDays > 0
+              ? Math.min(((invoicedDays + reservedDays) / barTotal) * 100, budgetLinePct)
+              : 0;
+
             return (
-              <div className="rounded-md border border-border bg-muted/30 px-3 py-2.5 text-sm space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 font-semibold text-foreground">
-                    Role budget
-                    {selectedRole ? (
-                      <span className="font-normal text-muted-foreground"> — {selectedRole.name}</span>
-                    ) : null}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label="Budget definitions and formulas"
-                          onClick={() => setShowBudgetInfo(true)}
-                          className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
-                        >
-                          <Info className="h-3.5 w-3.5" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">Budget definitions &amp; formulas</TooltipContent>
-                    </Tooltip>
+              <div className="rounded-md border border-border bg-muted/30 px-3 py-2.5 text-sm space-y-2">
+                {/* 7a Header */}
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <span>Role budget{selectedRole ? ` — ${selectedRole.name}` : ""}</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Budget details"
+                        className="inline-flex items-center justify-center rounded hover:bg-muted/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring p-0.5"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent side="bottom" align="start" className="w-72">
+                      <div className="space-y-2">
+                        <div className="font-semibold text-sm">Role budget{selectedRole ? ` — ${selectedRole.name}` : ""}</div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                          <div className="flex justify-between"><span className="text-muted-foreground">Budgeted</span><span className="font-medium">{budgetedNum}d</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Logged</span><span>{r1(loggedDays)}d</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Invoiced</span><span>{r1(invoicedDays)}d</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Re-plannable</span><span className="text-blue-600 dark:text-blue-400 font-medium">{r1(reservedDays)}d</span></div>
+                          <div className={`flex justify-between ${statusColor(unplanned)}`}><span>Unplanned</span><span className="font-medium">{r1(unplanned)}d</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Free</span><span>{freeDays != null ? r1(freeDays) + "d" : "—"}</span></div>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                          Budgeted = Invoiced + Re-plannable + Unplanned. Figures are live and match the Budget tab.
+                        </p>
+                        {showProjected && (
+                          <div className={`rounded-md border px-2 py-1.5 text-xs ${unplannedProjected < 0 ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-border bg-background/60"}`}>
+                            <div className="flex justify-between font-medium text-foreground">
+                              <span>{slotDelta >= 0 ? "Your edits add" : "Your edits free"}</span>
+                              <span>{slotDelta >= 0 ? "+" : "−"}{r1(Math.abs(slotDelta))}d</span>
+                            </div>
+                            <div className={`flex justify-between ${statusColor(unplannedProjected)}`}>
+                              <span>Unplanned after saving</span>
+                              <span className="font-medium">{unplannedProjected}d</span>
+                            </div>
+                          </div>
+                        )}
+                        {roleBookings.length > 0 && (
+                          <div className="border-t border-border/40 pt-1.5 space-y-0.5">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">All employees on this role</div>
+                            {roleBookings.map((rb) => (
+                              <div key={rb.employeeId} className="flex justify-between text-xs text-muted-foreground/80">
+                                <span className="truncate max-w-[140px]">{rb.employeeName}</span>
+                                <span className="shrink-0 ml-2">{r1(rb.days)}d planned · {r1(rb.loggedDays)}d logged</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {/* 7b Budget bar */}
+                <div className="space-y-1">
+                  <div className="relative h-3 rounded bg-muted overflow-visible">
+                    {invPct > 0 && (
+                      <div className="absolute left-0 top-0 h-full rounded-l bg-violet-600 dark:bg-violet-500" style={{ width: `${invPct}%` }} />
+                    )}
+                    {resPct > 0 && (
+                      <div className="absolute top-0 h-full bg-violet-200 dark:bg-violet-800 border-r border-violet-400 dark:border-violet-600" style={{ left: `${invPct}%`, width: `${resPct}%` }} />
+                    )}
+                    {overshoot > 0 && (
+                      <>
+                        <div className="absolute top-0 h-full border-l-2 border-dashed border-destructive/70 z-10" style={{ left: `${budgetLinePct}%` }} />
+                        <div className="absolute top-0 h-full bg-destructive/30 rounded-r" style={{ left: `${budgetLinePct}%`, width: `${(overshoot / barTotal) * 100}%` }} />
+                      </>
+                    )}
+                    {pastPlanDays > 0 && barTotal > 0 && (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            className="absolute top-1/2 -translate-y-1/2 z-20 -translate-x-1/2 inline-flex items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/60 border border-amber-400 dark:border-amber-600 w-4 h-4 hover:bg-amber-200"
+                            style={{ left: `${pastMarkerPct}%` }}
+                            aria-label="Past undelivered plan"
+                          >
+                            <Clock className="h-2.5 w-2.5 text-amber-700 dark:text-amber-400" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent side="top" className="w-72">
+                          <div className="space-y-2">
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              {r1(pastPlanDays)}d planned before today, never logged. Releasing frees this reservation — logged and future-planned work stays untouched.
+                            </p>
+                            {confirmRelease ? (
+                              <div className="flex gap-2 flex-wrap">
+                                <Button size="sm" className="h-7" disabled={releaseMut.isPending}
+                                  onClick={async () => {
+                                    try {
+                                      const updated = await releaseMut.mutateAsync((state as EditModalState).booking.id);
+                                      toast({ title: "Past plan released" });
+                                      if (onBookingUpdated) { setConfirmRelease(false); onBookingUpdated(updated); } else { onClose(); }
+                                    } catch { toast({ title: "Failed to release past plan", variant: "destructive" }); }
+                                  }}
+                                >
+                                  {releaseMut.isPending ? "Releasing…" : `Release ${r1(pastPlanDays)}d`}
+                                </Button>
+                                <Button variant="ghost" size="sm" className="h-7" onClick={() => setConfirmRelease(false)}>Cancel</Button>
+                              </div>
+                            ) : (
+                              <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => setConfirmRelease(true)}>
+                                <Clock className="h-3.5 w-3.5" />
+                                Release {r1(pastPlanDays)}d past plan
+                              </Button>
+                            )}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    )}
                   </div>
-                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                    live · matches Budget tab
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>0d</span>
+                    <span>{budgetedNum}d budgeted</span>
+                    {overshoot > 0 && <span className="text-destructive">{r1(invoicedDays + reservedDays)}d total</span>}
+                  </div>
+                </div>
+
+                {/* 7c Footer */}
+                <div className="flex items-center gap-2 flex-wrap text-[11px] text-muted-foreground">
+                  <span>
+                    {r1(editedSlotDays)}d bookable this slot
+                    {showProjected && (
+                      <span className={slotDelta >= 0 ? "" : "text-green-600 dark:text-green-400"}>
+                        {" "}→ {slotDelta >= 0 ? "+" : ""}{r1(slotDelta)}d vs saved
+                      </span>
+                    )}
                   </span>
+                  {mySlots.length > 1 && (
+                    <>
+                      <span>·</span>
+                      <button
+                        type="button"
+                        className="text-primary underline underline-offset-2 hover:text-primary/80"
+                        onClick={() => setShowSlotList((v) => !v)}
+                      >
+                        {mySlots.length} slots on this role · {showSlotList ? "hide" : "view all"}
+                      </button>
+                    </>
+                  )}
                 </div>
 
-                {/* Canonical buckets (8h-day equivalents) */}
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Budgeted</span>
-                    <span className="font-medium text-foreground">{budgetedDays}d</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Logged</span>
-                    <span className="text-foreground">{r1(loggedDays)}d</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Invoiced</span>
-                    <span className="text-foreground">{r1(invoicedDays)}d</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Re-plannable</span>
-                    <span className="text-blue-600 dark:text-blue-400 font-medium">{r1(reservedDays)}d</span>
-                  </div>
-                  <div className={`flex justify-between ${statusColor(unplanned)}`}>
-                    <span>Unplanned</span>
-                    <span className="font-medium">{r1(unplanned)}d</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Free</span>
-                    <span className="text-foreground">{freeDays != null ? r1(freeDays) + "d" : "—"}</span>
-                  </div>
-                </div>
-                {/* Live vs projected effect of THIS slot */}
-                {showProjected ? (
-                  <div className="rounded-md bg-background/60 border border-border/60 px-2.5 py-1.5 space-y-0.5">
-                    <div className="flex justify-between font-medium text-foreground">
-                      <span>
-                        {isEdit
-                          ? slotDelta >= 0
-                            ? "Your edits add"
-                            : "Your edits free"
-                          : "This slot books"}
-                      </span>
-                      <span>
-                        {isEdit
-                          ? (slotDelta >= 0 ? "+" : "−") + r1(Math.abs(slotDelta)) + "d"
-                          : "+" + r1(editedSlotDays) + "d"}
-                      </span>
-                    </div>
-                    <div className={`flex justify-between ${statusColor(unplannedProjected)}`}>
-                      <span>Unplanned after {isEdit ? "saving" : "adding"}</span>
-                      <span className="font-medium">{unplannedProjected}d</span>
-                    </div>
-                  </div>
-                ) : isEdit ? (
-                  <div className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-                    <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                    <span>
-                      These figures are live and already include this slot — they
-                      match the Budget tab. Change the dates or hours to preview
-                      your edit.
-                    </span>
-                  </div>
-                ) : null}
-                {showProjected && unplannedProjected < 0 && (
-                  <div className="flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 px-2.5 py-2 text-destructive text-xs">
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                    <span>
-                      {isEdit ? "After saving, this" : "This"} slot would exceed the
-                      unplanned budget by {r1(Math.abs(unplannedProjected))}d.
-                      Options: reduce this slot, release past undelivered plan, or
-                      increase the role budget.
-                    </span>
-                  </div>
-                )}
-
-                {/* This employee's slots on this role (each booking = a slot) */}
-                {mySlots.length > 0 && (
+                {/* Slot list (expanded on demand) */}
+                {showSlotList && mySlots.length > 0 && (
                   <div className="border-t border-border/40 pt-1.5 space-y-1">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {empName}'s slots on this role
-                    </div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{empName}'s slots on this role</div>
                     {mySlots.map((b) => {
-                      const bd = calcBookingHoursClient(
-                        b.startDate, b.endDate, b.hoursPerDay, b.weekdayHours,
-                        workingDaysMask, holidayDates, vacations,
-                      ).budgetDays;
+                      const bd = calcBookingHoursClient(b.startDate, b.endDate, b.hoursPerDay, b.weekdayHours, workingDaysMask, holidayDates, vacations).budgetDays;
                       const isCur = currentId != null && b.id === currentId;
                       const rel = !!b.pastReleasedAt;
                       return (
-                        <div
-                          key={b.id}
-                          className={`flex items-center justify-between rounded px-1.5 py-1 text-xs ${isCur ? "bg-primary/10 ring-1 ring-primary/30" : ""}`}
-                        >
+                        <div key={b.id} className={`flex items-center justify-between rounded px-1.5 py-1 text-xs ${isCur ? "bg-primary/10 ring-1 ring-primary/30" : ""}`}>
                           <span className="flex items-center gap-1.5 truncate">
                             {isCur && <span className="text-primary font-semibold">●</span>}
-                            <span className="truncate">
-                              {format(parseISO(b.startDate), "d MMM")} – {format(parseISO(b.endDate), "d MMM yy")}
-                            </span>
-                            {rel && (
-                              <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground border border-border rounded px-1">
-                                <Clock className="h-2.5 w-2.5" /> released
-                              </span>
-                            )}
+                            <span className="truncate">{format(parseISO(b.startDate), "d MMM")} – {format(parseISO(b.endDate), "d MMM yy")}</span>
+                            {rel && <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground border border-border rounded px-1"><Clock className="h-2.5 w-2.5" /> released</span>}
                             {isCur && <span className="text-[10px] text-primary">this slot</span>}
                           </span>
-                          <span className="shrink-0 ml-2 text-muted-foreground">
-                            {r1(bd)}d planned{b.endDate < todayStr && !rel ? " · has past" : ""}
-                          </span>
+                          <span className="shrink-0 ml-2 text-muted-foreground">{r1(bd)}d{b.endDate < todayStr && !rel ? " · has past" : ""}</span>
                         </div>
                       );
                     })}
-                    {!isEdit && thisDays > 0 && (
-                      <div className="flex items-center justify-between rounded px-1.5 py-1 text-xs bg-primary/10 ring-1 ring-primary/30">
-                        <span className="flex items-center gap-1.5">
-                          <span className="text-primary font-semibold">＋</span>
-                          {startDate && endDate
-                            ? `${format(parseISO(startDate), "d MMM")} – ${format(parseISO(endDate), "d MMM yy")}`
-                            : "new slot"}
-                          <span className="text-[10px] text-primary">new slot</span>
-                        </span>
-                        <span className="shrink-0 ml-2 text-muted-foreground">+{r1(thisDays)}d</span>
-                      </div>
-                    )}
                   </div>
                 )}
-
-                {/* All employees on this role */}
-                {roleBookings.length > 0 && (
-                  <div className="border-t border-border/40 pt-1.5 space-y-0.5">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      All employees on this role
-                    </div>
-                    {roleBookings.map((rb) => (
-                      <div key={rb.employeeId} className="flex justify-between text-xs text-muted-foreground/80">
-                        <span className="truncate max-w-[150px]">{rb.employeeName}</span>
-                        <span className="shrink-0 ml-2">
-                          {r1(rb.days)}d planned · {r1(rb.loggedDays)}d logged
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
               </div>
             );
           })()}
@@ -2035,7 +2338,9 @@ function BookingModal({
                   ? "Saving…"
                   : isEdit
                     ? "Save changes"
-                    : "Create booking"}
+                    : assignees.length > 1
+                      ? `Create ${assignees.length} bookings`
+                      : "Create booking"}
               </Button>
             </div>
           )}
@@ -2548,7 +2853,11 @@ export default function ResourcePlannerPage() {
     return map;
   }, [projectIdsWithRoles, plannerBudgetQueries]);
 
-  function openCreateModal(emp: (typeof employees)[number]) {
+  function openCreateModal(emp?: (typeof employees)[number] | null) {
+    if (!emp) {
+      setModal({ mode: "create" });
+      return;
+    }
     const e = emp as any;
     setModal({
       mode: "create",
@@ -3172,6 +3481,14 @@ export default function ResourcePlannerPage() {
             <h1 className="text-xl font-bold tracking-tight">
               Resource Planner
             </h1>
+            <Button
+              size="sm"
+              className="gap-1.5"
+              onClick={() => openCreateModal()}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New booking
+            </Button>
           </div>
 
           <div className="flex items-center gap-2">
@@ -3857,8 +4174,8 @@ export default function ResourcePlannerPage() {
                               right: 0,
                               height: RIBBON_H,
                               borderRadius: "3px 3px 0 0",
-                              backgroundColor: `${seg.color}8C`,
-                              border: `1px solid ${seg.color}55`,
+                              backgroundColor: seg.status === "tentative" ? `${seg.color}55` : `${seg.color}8C`,
+                              border: seg.status === "tentative" ? `1px dashed ${seg.color}99` : `1px solid ${seg.color}55`,
                             }}
                           >
                             {/* Role/project name at segment start — visible whenever the bar is at least ~20 px wide */}

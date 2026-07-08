@@ -29,6 +29,7 @@ function buildSelect() {
       hoursPerDay: resourceBookingsTable.hoursPerDay,
       weekdayHours: resourceBookingsTable.weekdayHours,
       notes: resourceBookingsTable.notes,
+      status: resourceBookingsTable.status,
       pastReleasedAt: resourceBookingsTable.pastReleasedAt,
       createdAt: resourceBookingsTable.createdAt,
       updatedAt: resourceBookingsTable.updatedAt,
@@ -97,6 +98,7 @@ const BookingBodySchema = z.object({
   hoursPerDay: z.number().min(0).optional(),
   weekdayHours: WeekdayHoursSchema,
   notes: z.string().optional().nullable(),
+  status: z.enum(["tentative", "confirmed"]).nullable().optional(),
 });
 
 /** Resolve effective hoursPerDay from input: weekday sum÷5 or flat value. */
@@ -119,7 +121,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, projectRoleId, startDate, endDate, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, notes, status } = parsed.data;
   const weekdayHours = parsed.data.weekdayHours ?? null;
 
   if (weekdayHours == null && parsed.data.hoursPerDay == null) {
@@ -145,6 +147,7 @@ router.post("/resource-bookings", async (req, res): Promise<void> => {
       hoursPerDay,
       weekdayHours: weekdayHours ?? undefined,
       notes: notes ?? null,
+      status: status ?? null,
     })
     .returning({ id: resourceBookingsTable.id });
 
@@ -352,7 +355,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const { employeeId, projectId, projectRoleId, startDate, endDate, notes } = parsed.data;
+  const { employeeId, projectId, projectRoleId, startDate, endDate, notes, status } = parsed.data;
   const weekdayHours = parsed.data.weekdayHours ?? null;
 
   if (weekdayHours == null && parsed.data.hoursPerDay == null) {
@@ -378,6 +381,7 @@ router.put("/resource-bookings/:id", async (req, res): Promise<void> => {
       hoursPerDay,
       weekdayHours: weekdayHours ?? null,
       notes: notes ?? null,
+      status: status !== undefined ? (status ?? null) : undefined,
     })
     .where(eq(resourceBookingsTable.id, id))
     .returning({ id: resourceBookingsTable.id });

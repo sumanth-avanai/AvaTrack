@@ -1,0 +1,125 @@
+RESOURCE PLANNER — FIX: FIXED ROW HEIGHT + OVERLAPPING BOOKINGS (SPLIT LANES)
+
+CONTEXT
+This is a targeted fix to the existing Resource Planner timeline view
+(week/month/quarter/year toggle, people rows, day columns). Two problems
+are being addressed together because they touch the same row-rendering
+logic:
+
+1. Row height currently varies depending on content (bookings, gaps,
+   absences), causing uneven table layout.
+2. When a person has bookings on two different projects on the same day,
+   there is currently no defined rendering — this must be handled without
+   breaking row height consistency.
+
+DO NOT modify, delete, or migrate any existing data (bookings, employees,
+projects, absences) in the database. This is a frontend rendering change
+only. Do not change the underlying booking data model or API response
+shape unless explicitly required to expose overlapping-bookings data that
+isn't already returned (see "Data requirements" below) — if so, extend
+additively (new fields/endpoints), never alter or remove existing ones.
+
+---
+
+FIX 1 — FIXED ROW HEIGHT
+
+- Every employee row has a fixed height of 64px, regardless of how many
+  bookings, gaps, or absence days it contains.
+- Consecutive bookings for the same employee render side by side within
+  that single fixed-height row — never stacked into multiple sub-rows.
+- Absence days (holiday/vacation/sick/other) render as a single inline
+  day cell at the same row height, using the existing icon + neutral gray
+  background pattern (star/sun/thermometer/X) — no extra vertical padding
+  or spacing added around them.
+- Employees with zero bookings in the visible range show the existing
+  "Available" label, vertically centered at the same 64px row height as
+  every other row — do not shrink or collapse empty rows.
+- Result: scanning down the "PEOPLE" column, every row aligns to the same
+  height, so the day-column grid lines stay straight regardless of each
+  employee's booking density.
+
+---
+
+FIX 2 — OVERLAPPING BOOKINGS (SAME DAY, DIFFERENT PROJECTS)
+
+Trigger condition: an employee has bookings on 2 or more different
+projects on the same calendar day.
+
+Rendering rule:
+- Exactly 2 concurrent projects on a day: split that day's cell into 2
+  equal-width vertical lanes (side by side), one per project. Each lane
+  is filled with that project's color (per the existing `colour` field)
+  proportional to its own booked hours vs. daily capacity, same fill
+  logic as a single-project cell today.
+  - Show a short label per lane: role name if it fits, otherwise
+    "{Role} · {hours}h" truncated only within the lane (this is the one
+    accepted exception to the no-truncation rule, scoped strictly to
+    split lanes — full role name remains available via hover/click).
+- 3 or more concurrent projects on a day: do NOT add a 3rd lane. Keep the
+  2-lane layout for the two highest-hour bookings, and show a small "+1"
+  (or "+N" for more) badge in the top-right corner of the cell for the
+  remaining booking(s). The badge does not increase row or cell height.
+- Overbooking (combined hours across all concurrent bookings exceed daily
+  capacity): show the existing "-Xh" warning-color label, positioned in
+  the top-right corner of the cell (co-locate with the "+N" badge if both
+  apply — badge left of the warning label, small gap between them).
+- Clicking or hovering any split-lane cell (2-lane or 2-lane-plus-badge)
+  opens the existing day/booking detail popover, extended to list every
+  concurrent booking for that day: project name, role, and hours, one row
+  per booking, sorted by hours descending. This is the only place the
+  full, untruncated project and role names are guaranteed visible for a
+  split day.
+- A day with only 1 project keeps today's existing single-bar rendering
+  unchanged — this fix only changes behavior when 2+ projects collide on
+  the same day.
+
+Data requirements:
+- Confirm the bookings API/query already returns all bookings per
+  employee per day (it should, since single-project days already render
+  this way). No new endpoint should be needed — this is purely a
+  client-side grouping-and-rendering change: group bookings by
+  (employee, day), then branch rendering on count.
+- If the current query only returns one booking per employee/day (i.e.
+  pre-aggregated), extend it additively to return the full list of
+  bookings for that day instead, without removing or renaming existing
+  fields consumed elsewhere.
+
+---
+
+OUT OF SCOPE FOR THIS CHANGE
+- The booking creation/edit modal is not being changed in this pass —
+  creating or editing bookings that would cause an overlap is handled
+  exactly as it works today. A follow-up chat will address whether the
+  modal should warn about creating a 2nd/3rd concurrent booking at
+  creation time.
+- No change to absence data model or icon set.
+- No change to project color assignment logic.
+
+---
+
+ACCEPTANCE CRITERIA
+[ ] Every employee row renders at a fixed 64px height in Week, Month,
+    Quarter, and Year views, regardless of booking count, gaps, or
+    absences.
+[ ] A day with exactly 1 project booking renders exactly as it does
+    today (no regression).
+[ ] A day with exactly 2 concurrent project bookings renders as 2 equal
+    vertical lanes, each proportionally filled per that project's hours,
+    each in its own project color, with a short label.
+[ ] A day with 3+ concurrent project bookings still shows only 2 lanes
+    (the two highest-hour bookings) plus a "+N" badge for the rest, with
+    no increase in cell or row height.
+[ ] Overbooked days show the existing "-Xh" warning label, correctly
+    positioned alongside the "+N" badge when both apply on the same cell.
+[ ] Clicking/hovering a split-lane cell opens a detail popover listing
+    every concurrent booking that day (project, role, hours), sorted by
+    hours descending.
+[ ] Absence day cells render inline within the fixed 64px row height,
+    with no extra vertical spacing compared to booking cells.
+[ ] Employees with no bookings in the visible range show "Available",
+    vertically centered at the same 64px row height as booked rows.
+[ ] No existing booking, employee, project, or absence data is modified,
+    deleted, or migrated by this change.
+[ ] No regression to the existing single-project-per-day rendering,
+    filter panel, or color-coding behavior already shipped for the
+    Resource Planner.

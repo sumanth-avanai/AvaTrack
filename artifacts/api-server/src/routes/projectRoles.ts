@@ -209,14 +209,15 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
       hoursPerDay: resourceBookingsTable.hoursPerDay,
       weekdayHours: resourceBookingsTable.weekdayHours,
       pastReleasedAt: resourceBookingsTable.pastReleasedAt,
+      status: resourceBookingsTable.status,
     })
     .from(resourceBookingsTable)
     .leftJoin(employeesTable, eq(resourceBookingsTable.employeeId, employeesTable.id))
     .where(eq(resourceBookingsTable.projectRoleId, id));
 
-  // Exclude the booking being edited (for live budget validation in the modal)
+  // Exclude the booking being edited and tentative bookings (tentative = not counted against budget)
   const activeBookingRows = roleBookingRows.filter(
-    (b) => excludeBookingId == null || b.id !== excludeBookingId
+    (b) => (excludeBookingId == null || b.id !== excludeBookingId) && b.status !== "tentative"
   );
 
   const availMap = await getAvailMapForBookings(activeBookingRows);
