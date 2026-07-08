@@ -1646,7 +1646,21 @@ function BookingModal({
           {/* Role — shown once a project is selected */}
           {projectId && (
             <div className="space-y-1.5">
-              <Label>Role</Label>
+              <div className="flex items-center gap-2">
+                <Label>Role</Label>
+                {!isEdit && roleId && roleBudgetStatus?.budgetedDays != null && (() => {
+                  const left = roleBudgetStatus.unplannedDays ?? 0;
+                  const tint =
+                    left > 10 ? "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/40 dark:text-green-300 dark:border-green-700"
+                    : left >= 0 ? "bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:border-yellow-700"
+                    : "bg-destructive/10 text-destructive border-destructive/30";
+                  return (
+                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${tint}`}>
+                      {Math.round(left * 10) / 10}d left
+                    </span>
+                  );
+                })()}
+              </div>
               {rolesLoading ? (
                 <div className="h-10 rounded-md border bg-muted/50 animate-pulse" />
               ) : !hasRoles ? (
@@ -2606,6 +2620,31 @@ function BookingModal({
                         onClick={() => setShowSlotList((v) => !v)}
                       >
                         {mySlots.length} slots on this role · {showSlotList ? "hide" : "view all"}
+                      </button>
+                    </>
+                  )}
+                  {/* Undo release — only when booking is already released */}
+                  {isEdit && released && (
+                    <>
+                      <span>·</span>
+                      <span className="inline-flex items-center gap-0.5 text-muted-foreground">
+                        <Clock className="h-3 w-3" /> Past plan released
+                      </span>
+                      <button
+                        type="button"
+                        disabled={unreleaseMut.isPending}
+                        className="text-primary underline underline-offset-2 hover:text-primary/80 disabled:opacity-50"
+                        onClick={async () => {
+                          try {
+                            const updated = await unreleaseMut.mutateAsync((state as EditModalState).booking.id);
+                            toast({ title: "Release undone — past plan restored" });
+                            if (onBookingUpdated) onBookingUpdated(updated); else onClose();
+                          } catch {
+                            toast({ title: "Failed to undo release", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        {unreleaseMut.isPending ? "Undoing…" : "Undo release"}
                       </button>
                     </>
                   )}
