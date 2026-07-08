@@ -56,7 +56,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Download, ChevronDown, ChevronRight, Receipt, X, History, ChevronsUpDown, Check } from "lucide-react";
+import { Download, ChevronDown, ChevronRight, ChevronLeft, Receipt, X, History, ChevronsUpDown, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -725,115 +725,112 @@ function MultiProjectTable({ responses }: { responses: BillingResponse[] }) {
 
 // ─── Project multi-select dropdown ───────────────────────────────────────────
 
-interface ProjectSelectProps {
-  projectSels: Set<number>;
-  isAllProjects: boolean;
-  filteredProjects: { id: number; name: string }[];
-  onToggle: (id: number) => void;
-  onSelectAll: () => void;
-  onClear: () => void;
+interface ProjectPickerProps {
+  projects: Array<{ id: number; name: string; clientId?: number }>;
+  clients: Array<{ id: number; name: string }>;
+  selectedId: number | null;
+  onSelect: (id: number | null) => void;
 }
 
-function ProjectMultiSelect({
-  projectSels,
-  isAllProjects,
-  filteredProjects,
-  onToggle,
-  onSelectAll,
-  onClear,
-}: ProjectSelectProps) {
+function ProjectPicker({ projects, clients, selectedId, onSelect }: ProjectPickerProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const visible = filteredProjects.filter((p) =>
-    !search || p.name.toLowerCase().includes(search.toLowerCase()),
-  );
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 10);
   }, [open]);
 
-  function label(): string {
-    if (isAllProjects) return "All Projects";
-    if (projectSels.size === 0) return "Select projects…";
-    if (projectSels.size === 1) {
-      const found = filteredProjects.find((p) => projectSels.has(p.id))
-        ?? { name: "1 project" };
-      return found.name;
+  const clientMap = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const c of clients) map.set(c.id, c.name);
+    return map;
+  }, [clients]);
+
+  const groupedProjects = useMemo(() => {
+    const q = search.toLowerCase();
+    const filtered = !q
+      ? projects
+      : projects.filter(
+          (p) =>
+            p.name.toLowerCase().includes(q) ||
+            (p.clientId != null && (clientMap.get(p.clientId) ?? "").toLowerCase().includes(q)),
+        );
+
+    const groups = new Map<string, { clientName: string; projects: typeof filtered }>();
+    for (const p of filtered) {
+      const clientName = p.clientId != null ? (clientMap.get(p.clientId) ?? "Unknown") : "No client";
+      if (!groups.has(clientName)) groups.set(clientName, { clientName, projects: [] });
+      groups.get(clientName)!.projects.push(p);
     }
-    return `${projectSels.size} projects`;
-  }
+
+    return Array.from(groups.values())
+      .sort((a, b) => a.clientName.localeCompare(b.clientName))
+      .map((g) => ({ ...g, projects: [...g.projects].sort((a, b) => a.name.localeCompare(b.name)) }));
+  }, [projects, clientMap, search]);
+
+  const selected    = selectedId != null ? projects.find((p) => p.id === selectedId) : null;
+  const clientName  = selected?.clientId != null ? (clientMap.get(selected.clientId) ?? "") : "";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          className="w-72 justify-between font-normal text-left"
-        >
-          <span className="truncate">{label()}</span>
+        <Button variant="outline" role="combobox" className="w-80 justify-between font-normal text-left">
+          <span className="truncate">
+            {selected ? (
+              <>
+                {clientName && <span className="text-muted-foreground">{clientName} › </span>}
+                {selected.name}
+              </>
+            ) : (
+              <span className="text-muted-foreground">Select a project…</span>
+            )}
+          </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="start">
-        {/* Search */}
+      <PopoverContent className="w-80 p-0" align="start">
         <div className="p-2 border-b border-white/8">
           <Input
             ref={inputRef}
-            placeholder="Search projects…"
+            placeholder="Search clients or projects…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="h-8 text-sm"
           />
         </div>
 
-        <div className="max-h-64 overflow-y-auto">
-          {/* All Projects option */}
-          {!search && (
-            <button
-              className={cn(
-                "flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-white/5 text-left",
-                isAllProjects && "text-violet-400",
-              )}
-              onClick={() => { onSelectAll(); setOpen(false); }}
-            >
-              <Check className={cn("h-3.5 w-3.5 shrink-0", isAllProjects ? "opacity-100" : "opacity-0")} />
-              All Projects
-            </button>
-          )}
-
-          {!search && <div className="my-1 border-t border-white/10" />}
-
-          {visible.length === 0 && (
+        <div className="max-h-72 overflow-y-auto">
+          {groupedProjects.length === 0 && (
             <p className="py-6 text-center text-sm text-muted-foreground">No projects found.</p>
           )}
-
-          {visible.map((p) => {
-            const checked = projectSels.has(p.id);
-            return (
-              <button
-                key={p.id}
-                className={cn(
-                  "flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-white/5 text-left",
-                  checked && !isAllProjects && "text-violet-400",
-                )}
-                onClick={() => { onToggle(p.id); }}
-              >
-                <Check className={cn("h-3.5 w-3.5 shrink-0", checked && !isAllProjects ? "opacity-100" : "opacity-0")} />
-                <span className="truncate">{p.name}</span>
-              </button>
-            );
-          })}
+          {groupedProjects.map((group) => (
+            <div key={group.clientName}>
+              <p className="px-3 pt-2.5 pb-0.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                {group.clientName}
+              </p>
+              {group.projects.map((p) => (
+                <button
+                  key={p.id}
+                  className={cn(
+                    "flex items-center gap-2 w-full px-3 pl-5 py-2 text-sm hover:bg-white/5 text-left",
+                    selectedId === p.id && "text-violet-400",
+                  )}
+                  onClick={() => { onSelect(p.id); setSearch(""); setOpen(false); }}
+                >
+                  <Check className={cn("h-3.5 w-3.5 shrink-0", selectedId === p.id ? "opacity-100" : "opacity-0")} />
+                  <span className="truncate">{p.name}</span>
+                </button>
+              ))}
+            </div>
+          ))}
         </div>
 
-        {/* Footer */}
-        {(projectSels.size > 0 || isAllProjects) && (
+        {selectedId != null && (
           <div className="border-t border-white/8 p-2">
             <button
               className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-              onClick={() => { onClear(); setOpen(false); }}
+              onClick={() => { onSelect(null); setOpen(false); }}
             >
               Clear selection
             </button>
@@ -851,8 +848,9 @@ export default function Billing() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // ── Selectors state ──────────────────────────────────────────────────────────
-  const [clientSel,     setClientSel]     = useState<number | null>(null);
+  // ── Project picker state ─────────────────────────────────────────────────────
+  const [pickedProjectId, setPickedProjectId] = useState<number | null>(null);
+  // Multi-select state kept for backward compat with URL param & multi-project queries
   const [projectSels,   setProjectSels]   = useState<Set<number>>(new Set());
   const [isAllProjects, setIsAllProjects] = useState(false);
 
@@ -862,16 +860,18 @@ export default function Billing() {
   const [customEnd,   setCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
   const [filter, setFilter]           = useState<FilterMode>("all");
 
-  // Section 2 period — used only for single-project view
-  const [singlePreset, setSinglePreset]           = useState<BillingPreset>("this_month");
+  // Section 2 period — month navigation
+  const [singleNavYear,  setSingleNavYear]  = useState(today.getFullYear());
+  const [singleNavMonth, setSingleNavMonth] = useState(today.getMonth() + 1); // 1-indexed
+  const [singleIsCustom, setSingleIsCustom] = useState(false);
   const [singleCustomStart, setSingleCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
   const [singleCustomEnd,   setSingleCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
 
   // Derived selection flags
   const projectSelsArray  = useMemo(() => Array.from(projectSels), [projectSels]);
-  const singleProjectId   = !isAllProjects && projectSels.size === 1 ? projectSelsArray[0] : null;
-  const isMultiProject    = !isAllProjects && projectSels.size > 1;
-  const hasSelection      = isAllProjects || projectSels.size > 0;
+  const singleProjectId   = pickedProjectId ?? (!isAllProjects && projectSels.size === 1 ? projectSelsArray[0] : null);
+  const isMultiProject    = pickedProjectId == null && !isAllProjects && projectSels.size > 1;
+  const hasSelection      = pickedProjectId != null || isAllProjects || projectSels.size > 0;
 
   // ── Table state ──────────────────────────────────────────────────────────────
   const [expandedRoles, setExpandedRoles] = useState<Set<number>>(new Set());
@@ -894,23 +894,28 @@ export default function Billing() {
     [preset, customStart, customEnd],
   );
 
-  // Section 2 period — single-project view
-  const { startDate: singleStartDate, endDate: singleEndDate } = useMemo(
-    () => computePeriod(singlePreset, singleCustomStart, singleCustomEnd),
-    [singlePreset, singleCustomStart, singleCustomEnd],
-  );
-  const singlePeriodLabel = getPeriodLabel(singlePreset, singleCustomStart, singleCustomEnd);
+  // Section 2 period — single-project view (month nav)
+  const singleNavFirstDay = new Date(singleNavYear, singleNavMonth - 1, 1);
+  const { startDate: singleStartDate, endDate: singleEndDate } = useMemo((): { startDate: string | null; endDate: string | null } => {
+    if (singleIsCustom) return { startDate: singleCustomStart || null, endDate: singleCustomEnd || null };
+    return {
+      startDate: format(singleNavFirstDay, "yyyy-MM-dd"),
+      endDate:   format(endOfMonth(singleNavFirstDay), "yyyy-MM-dd"),
+    };
+  }, [singleIsCustom, singleNavYear, singleNavMonth, singleCustomStart, singleCustomEnd]);
+  const singlePeriodLabel = singleIsCustom
+    ? (singleCustomStart && singleCustomEnd ? `${singleCustomStart} – ${singleCustomEnd}` : "Custom")
+    : format(singleNavFirstDay, "MMMM yyyy");
 
   // ── Data ─────────────────────────────────────────────────────────────────────
   const { data: projects }       = useListProjects();
   const { data: clients }        = useListClients();
 
-  // Filter project list by selected client
-  const filteredProjects = useMemo(() => {
-    if (!projects) return [];
-    if (clientSel == null) return projects;
-    return projects.filter((p) => (p as { clientId?: number }).clientId === clientSel);
-  }, [projects, clientSel]);
+  // Projects list — passed to ProjectPicker
+  const allProjects = useMemo(
+    () => (projects ?? []) as Array<{ id: number; name: string; clientId?: number }>,
+    [projects],
+  );
 
   // Single-project period billing query (Section 2) — uses singleStartDate/singleEndDate
   const billingQuery = useQuery<BillingResponse>({
@@ -994,8 +999,7 @@ export default function Billing() {
     const params = new URLSearchParams(window.location.search);
     const pid = params.get("project");
     if (pid && !isNaN(Number(pid))) {
-      setProjectSels(new Set([Number(pid)]));
-      setIsAllProjects(false);
+      setPickedProjectId(Number(pid));
     }
   }, []);
 
@@ -1018,27 +1022,41 @@ export default function Billing() {
   useEffect(() => {
     setInitialised(false);
     setSelection(new Set());
-  }, [projectSels, isAllProjects, singleStartDate, singleEndDate]);
+  }, [pickedProjectId, singleStartDate, singleEndDate]);
 
-  // ── Project selection handlers ────────────────────────────────────────────────
+  // ── Project picker handler ────────────────────────────────────────────────────
 
-  const handleToggleProject = useCallback((id: number) => {
-    setIsAllProjects(false);
-    setProjectSels((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
+  const handlePickProject = useCallback((id: number | null) => {
+    setPickedProjectId(id);
+  }, []);
+
+  // ── Month nav handlers ────────────────────────────────────────────────────────
+
+  const handlePrevMonth = useCallback(() => {
+    setSingleIsCustom(false);
+    setSingleNavMonth((m) => {
+      if (m === 1) { setSingleNavYear((y) => y - 1); return 12; }
+      return m - 1;
     });
   }, []);
 
-  const handleSelectAllProjects = useCallback(() => {
-    setIsAllProjects(true);
-    setProjectSels(new Set());
+  const handleNextMonth = useCallback(() => {
+    setSingleIsCustom(false);
+    setSingleNavMonth((m) => {
+      if (m === 12) { setSingleNavYear((y) => y + 1); return 1; }
+      return m + 1;
+    });
   }, []);
 
-  const handleClearProjectSelection = useCallback(() => {
-    setIsAllProjects(false);
-    setProjectSels(new Set());
+  const handleJumpLastMonth = useCallback(() => {
+    const d = subMonths(today, 1);
+    setSingleNavYear(d.getFullYear());
+    setSingleNavMonth(d.getMonth() + 1);
+    setSingleIsCustom(false);
+  }, []);
+
+  const handleCustomRange = useCallback(() => {
+    setSingleIsCustom(true);
   }, []);
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
@@ -1318,68 +1336,12 @@ export default function Billing() {
 
       {/* Selectors toolbar */}
       <div className="flex flex-wrap gap-3 mb-6">
-        {/* Client filter */}
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">Client</Label>
-          <Select
-            value={clientSel != null ? String(clientSel) : "all"}
-            onValueChange={(v) => setClientSel(v === "all" ? null : Number(v))}
-          >
-            <SelectTrigger className="w-48">
-              <SelectValue placeholder="All Clients" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Clients</SelectItem>
-              <div className="my-1 border-t border-white/10" />
-              {(clients ?? []).map((c) => (
-                <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Project multi-select */}
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">Project</Label>
-          <ProjectMultiSelect
-            projectSels={projectSels}
-            isAllProjects={isAllProjects}
-            filteredProjects={filteredProjects}
-            onToggle={handleToggleProject}
-            onSelectAll={handleSelectAllProjects}
-            onClear={handleClearProjectSelection}
-          />
-        </div>
-
-        {/* Period — shown only for multi/all-projects views; single-project uses Section 2's own period */}
-        {!singleProjectId && (
-          <>
-            <div className="flex flex-col gap-1">
-              <Label className="text-xs text-muted-foreground">Period</Label>
-              <Select value={preset} onValueChange={(v) => setPreset(v as BillingPreset)}>
-                <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(PRESET_LABELS) as BillingPreset[]).map((k) => (
-                    <SelectItem key={k} value={k}>{PRESET_LABELS[k]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {preset === "custom" && (
-              <>
-                <div className="flex flex-col gap-1">
-                  <Label className="text-xs text-muted-foreground">From</Label>
-                  <Input type="date" className="w-40" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <Label className="text-xs text-muted-foreground">To</Label>
-                  <Input type="date" className="w-40" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-                </div>
-              </>
-            )}
-          </>
-        )}
+        <ProjectPicker
+          projects={allProjects}
+          clients={clients ?? []}
+          selectedId={pickedProjectId}
+          onSelect={handlePickProject}
+        />
       </div>
 
       {/* No project selected */}
@@ -1521,22 +1483,40 @@ export default function Billing() {
             <div className="flex flex-wrap items-end gap-3 mb-4">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide self-center mr-1">Ready to invoice</p>
 
-              {/* Section 2 period selector */}
-              <Select value={singlePreset} onValueChange={(v) => setSinglePreset(v as BillingPreset)}>
-                <SelectTrigger className="w-40 h-8 text-sm"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(PRESET_LABELS) as BillingPreset[]).map((k) => (
-                    <SelectItem key={k} value={k}>{PRESET_LABELS[k]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {singlePreset === "custom" && (
-                <>
+              {/* Section 2 period — month nav */}
+              {!singleIsCustom ? (
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handlePrevMonth}>
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-sm font-medium tabular-nums w-28 text-center">
+                    {format(singleNavFirstDay, "MMMM yyyy")}
+                  </span>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleNextMonth}>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <ChevronDown className="h-4 w-4 opacity-50" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={handleJumpLastMonth}>Last month</DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleCustomRange}>Custom range…</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
                   <Input type="date" className="w-36 h-8 text-sm" value={singleCustomStart} onChange={(e) => setSingleCustomStart(e.target.value)} />
                   <span className="text-muted-foreground text-sm">–</span>
                   <Input type="date" className="w-36 h-8 text-sm" value={singleCustomEnd} onChange={(e) => setSingleCustomEnd(e.target.value)} />
-                </>
+                  <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={() => setSingleIsCustom(false)}>
+                    <X className="h-3 w-3 mr-1" />
+                    Month view
+                  </Button>
+                </div>
               )}
 
               {billingQuery.isLoading && (
@@ -1571,10 +1551,6 @@ export default function Billing() {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
-                      <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
-                      Generate invoice
-                    </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => markInvestMutation.mutate()}
                       disabled={markInvestMutation.isPending}
@@ -1702,7 +1678,23 @@ export default function Billing() {
                                 <TableCell className="text-right tabular-nums">{fmtHours(emp.loggedHours)}</TableCell>
                                 <TableCell />
                                 <TableCell className="text-right tabular-nums">{eur(emp.logged)}</TableCell>
-                                <TableCell><StatusBadge status={emp.billingStatus} /></TableCell>
+                                <TableCell>
+                                  {emp.billingStatus === "invest" ? (
+                                    <StatusBadge status="invest" />
+                                  ) : emp.unbilled > 0 ? (
+                                    <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-400">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                                      Open
+                                    </span>
+                                  ) : emp.loggedHours > 0 ? (
+                                    <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
+                                      Invoiced
+                                    </span>
+                                  ) : (
+                                    <span className="text-muted-foreground/50 text-sm">—</span>
+                                  )}
+                                </TableCell>
                                 <TableCell className={cn("text-right tabular-nums", unbilledColour(emp.unbilled))}>
                                   {eur(emp.unbilled)}
                                 </TableCell>
@@ -1738,6 +1730,25 @@ export default function Billing() {
                   </Table>
                 </div>
               )
+            )}
+
+            {/* Generate invoice — primary action below table */}
+            {singleData && singleData.roles.length > 0 && (
+              <div className="mt-4 flex items-center gap-3">
+                <Button
+                  disabled={selection.size === 0 || selectedAmount === 0}
+                  onClick={() => setShowInvoiceModal(true)}
+                  className="gap-2"
+                >
+                  Generate invoice
+                  {selectedAmount > 0 && (
+                    <span className="opacity-80">— {eur(selectedAmount)}</span>
+                  )}
+                </Button>
+                {selection.size > 0 && selectedAmount === 0 && (
+                  <span className="text-xs text-muted-foreground">No unbilled amount in selection</span>
+                )}
+              </div>
             )}
           </div>
         </>

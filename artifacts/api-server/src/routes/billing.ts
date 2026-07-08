@@ -20,7 +20,7 @@
  */
 
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte, isNull, sql, desc } from "drizzle-orm";
+import { eq, and, gte, lte, isNull, sql, desc, inArray } from "drizzle-orm";
 import { z } from "zod/v4";
 import {
   db,
@@ -801,6 +801,19 @@ router.post("/projects/:projectId/invoices", async (req, res): Promise<void> => 
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   const { items, periodStart, periodEnd, reference } = parsed.data;
+
+  // Validate: every submitted roleId must belong to this project
+  const uniqueRoleIds = [...new Set(items.map((i) => i.roleId))];
+  const roleRows = await db
+    .select({ id: projectRolesTable.id, projectId: projectRolesTable.projectId })
+    .from(projectRolesTable)
+    .where(inArray(projectRolesTable.id, uniqueRoleIds));
+
+  const invalidRole = roleRows.find((r) => r.projectId !== projectId);
+  if (invalidRole || roleRows.length !== uniqueRoleIds.length) {
+    res.status(403).json({ error: "One or more roles do not belong to this project" });
+    return;
+  }
 
   // Compute total amount from time entries matching selected items in the period
   let totalAmount = 0;
