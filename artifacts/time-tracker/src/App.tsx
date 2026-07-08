@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState, Component, type ReactNode } from "react";
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -20,7 +20,34 @@ import ProjectStatusDetail from "@/pages/project-status-detail";
 import { useAppAuth } from "@/hooks/use-app-auth";
 import { DirtyGuardProvider } from "@/contexts/dirty-guard";
 
-const queryClient = new QueryClient();
+class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-background p-8">
+          <div className="max-w-md w-full space-y-3 text-center">
+            <p className="text-sm font-medium text-destructive">Something went wrong</p>
+            <p className="text-xs text-muted-foreground font-mono">{this.state.error.message}</p>
+            <button
+              className="text-xs underline text-muted-foreground hover:text-foreground"
+              onClick={() => this.setState({ error: null })}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const [, navigate] = useLocation();
@@ -77,12 +104,15 @@ function Router() {
 }
 
 function App() {
+  const [queryClient] = useState(() => new QueryClient());
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <DirtyGuardProvider>
           <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-            <Router />
+            <RouteErrorBoundary>
+              <Router />
+            </RouteErrorBoundary>
           </WouterRouter>
           <Toaster />
         </DirtyGuardProvider>

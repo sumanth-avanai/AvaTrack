@@ -2750,7 +2750,7 @@ export default function ResourcePlannerPage() {
   const todayStr = format(today, "yyyy-MM-dd");
 
   const allActiveEmployees = useMemo(
-    () => (employees as any[]).filter((e) => e.active !== false),
+    () => (Array.isArray(employees) ? employees : []).filter((e) => (e as any).active !== false),
     [employees],
   );
 

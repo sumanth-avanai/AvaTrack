@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Component, type ReactNode } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import {
   format,
@@ -16,7 +16,6 @@ import {
   Tooltip as RechartsTooltip,
   ReferenceLine,
   ResponsiveContainer,
-  Legend,
 } from "recharts";
 import { useListProjects, useListClients } from "@workspace/api-client-react";
 import {
@@ -214,6 +213,20 @@ interface InvoiceRecord {
 interface InvoicesResponse {
   project: { id: number; name: string };
   invoices: InvoiceRecord[];
+}
+
+// ─── Chart error boundary ─────────────────────────────────────────────────────
+
+class ChartErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) return null;
+    return this.props.children;
+  }
 }
 
 // ─── Selection helpers ────────────────────────────────────────────────────────
@@ -1135,14 +1148,6 @@ export default function Billing() {
     return Math.ceil(rawMax / step) * step || step;
   }, [lifetimeData]);
 
-  const chartLegendPayload = useMemo(() => [
-    ...(lifetimeData?.budget && lifetimeData.budget > 0
-      ? [{ value: "Budget", type: "line" as const, id: "budget", color: "rgba(255,255,255,0.4)" }]
-      : []),
-    { value: "Logged",   type: "square" as const, id: "logged",   color: "#06B6D4" },
-    { value: "Invoiced", type: "square" as const, id: "invoiced", color: "#4ade80" },
-  ], [lifetimeData?.budget]);
-
   // ── Filtered roles ────────────────────────────────────────────────────────────
 
   const filteredRoles = useMemo<BillingRole[]>(() => {
@@ -1444,68 +1449,84 @@ export default function Billing() {
               </div>
 
               {lifetimeData.monthlyData.length > 1 && (
-                <div className="rounded-xl border border-white/8 bg-white/2 p-4" style={{ height: 260 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={lifetimeData.monthlyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                      <XAxis
-                        dataKey="month"
-                        tickFormatter={(v: string) => {
-                          const [y, m] = v.split("-").map(Number);
-                          return new Date(y, m - 1).toLocaleString("en-US", { month: "short" });
-                        }}
-                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <YAxis
-                        domain={[0, chartYMax]}
-                        tickFormatter={(v: number) =>
-                          v === 0 ? "€0" : `€${Math.round(v / 1000)}k`
-                        }
-                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={52}
-                      />
-                      <RechartsTooltip
-                        contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, fontSize: 12 }}
-                        formatter={(value: number, name: string) => [eur(value), name]}
-                      />
-                      <Legend
-                        payload={chartLegendPayload}
-                        wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
-                        formatter={(value) => <span style={{ color: "rgba(255,255,255,0.6)" }}>{value}</span>}
-                      />
-                      {lifetimeData.budget > 0 && (
-                        <ReferenceLine
-                          y={lifetimeData.budget}
-                          stroke="rgba(255,255,255,0.3)"
-                          strokeDasharray="6 3"
-                        />
-                      )}
-                      <Area
-                        type="monotone"
-                        dataKey="loggedCumulative"
-                        name="Logged"
-                        stroke="#06B6D4"
-                        fill="rgba(6,182,212,0.15)"
-                        strokeWidth={2}
-                        dot={{ r: 3, fill: "#06B6D4", strokeWidth: 0 }}
-                        activeDot={{ r: 4 }}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="invoicedCumulative"
-                        name="Invoiced"
-                        stroke="#4ade80"
-                        fill="rgba(74,222,128,0.12)"
-                        strokeWidth={2}
-                        dot={{ r: 3, fill: "#4ade80", strokeWidth: 0 }}
-                        activeDot={{ r: 4 }}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
+                <div className="rounded-xl border border-white/8 bg-white/2 p-4">
+                  {/* Custom legend — kept outside Recharts to avoid React 19 dispatcher issues */}
+                  <div className="flex items-center gap-4 mb-3 justify-end">
+                    {lifetimeData.budget > 0 && (
+                      <span className="flex items-center gap-1.5 text-xs" style={{ color: "rgba(255,255,255,0.5)" }}>
+                        <span className="inline-block w-5 h-0 border-t border-dashed" style={{ borderColor: "rgba(255,255,255,0.4)" }} />
+                        Budget
+                      </span>
+                    )}
+                    <span className="flex items-center gap-1.5 text-xs" style={{ color: "rgba(255,255,255,0.6)" }}>
+                      <span className="inline-block w-3 h-3 rounded-sm shrink-0" style={{ background: "#06B6D4" }} />
+                      Logged
+                    </span>
+                    <span className="flex items-center gap-1.5 text-xs" style={{ color: "rgba(255,255,255,0.6)" }}>
+                      <span className="inline-block w-3 h-3 rounded-sm shrink-0" style={{ background: "#4ade80" }} />
+                      Invoiced
+                    </span>
+                  </div>
+                  <ChartErrorBoundary>
+                    <div style={{ height: 220 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart data={lifetimeData.monthlyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis
+                            dataKey="month"
+                            tickFormatter={(v: string) => {
+                              const [y, m] = v.split("-").map(Number);
+                              return new Date(y, m - 1).toLocaleString("en-US", { month: "short" });
+                            }}
+                            tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                            tickLine={false}
+                            axisLine={false}
+                          />
+                          <YAxis
+                            domain={[0, chartYMax]}
+                            tickFormatter={(v: number) =>
+                              v === 0 ? "€0" : `€${Math.round(v / 1000)}k`
+                            }
+                            tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                            tickLine={false}
+                            axisLine={false}
+                            width={52}
+                          />
+                          <RechartsTooltip
+                            contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, fontSize: 12 }}
+                            formatter={(value: number, name: string) => [eur(value), name]}
+                          />
+                          {lifetimeData.budget > 0 && (
+                            <ReferenceLine
+                              y={lifetimeData.budget}
+                              stroke="rgba(255,255,255,0.3)"
+                              strokeDasharray="6 3"
+                            />
+                          )}
+                          <Area
+                            type="monotone"
+                            dataKey="loggedCumulative"
+                            name="Logged"
+                            stroke="#06B6D4"
+                            fill="rgba(6,182,212,0.15)"
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="invoicedCumulative"
+                            name="Invoiced"
+                            stroke="#4ade80"
+                            fill="rgba(74,222,128,0.12)"
+                            strokeWidth={2}
+                            dot={false}
+                            activeDot={{ r: 4 }}
+                          />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </ChartErrorBoundary>
                 </div>
               )}
             </div>

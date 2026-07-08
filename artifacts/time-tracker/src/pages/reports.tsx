@@ -485,9 +485,9 @@ export default function Reports() {
   const { data: projects }  = useListProjects({ includeInactive: false });
   const { data: clients }   = useListClients();
 
-  const employeeOptions = useMemo(() => (employees ?? []).map((e) => ({ id: e.id, label: e.name })), [employees]);
-  const projectOptions  = useMemo(() => (projects ?? []).map((p) => ({ id: p.id, label: p.clientName ? `${p.name} (${p.clientName})` : p.name })), [projects]);
-  const clientOptions   = useMemo(() => (clients ?? []).map((c) => ({ id: c.id, label: c.name })), [clients]);
+  const employeeOptions = useMemo(() => (Array.isArray(employees) ? employees : []).map((e) => ({ id: e.id, label: e.name })), [employees]);
+  const projectOptions  = useMemo(() => (Array.isArray(projects) ? projects : []).map((p) => ({ id: p.id, label: p.clientName ? `${p.name} (${p.clientName})` : p.name })), [projects]);
+  const clientOptions   = useMemo(() => (Array.isArray(clients) ? clients : []).map((c) => ({ id: c.id, label: c.name })), [clients]);
 
   const queryParams = useMemo(() => {
     const p = new URLSearchParams({
