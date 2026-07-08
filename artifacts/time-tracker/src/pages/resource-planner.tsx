@@ -2567,15 +2567,10 @@ function BookingModal({
             const unplannedProjected = r1(unplanned - slotDelta);
             const showProjected = isEdit && Math.abs(slotDelta) >= 0.05;
 
-            const pastPlanDays = (() => {
-              if (!isEdit || released) return 0;
-              const b = (state as EditModalState).booking;
-              if (b.startDate >= todayStr) return 0;
-              const pastEnd = b.endDate < todayStr
-                ? b.endDate
-                : new Date(new Date(todayStr).getTime() - 86400000).toISOString().slice(0, 10);
-              return calcBookingHoursClient(b.startDate, pastEnd, b.hoursPerDay, b.weekdayHours, workingDaysMask, holidayDates, vacations).budgetDays;
-            })();
+            // pastPlanDays comes from the server-fetched /past-undelivered endpoint
+            // (defined at component level as `pastPlanDays`). The local calculation
+            // was removed because it used planned days instead of undelivered days,
+            // producing wrong release amounts when some of the past plan had been logged.
 
             const mySlots = allBookings
               .filter((b) => b.employeeId === employeeId && String(b.projectRoleId) === roleId)
