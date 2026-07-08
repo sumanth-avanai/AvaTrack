@@ -1,0 +1,1 @@
+- [Vite stale deps cache causes Invalid hook call](vite-stale-deps-recharts.md) — clearing `.vite/deps/` fixes "Invalid hook call" when adding new UI libs like recharts.
