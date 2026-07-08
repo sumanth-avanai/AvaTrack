@@ -1243,6 +1243,48 @@ function BookingModal({
     : null;
   const allWeekdayZero = weekdayMode && weeklyTotal === 0;
 
+  // ── Derived end-date sync for pattern-picker schedule modes ──────────────
+  // Compute end date from user inputs for each Dauer / Budget sub-mode and
+  // sync to state via useEffect (not during render) to avoid React warnings.
+  useEffect(() => {
+    if (isEdit || scheduleMode !== "dauer" || durationUnit !== "tage" || !startDate) return;
+    const rawStart = parseISO(startDate);
+    const effectiveStart = findNextWorkingDay(rawStart, workingDaysMask, holidayDates, vacations as VacationRange[]);
+    const calcEnd = calcEndFromNWorkingDays(effectiveStart, durationValue, workingDaysMask, holidayDates, vacations as VacationRange[]);
+    const calcEndStr = format(calcEnd, "yyyy-MM-dd");
+    setEndDate(calcEndStr);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleMode, durationUnit, durationValue, startDate, workingDaysMask.join(","), holidayDates.size, JSON.stringify(vacations)]);
+
+  useEffect(() => {
+    if (isEdit || scheduleMode !== "dauer" || (durationUnit !== "wo" && durationUnit !== "mo") || !startDate) return;
+    const calcEnd = durationUnit === "wo"
+      ? addDays(addWeeks(parseISO(startDate), durationValue), -1)
+      : addDays(addMonths(parseISO(startDate), durationValue), -1);
+    setEndDate(format(calcEnd, "yyyy-MM-dd"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleMode, durationUnit, durationValue, startDate]);
+
+  useEffect(() => {
+    if (isEdit || scheduleMode !== "budget" || !startDate) return;
+    const effectiveMask = workingDaysMask.map((v, i) =>
+      v && patternDays.has(String(i + 1)) ? 1 : 0,
+    );
+    const targetDays = budgetUnit === "tage"
+      ? budgetTarget
+      : budgetTarget / (patternHoursPerDay > 0 ? patternHoursPerDay : 8);
+    const { endDate: calcEnd } = calcBudgetEnd(
+      parseISO(startDate),
+      targetDays,
+      effectiveMask,
+      holidayDates,
+      vacations as VacationRange[],
+      budgetCapDate || null,
+    );
+    setEndDate(format(calcEnd, "yyyy-MM-dd"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleMode, budgetTarget, budgetUnit, startDate, Array.from(patternDays).join(","), patternHoursPerDay, workingDaysMask.join(","), holidayDates.size, JSON.stringify(vacations), budgetCapDate]);
+
   const isOverbooked = useMemo(() => {
     if (!startDate || !endDate) return false;
     if (!weekdayMode && hoursPerDay <= 0) return false;
@@ -1877,7 +1919,6 @@ function BookingModal({
                 const calcEndStr = format(calcEnd, "yyyy-MM-dd");
                 const effectiveStartStr = format(effectiveStart, "yyyy-MM-dd");
                 const wasShifted = effectiveStartStr !== startDate;
-                if (endDate !== calcEndStr) setEndDate(calcEndStr);
                 return (
                   <div className="space-y-1.5">
                     {wasShifted && (
@@ -1955,7 +1996,6 @@ function BookingModal({
                       ? addDays(addWeeks(parseISO(startDate), durationValue), -1)
                       : addDays(addMonths(parseISO(startDate), durationValue), -1);
                     const calcEndStr = format(calcEnd, "yyyy-MM-dd");
-                    if (endDate !== calcEndStr) setEndDate(calcEndStr);
                     return (
                       <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
                         Calculated end date: <span className="font-medium text-foreground">{format(calcEnd, "d MMM yyyy")}</span>
@@ -2091,7 +2131,6 @@ function BookingModal({
                 );
                 const finalEnd = format(calcEnd, "yyyy-MM-dd");
                 const capHit = !!(budgetCapDate && reachedDays < targetDays);
-                if (endDate !== finalEnd) setEndDate(finalEnd);
                 return (
                   <div className="space-y-1.5">
                     <div className="text-xs bg-muted/50 rounded px-2 py-1.5 text-muted-foreground space-y-0.5">
