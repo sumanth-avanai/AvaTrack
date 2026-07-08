@@ -647,31 +647,45 @@ router.get("/projects/:projectId/billing/lifetime", async (req, res): Promise<vo
     totalInvoicedRaw += invoicedRev;
   }
 
-  // Build cumulative monthly series
-  const months = Array.from(byMonth.keys()).sort();
+  // Determine baseline month: project startDate (if set) or earliest entry month
+  const sortedEntryMonths = Array.from(byMonth.keys()).sort();
+  const currentMonth = new Date().toISOString().slice(0, 7);
+
+  let baselineMonth: string;
+  if (project.startDate) {
+    // project.startDate is a date string "YYYY-MM-DD"
+    baselineMonth = String(project.startDate).slice(0, 7);
+  } else if (sortedEntryMonths.length > 0) {
+    baselineMonth = sortedEntryMonths[0];
+  } else {
+    baselineMonth = currentMonth;
+  }
+
+  // Build continuous month range from baseline to current month (carry-forward zeros)
+  const allMonths: string[] = [];
+  let cursor = baselineMonth;
+  while (cursor <= currentMonth) {
+    allMonths.push(cursor);
+    const [y, m] = cursor.split("-").map(Number);
+    const next = new Date(y, m, 1); // m is 1-indexed here; Date(y, m) = first day of next month
+    cursor = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
+  }
+
   let cumulLogged   = 0;
   let cumulInvoiced = 0;
 
-  const monthlyData = months.map((m) => {
-    const entry = byMonth.get(m)!;
-    cumulLogged   += entry.logged;
-    cumulInvoiced += entry.invoiced;
+  const monthlyData = allMonths.map((m) => {
+    const entry = byMonth.get(m);
+    if (entry) {
+      cumulLogged   += entry.logged;
+      cumulInvoiced += entry.invoiced;
+    }
     return {
       month:              m,
       loggedCumulative:   round2(cumulLogged),
       invoicedCumulative: round2(cumulInvoiced),
     };
   });
-
-  // Add current month if not present and there's historical data
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  if (monthlyData.length > 0 && !byMonth.has(currentMonth)) {
-    monthlyData.push({
-      month:              currentMonth,
-      loggedCumulative:   round2(cumulLogged),
-      invoicedCumulative: round2(cumulInvoiced),
-    });
-  }
 
   const totalLogged   = round2(totalLoggedRaw);
   const totalInvoiced = round2(totalInvoicedRaw);
@@ -755,14 +769,28 @@ router.get("/projects/:projectId/invoices", async (req, res): Promise<void> => {
 
 // ── POST /projects/:projectId/invoices ────────────────────────────────────────
 
+function isCalendarDate(s: string): boolean {
+  const d = new Date(s + "T00:00:00Z");
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
 const CreateInvoiceSchema = z.object({
   items: z.array(z.object({
     roleId:     z.number().int().positive(),
     employeeId: z.number().int().positive(),
-  })).min(1),
-  periodStart:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  periodEnd:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  reference:        z.string().max(100).optional(),
+  })).min(1, "At least one item must be selected"),
+  periodStart: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "periodStart must be YYYY-MM-DD")
+    .refine(isCalendarDate, { message: "periodStart is not a valid calendar date" }),
+  periodEnd: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "periodEnd must be YYYY-MM-DD")
+    .refine(isCalendarDate, { message: "periodEnd is not a valid calendar date" }),
+  reference: z.string().max(100).optional(),
+}).refine((d) => d.periodStart <= d.periodEnd, {
+  message: "periodStart must be ≤ periodEnd",
+  path: ["periodStart"],
 });
 
 router.post("/projects/:projectId/invoices", async (req, res): Promise<void> => {

@@ -1159,7 +1159,7 @@ export default function Billing() {
     });
   }, [allVisibleKeys]);
 
-  // ── Selected amount ───────────────────────────────────────────────────────────
+  // ── Selected amount + itemized line items (for invoice modal) ────────────────
 
   const selectedAmount = useMemo(() => {
     if (!singleData) return 0;
@@ -1170,6 +1170,19 @@ export default function Billing() {
       }
     }
     return Math.round(total * 100) / 100;
+  }, [singleData, selection]);
+
+  const selectedLineItems = useMemo(() => {
+    if (!singleData) return [];
+    const items: { roleName: string; empName: string; hours: number; unbilled: number }[] = [];
+    for (const role of singleData.roles) {
+      for (const emp of role.employees) {
+        if (selection.has(empKey(role.id, emp.id))) {
+          items.push({ roleName: role.name, empName: emp.name, hours: emp.loggedHours, unbilled: emp.unbilled });
+        }
+      }
+    }
+    return items;
   }, [singleData, selection]);
 
   // ── Active totals — multi/all-projects views only (single project uses lifetimeData for Section 1) ──
@@ -1858,7 +1871,7 @@ export default function Billing() {
             <DialogTitle>Generate invoice</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-2.5 py-2 text-sm">
+          <div className="space-y-3 py-1 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Project</span>
               <span className="font-medium">{singleData?.project.name}</span>
@@ -1867,14 +1880,34 @@ export default function Billing() {
               <span className="text-muted-foreground">Period</span>
               <span className="font-medium">{singlePeriodLabel}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Selected</span>
-              <span className="font-medium">{selection.size} item{selection.size !== 1 ? "s" : ""}</span>
-            </div>
-            {selectedAmount > 0 && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Amount (unbilled)</span>
-                <span className="font-semibold text-yellow-400">{eur(selectedAmount)}</span>
+
+            {/* Itemized line items */}
+            {selectedLineItems.length > 0 && (
+              <div className="rounded-lg border border-white/10 overflow-hidden mt-1">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-white/10 bg-white/3">
+                      <th className="text-left py-1.5 px-3 font-medium text-muted-foreground">Role</th>
+                      <th className="text-left py-1.5 px-3 font-medium text-muted-foreground">Employee</th>
+                      <th className="text-right py-1.5 px-3 font-medium text-muted-foreground">Hours</th>
+                      <th className="text-right py-1.5 px-3 font-medium text-muted-foreground">Unbilled</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedLineItems.map((item, i) => (
+                      <tr key={i} className="border-t border-white/6">
+                        <td className="py-1.5 px-3 text-muted-foreground">{item.roleName}</td>
+                        <td className="py-1.5 px-3">{item.empName}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums text-muted-foreground">{fmtHours(item.hours)}</td>
+                        <td className="py-1.5 px-3 text-right tabular-nums font-medium text-yellow-400">{eur(item.unbilled)}</td>
+                      </tr>
+                    ))}
+                    <tr className="border-t border-white/15 bg-white/2">
+                      <td colSpan={3} className="py-1.5 px-3 font-semibold">Total unbilled</td>
+                      <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-yellow-400">{eur(selectedAmount)}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
