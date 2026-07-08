@@ -6,12 +6,21 @@
  * GET  /api/projects/:id/billing?startDate=&endDate=
  *   Returns logged vs invoiced vs invest revenue per role and employee.
  *
+ * GET  /api/projects/:id/billing/lifetime
+ *   Returns period-independent lifetime summary + monthly cumulative chart data.
+ *
+ * GET  /api/projects/:id/invoices
+ *   Returns invoice history from the invoices table.
+ *
+ * POST /api/projects/:id/invoices
+ *   Creates an invoice record and marks matching time entries as invoiced.
+ *
  * POST /api/time-entries/mark-invoiced  (legacy — marks all unbilled for project)
  * POST /api/time-entries/update-billing-status  (new — per-item selection)
  */
 
 import { Router, type IRouter } from "express";
-import { eq, and, gte, lte, isNull, sql } from "drizzle-orm";
+import { eq, and, gte, lte, isNull, sql, desc } from "drizzle-orm";
 import { z } from "zod/v4";
 import {
   db,
@@ -20,6 +29,8 @@ import {
   projectRolesTable,
   timeEntriesTable,
   employeesTable,
+  invoicesTable,
+  invoiceItemsTable,
 } from "@workspace/db";
 
 const router: IRouter = Router();
@@ -559,6 +570,286 @@ router.get("/projects/:projectId/billing/history", async (req, res): Promise<voi
     }));
 
   res.json({ project, history });
+});
+
+// ── GET /projects/:projectId/billing/lifetime ────────────────────────────────
+
+router.get("/projects/:projectId/billing/lifetime", async (req, res): Promise<void> => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
+
+  const [project] = await db
+    .select({ id: projectsTable.id, name: projectsTable.name, startDate: projectsTable.startDate })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, projectId));
+
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  const roles = await db
+    .select({ id: projectRolesTable.id, dayRate: projectRolesTable.dayRate, budgetedDays: projectRolesTable.budgetedDays })
+    .from(projectRolesTable)
+    .where(eq(projectRolesTable.projectId, projectId));
+
+  const budget = roles.reduce((s, r) => s + (r.budgetedDays != null ? r.budgetedDays * r.dayRate : 0), 0);
+
+  if (roles.length === 0) {
+    res.json({
+      project: { id: project.id, name: project.name },
+      budget: 0, totalLogged: 0, totalInvoiced: 0, remaining: 0,
+      monthlyData: [],
+    });
+    return;
+  }
+
+  const roleIds = roles.map((r) => r.id);
+  const roleRateMap = new Map(roles.map((r) => [r.id, r.dayRate]));
+
+  // Fetch all time entries for this project with roles, grouped by month
+  const monthRows = await db
+    .select({
+      month: sql<string>`TO_CHAR(${timeEntriesTable.entryDate}, 'YYYY-MM')`,
+      projectRoleId: timeEntriesTable.projectRoleId,
+      totalHours: sql<number>`COALESCE(SUM(${timeEntriesTable.hours}), 0)`,
+      invoicedHours: sql<number>`COALESCE(SUM(CASE
+        WHEN ${timeEntriesTable.billingStatus} = 'invoiced' THEN ${timeEntriesTable.hours}
+        WHEN ${timeEntriesTable.billingStatus} IS NULL AND ${timeEntriesTable.invoicedAt} IS NOT NULL THEN ${timeEntriesTable.hours}
+        ELSE 0
+      END), 0)`,
+    })
+    .from(timeEntriesTable)
+    .where(
+      and(
+        eq(timeEntriesTable.projectId, projectId),
+        sql`${timeEntriesTable.projectRoleId} = ANY(ARRAY[${sql.join(roleIds.map((id) => sql`${id}`), sql`, `)}]::int[])`,
+      ),
+    )
+    .groupBy(
+      sql`TO_CHAR(${timeEntriesTable.entryDate}, 'YYYY-MM')`,
+      timeEntriesTable.projectRoleId,
+    )
+    .orderBy(sql`TO_CHAR(${timeEntriesTable.entryDate}, 'YYYY-MM')`);
+
+  // Aggregate by month (multiple roles per month)
+  const byMonth = new Map<string, { logged: number; invoiced: number }>();
+  let totalLoggedRaw   = 0;
+  let totalInvoicedRaw = 0;
+
+  for (const row of monthRows) {
+    const rate = row.projectRoleId != null ? (roleRateMap.get(row.projectRoleId) ?? 0) : 0;
+    const loggedRev   = (Number(row.totalHours)   / 8) * rate;
+    const invoicedRev = (Number(row.invoicedHours) / 8) * rate;
+    const m = row.month;
+    if (!byMonth.has(m)) byMonth.set(m, { logged: 0, invoiced: 0 });
+    const entry = byMonth.get(m)!;
+    entry.logged   += loggedRev;
+    entry.invoiced += invoicedRev;
+    totalLoggedRaw   += loggedRev;
+    totalInvoicedRaw += invoicedRev;
+  }
+
+  // Build cumulative monthly series
+  const months = Array.from(byMonth.keys()).sort();
+  let cumulLogged   = 0;
+  let cumulInvoiced = 0;
+
+  const monthlyData = months.map((m) => {
+    const entry = byMonth.get(m)!;
+    cumulLogged   += entry.logged;
+    cumulInvoiced += entry.invoiced;
+    return {
+      month:              m,
+      loggedCumulative:   round2(cumulLogged),
+      invoicedCumulative: round2(cumulInvoiced),
+    };
+  });
+
+  // Add current month if not present and there's historical data
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  if (monthlyData.length > 0 && !byMonth.has(currentMonth)) {
+    monthlyData.push({
+      month:              currentMonth,
+      loggedCumulative:   round2(cumulLogged),
+      invoicedCumulative: round2(cumulInvoiced),
+    });
+  }
+
+  const totalLogged   = round2(totalLoggedRaw);
+  const totalInvoiced = round2(totalInvoicedRaw);
+  const remaining     = round2(budget - totalLoggedRaw);
+
+  res.json({
+    project: { id: project.id, name: project.name },
+    budget:        round2(budget),
+    totalLogged,
+    totalInvoiced,
+    remaining,
+    monthlyData,
+  });
+});
+
+// ── GET /projects/:projectId/invoices ─────────────────────────────────────────
+
+router.get("/projects/:projectId/invoices", async (req, res): Promise<void> => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
+
+  const [project] = await db
+    .select({ id: projectsTable.id, name: projectsTable.name })
+    .from(projectsTable)
+    .where(eq(projectsTable.id, projectId));
+
+  if (!project) { res.status(404).json({ error: "Project not found" }); return; }
+
+  const invoiceRows = await db
+    .select()
+    .from(invoicesTable)
+    .where(eq(invoicesTable.projectId, projectId))
+    .orderBy(desc(invoicesTable.createdAt));
+
+  if (invoiceRows.length === 0) {
+    res.json({ project, invoices: [] });
+    return;
+  }
+
+  const invoiceIds = invoiceRows.map((r) => r.id);
+
+  const itemRows = await db
+    .select({
+      invoiceId:    invoiceItemsTable.invoiceId,
+      roleId:       invoiceItemsTable.roleId,
+      roleName:     projectRolesTable.name,
+      employeeId:   invoiceItemsTable.employeeId,
+      employeeName: employeesTable.name,
+    })
+    .from(invoiceItemsTable)
+    .leftJoin(projectRolesTable, eq(invoiceItemsTable.roleId, projectRolesTable.id))
+    .leftJoin(employeesTable, eq(invoiceItemsTable.employeeId, employeesTable.id))
+    .where(sql`${invoiceItemsTable.invoiceId} = ANY(ARRAY[${sql.join(invoiceIds.map((id) => sql`${id}`), sql`, `)}]::int[])`);
+
+  const itemsByInvoice = new Map<number, typeof itemRows>();
+  for (const item of itemRows) {
+    if (!itemsByInvoice.has(item.invoiceId)) itemsByInvoice.set(item.invoiceId, []);
+    itemsByInvoice.get(item.invoiceId)!.push(item);
+  }
+
+  const invoices = invoiceRows.map((inv) => {
+    const items = itemsByInvoice.get(inv.id) ?? [];
+    const roles     = [...new Map(items.filter((i) => i.roleId != null).map((i) => [i.roleId, { id: i.roleId!, name: i.roleName ?? `Role #${i.roleId}` }])).values()];
+    const employees = [...new Map(items.filter((i) => i.employeeId != null).map((i) => [i.employeeId, { id: i.employeeId!, name: i.employeeName ?? `#${i.employeeId}` }])).values()];
+    return {
+      id:          inv.id,
+      createdAt:   inv.createdAt.toISOString(),
+      periodStart: inv.periodStart,
+      periodEnd:   inv.periodEnd,
+      totalAmount: inv.totalAmount,
+      reference:   inv.reference,
+      roleCount:   roles.length,
+      employeeCount: employees.length,
+      roles,
+      employees,
+    };
+  });
+
+  res.json({ project, invoices });
+});
+
+// ── POST /projects/:projectId/invoices ────────────────────────────────────────
+
+const CreateInvoiceSchema = z.object({
+  items: z.array(z.object({
+    roleId:     z.number().int().positive(),
+    employeeId: z.number().int().positive(),
+  })).min(1),
+  periodStart:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  periodEnd:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reference:        z.string().max(100).optional(),
+});
+
+router.post("/projects/:projectId/invoices", async (req, res): Promise<void> => {
+  const projectId = parseInt(req.params.projectId, 10);
+  if (isNaN(projectId)) { res.status(400).json({ error: "Invalid projectId" }); return; }
+
+  const parsed = CreateInvoiceSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const { items, periodStart, periodEnd, reference } = parsed.data;
+
+  // Compute total amount from time entries matching selected items in the period
+  let totalAmount = 0;
+  let updatedCount = 0;
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    for (const item of items) {
+      const conditions = [
+        eq(timeEntriesTable.projectId, projectId),
+        eq(timeEntriesTable.projectRoleId, item.roleId),
+        eq(timeEntriesTable.employeeId, item.employeeId),
+        gte(timeEntriesTable.entryDate, periodStart),
+        lte(timeEntriesTable.entryDate, periodEnd),
+      ];
+
+      // Fetch role rate
+      const [role] = await tx
+        .select({ dayRate: projectRolesTable.dayRate })
+        .from(projectRolesTable)
+        .where(eq(projectRolesTable.id, item.roleId));
+
+      const dayRate = role?.dayRate ?? 0;
+
+      // Fetch unbilled hours for this item to compute amount
+      const [agg] = await tx
+        .select({
+          unbilledHours: sql<number>`COALESCE(SUM(CASE
+            WHEN ${timeEntriesTable.billingStatus} IS NULL OR (${timeEntriesTable.billingStatus} != 'invoiced' AND ${timeEntriesTable.billingStatus} != 'invest') THEN ${timeEntriesTable.hours}
+            WHEN ${timeEntriesTable.billingStatus} IS NULL AND ${timeEntriesTable.invoicedAt} IS NULL THEN ${timeEntriesTable.hours}
+            ELSE 0
+          END), 0)`,
+        })
+        .from(timeEntriesTable)
+        .where(and(...conditions));
+
+      totalAmount += (Number(agg?.unbilledHours ?? 0) / 8) * dayRate;
+
+      // Mark entries as invoiced
+      const updated = await tx
+        .update(timeEntriesTable)
+        .set({
+          billingStatus:    "invoiced",
+          invoicedAt:       now,
+          invoiceReference: reference ?? null,
+        })
+        .where(and(...conditions))
+        .returning({ id: timeEntriesTable.id });
+
+      updatedCount += updated.length;
+    }
+
+    // Insert invoice record
+    const [invoice] = await tx
+      .insert(invoicesTable)
+      .values({
+        projectId,
+        periodStart,
+        periodEnd,
+        totalAmount: round2(totalAmount),
+        reference: reference ?? null,
+      })
+      .returning({ id: invoicesTable.id });
+
+    // Insert invoice items
+    if (invoice && items.length > 0) {
+      await tx
+        .insert(invoiceItemsTable)
+        .values(items.map((item) => ({
+          invoiceId:  invoice.id,
+          roleId:     item.roleId,
+          employeeId: item.employeeId,
+        })));
+    }
+
+    res.json({ invoiceId: invoice?.id, updatedCount, totalAmount: round2(totalAmount) });
+  });
 });
 
 // ── POST /time-entries/mark-invoiced (legacy) ────────────────────────────────

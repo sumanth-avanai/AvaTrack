@@ -9,3 +9,4 @@ export * from "./resourceBookings";
 export * from "./projectRoles";
 export * from "./projectRoleAssignments";
 export * from "./projectHealthUpdates";
+export * from "./invoices";

@@ -7,6 +7,17 @@ import {
   subMonths, subQuarters,
 } from "date-fns";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  ComposedChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  ReferenceLine,
+  ResponsiveContainer,
+  Legend,
+} from "recharts";
 import { useListProjects, useListClients } from "@workspace/api-client-react";
 import {
   Select,
@@ -170,6 +181,39 @@ interface HistoryEntry {
 interface HistoryResponse {
   project: { id: number; name: string };
   history: HistoryEntry[];
+}
+
+interface MonthlyPoint {
+  month: string;
+  loggedCumulative: number;
+  invoicedCumulative: number;
+}
+
+interface LifetimeResponse {
+  project: { id: number; name: string };
+  budget: number;
+  totalLogged: number;
+  totalInvoiced: number;
+  remaining: number;
+  monthlyData: MonthlyPoint[];
+}
+
+interface InvoiceRecord {
+  id: number;
+  createdAt: string;
+  periodStart: string;
+  periodEnd: string;
+  totalAmount: number;
+  reference: string | null;
+  roleCount: number;
+  employeeCount: number;
+  roles: { id: number; name: string }[];
+  employees: { id: number; name: string }[];
+}
+
+interface InvoicesResponse {
+  project: { id: number; name: string };
+  invoices: InvoiceRecord[];
 }
 
 // ─── Selection helpers ────────────────────────────────────────────────────────
@@ -812,10 +856,16 @@ export default function Billing() {
   const [projectSels,   setProjectSels]   = useState<Set<number>>(new Set());
   const [isAllProjects, setIsAllProjects] = useState(false);
 
+  // Global period — used for multi/all-projects views only
   const [preset, setPreset]           = useState<BillingPreset>("this_month");
   const [customStart, setCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
   const [customEnd,   setCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
   const [filter, setFilter]           = useState<FilterMode>("all");
+
+  // Section 2 period — used only for single-project view
+  const [singlePreset, setSinglePreset]           = useState<BillingPreset>("this_month");
+  const [singleCustomStart, setSingleCustomStart] = useState(format(startOfMonth(today), "yyyy-MM-dd"));
+  const [singleCustomEnd,   setSingleCustomEnd]   = useState(format(endOfMonth(today), "yyyy-MM-dd"));
 
   // Derived selection flags
   const projectSelsArray  = useMemo(() => Array.from(projectSels), [projectSels]);
@@ -838,10 +888,18 @@ export default function Billing() {
   const [historyOpen,     setHistoryOpen]     = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
 
+  // Global period — multi/all-projects views
   const { startDate, endDate } = useMemo(
     () => computePeriod(preset, customStart, customEnd),
     [preset, customStart, customEnd],
   );
+
+  // Section 2 period — single-project view
+  const { startDate: singleStartDate, endDate: singleEndDate } = useMemo(
+    () => computePeriod(singlePreset, singleCustomStart, singleCustomEnd),
+    [singlePreset, singleCustomStart, singleCustomEnd],
+  );
+  const singlePeriodLabel = getPeriodLabel(singlePreset, singleCustomStart, singleCustomEnd);
 
   // ── Data ─────────────────────────────────────────────────────────────────────
   const { data: projects }       = useListProjects();
@@ -854,15 +912,26 @@ export default function Billing() {
     return projects.filter((p) => (p as { clientId?: number }).clientId === clientSel);
   }, [projects, clientSel]);
 
-  // Single-project billing query (enabled when exactly one project selected)
+  // Single-project period billing query (Section 2) — uses singleStartDate/singleEndDate
   const billingQuery = useQuery<BillingResponse>({
-    queryKey: ["billing", singleProjectId, startDate, endDate],
+    queryKey: ["billing", singleProjectId, singleStartDate, singleEndDate],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (startDate) params.set("startDate", startDate);
-      if (endDate)   params.set("endDate", endDate);
+      if (singleStartDate) params.set("startDate", singleStartDate);
+      if (singleEndDate)   params.set("endDate", singleEndDate);
       const res = await fetch(`/api/projects/${singleProjectId}/billing?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load billing data");
+      return res.json();
+    },
+    enabled: singleProjectId != null,
+  });
+
+  // Single-project lifetime query (Section 1) — no period dependency
+  const lifetimeQuery = useQuery<LifetimeResponse>({
+    queryKey: ["billing-lifetime", singleProjectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${singleProjectId}/billing/lifetime`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load lifetime billing data");
       return res.json();
     },
     enabled: singleProjectId != null,
@@ -905,13 +974,15 @@ export default function Billing() {
     enabled: isAllProjects,
   });
 
-  const singleData = billingQuery.data;
-  const allData    = allBillingQuery.data;
+  const singleData   = billingQuery.data;
+  const allData      = allBillingQuery.data;
+  const lifetimeData = lifetimeQuery.data;
 
-  const historyQuery = useQuery<HistoryResponse>({
-    queryKey: ["billing-history", singleProjectId],
+  // Invoice history — reads from new invoices table
+  const invoicesQuery = useQuery<InvoicesResponse>({
+    queryKey: ["project-invoices", singleProjectId],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${singleProjectId}/billing/history`, { credentials: "include" });
+      const res = await fetch(`/api/projects/${singleProjectId}/invoices`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load invoice history");
       return res.json();
     },
@@ -928,19 +999,26 @@ export default function Billing() {
     }
   }, []);
 
-  // ── Auto-expand roles with unbilled hours (single project) ───────────────────
+  // ── Auto-expand roles and pre-select unbilled employees (single project) ─────
   useEffect(() => {
     if (singleData && !initialised) {
       setExpandedRoles(new Set(singleData.roles.filter((r) => r.unbilled > 0).map((r) => r.id)));
+      const preSelected = new Set<string>();
+      for (const role of singleData.roles) {
+        for (const emp of role.employees) {
+          if (emp.unbilled > 0) preSelected.add(empKey(role.id, emp.id));
+        }
+      }
+      setSelection(preSelected);
       setInitialised(true);
     }
   }, [singleData, initialised]);
 
-  // ── Clear selection + reset on project/period change ─────────────────────────
+  // ── Clear selection + reset on project/single-period change ──────────────────
   useEffect(() => {
     setInitialised(false);
     setSelection(new Set());
-  }, [projectSels, isAllProjects, startDate, endDate]);
+  }, [projectSels, isAllProjects, singleStartDate, singleEndDate]);
 
   // ── Project selection handlers ────────────────────────────────────────────────
 
@@ -965,13 +1043,44 @@ export default function Billing() {
 
   // ── Mutations ─────────────────────────────────────────────────────────────────
 
-  const updateStatusMutation = useMutation({
-    mutationFn: async ({ status, invoiceReference }: { status: "invoiced" | "invest"; invoiceReference?: string }) => {
+  // Create invoice — calls POST /projects/:id/invoices (marks entries + writes invoice record)
+  const createInvoiceMutation = useMutation({
+    mutationFn: async ({ reference }: { reference?: string }) => {
       const items = parseSelection(selection);
-      const body: Record<string, unknown> = { projectId: singleProjectId, items, status };
-      if (startDate)        body.startDate = startDate;
-      if (endDate)          body.endDate   = endDate;
-      if (invoiceReference) body.invoiceReference = invoiceReference;
+      const body = {
+        items,
+        periodStart: singleStartDate ?? format(startOfMonth(today), "yyyy-MM-dd"),
+        periodEnd:   singleEndDate   ?? format(endOfMonth(today),   "yyyy-MM-dd"),
+        reference:   reference || undefined,
+      };
+      const res = await fetch(`/api/projects/${singleProjectId}/invoices`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Failed to create invoice");
+      return res.json() as Promise<{ invoiceId: number; updatedCount: number; totalAmount: number }>;
+    },
+    onSuccess: ({ updatedCount }) => {
+      queryClient.invalidateQueries({ queryKey: ["billing"] });
+      queryClient.invalidateQueries({ queryKey: ["billing-lifetime"] });
+      queryClient.invalidateQueries({ queryKey: ["project-invoices"] });
+      setSelection(new Set());
+      setShowInvoiceModal(false);
+      setInvoiceRef("");
+      toast({ title: `Invoice created — ${updatedCount} entr${updatedCount === 1 ? "y" : "ies"} marked as invoiced` });
+    },
+    onError: () => toast({ title: "Failed to create invoice", variant: "destructive" }),
+  });
+
+  // Mark as invest — keeps using the existing update-billing-status endpoint
+  const markInvestMutation = useMutation({
+    mutationFn: async () => {
+      const items = parseSelection(selection);
+      const body: Record<string, unknown> = { projectId: singleProjectId, items, status: "invest" };
+      if (singleStartDate) body.startDate = singleStartDate;
+      if (singleEndDate)   body.endDate   = singleEndDate;
       const res = await fetch("/api/time-entries/update-billing-status", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -981,14 +1090,11 @@ export default function Billing() {
       if (!res.ok) throw new Error("Failed to update billing status");
       return res.json() as Promise<{ updatedCount: number }>;
     },
-    onSuccess: ({ updatedCount }, { status }) => {
+    onSuccess: ({ updatedCount }) => {
       queryClient.invalidateQueries({ queryKey: ["billing"] });
-      queryClient.invalidateQueries({ queryKey: ["billing-history"] });
+      queryClient.invalidateQueries({ queryKey: ["billing-lifetime"] });
       setSelection(new Set());
-      setShowInvoiceModal(false);
-      setInvoiceRef("");
-      const label = status === "invest" ? "invest" : "invoiced";
-      toast({ title: `${updatedCount} entr${updatedCount === 1 ? "y" : "ies"} marked as ${label}` });
+      toast({ title: `${updatedCount} entr${updatedCount === 1 ? "y" : "ies"} marked as invest` });
     },
     onError: () => toast({ title: "Failed to update billing status", variant: "destructive" }),
   });
@@ -1066,14 +1172,12 @@ export default function Billing() {
     return Math.round(total * 100) / 100;
   }, [singleData, selection]);
 
-  // ── Active totals (for KPI cards) ────────────────────────────────────────────
-
+  // ── Active totals — multi/all-projects views only (single project uses lifetimeData for Section 1) ──
   const activeTotals = useMemo((): BillingTotals | null => {
-    if (isAllProjects)    return allData?.totals ?? null;
-    if (singleProjectId)  return singleData?.totals ?? null;
+    if (isAllProjects)               return allData?.totals ?? null;
     if (isMultiProject && multiData) return mergeTotals(multiData);
     return null;
-  }, [isAllProjects, allData, singleProjectId, singleData, isMultiProject, multiData]);
+  }, [isAllProjects, allData, isMultiProject, multiData]);
 
   // ── CSV export ────────────────────────────────────────────────────────────────
 
@@ -1234,29 +1338,33 @@ export default function Billing() {
           />
         </div>
 
-        {/* Period */}
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">Period</Label>
-          <Select value={preset} onValueChange={(v) => setPreset(v as BillingPreset)}>
-            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {(Object.keys(PRESET_LABELS) as BillingPreset[]).map((k) => (
-                <SelectItem key={k} value={k}>{PRESET_LABELS[k]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {preset === "custom" && (
+        {/* Period — shown only for multi/all-projects views; single-project uses Section 2's own period */}
+        {!singleProjectId && (
           <>
             <div className="flex flex-col gap-1">
-              <Label className="text-xs text-muted-foreground">From</Label>
-              <Input type="date" className="w-40" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+              <Label className="text-xs text-muted-foreground">Period</Label>
+              <Select value={preset} onValueChange={(v) => setPreset(v as BillingPreset)}>
+                <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(PRESET_LABELS) as BillingPreset[]).map((k) => (
+                    <SelectItem key={k} value={k}>{PRESET_LABELS[k]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <div className="flex flex-col gap-1">
-              <Label className="text-xs text-muted-foreground">To</Label>
-              <Input type="date" className="w-40" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
-            </div>
+
+            {preset === "custom" && (
+              <>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs text-muted-foreground">From</Label>
+                  <Input type="date" className="w-40" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs text-muted-foreground">To</Label>
+                  <Input type="date" className="w-40" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
@@ -1279,46 +1387,153 @@ export default function Billing() {
         <div className="text-sm text-destructive py-12 text-center">Failed to load billing data.</div>
       )}
 
-      {/* KPI Cards */}
+      {/* Multi / All-projects KPI Cards */}
       {activeTotals && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+          <KpiCard label="Budget"   value={eur(activeTotals.budget)} />
+          <KpiCard
+            label="Logged"
+            value={eur(activeTotals.logged)}
+            subLabel={activeTotals.invest > 0 ? `(${eur(activeTotals.invest)} inv)` : undefined}
+          />
+          <KpiCard label="Invoiced" value={eur(activeTotals.invoiced)} />
+          <KpiCard
+            label="Unbilled"
+            value={eur(activeTotals.unbilled)}
+            accent={unbilledColour(activeTotals.unbilled)}
+          />
+          <KpiCard
+            label="Remaining"
+            value={eur(activeTotals.remaining)}
+            accent={totalsRemainingColour}
+          />
+        </div>
+      )}
+
+      {/* All Projects table */}
+      {isAllProjects && allData && (
+        <AllProjectsTable allData={allData} />
+      )}
+
+      {/* Multi-project table */}
+      {isMultiProject && multiData && multiData.length > 0 && (
+        <MultiProjectTable responses={multiData} />
+      )}
+
+      {/* ── Single project: Section 1 (Lifetime overview) + Section 2 (Period billing) ── */}
+      {singleProjectId != null && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-            <KpiCard label="Budget"   value={eur(activeTotals.budget)} />
-            <KpiCard
-              label="Logged"
-              value={eur(activeTotals.logged)}
-              subLabel={activeTotals.invest > 0 ? `(${eur(activeTotals.invest)} inv)` : undefined}
-            />
-            <KpiCard label="Invoiced" value={eur(activeTotals.invoiced)} />
-            <KpiCard
-              label="Unbilled"
-              value={eur(activeTotals.unbilled)}
-              accent={unbilledColour(activeTotals.unbilled)}
-            />
-            <KpiCard
-              label="Remaining"
-              value={eur(activeTotals.remaining)}
-              accent={totalsRemainingColour}
-            />
-          </div>
+          {/* Section 1 — Lifetime KPIs + cumulative chart */}
+          {lifetimeData ? (
+            <div className="mb-8">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Project overview — all time</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                <KpiCard label="Budget"         value={eur(lifetimeData.budget)} />
+                <KpiCard label="Total Logged"   value={eur(lifetimeData.totalLogged)} />
+                <KpiCard
+                  label="Total Invoiced"
+                  value={eur(lifetimeData.totalInvoiced)}
+                  accent="text-green-400"
+                />
+                <KpiCard
+                  label="Remaining"
+                  value={eur(lifetimeData.remaining)}
+                  accent={remainingColour(lifetimeData.remaining, lifetimeData.budget)}
+                />
+              </div>
 
-          {/* All Projects view */}
-          {isAllProjects && allData && (
-            <AllProjectsTable allData={allData} />
-          )}
+              {lifetimeData.monthlyData.length > 1 && (
+                <div className="rounded-xl border border-white/8 bg-white/2 p-4" style={{ height: 220 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={lifetimeData.monthlyData} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                      <XAxis
+                        dataKey="month"
+                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        tickFormatter={(v) => `${Math.round(v / 1000)}k`}
+                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={40}
+                      />
+                      <RechartsTooltip
+                        contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, fontSize: 12 }}
+                        formatter={(value: number, name: string) => [eur(value), name]}
+                      />
+                      <Legend
+                        wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+                        formatter={(value) => <span style={{ color: "rgba(255,255,255,0.6)" }}>{value}</span>}
+                      />
+                      {lifetimeData.budget > 0 && (
+                        <ReferenceLine
+                          y={lifetimeData.budget}
+                          stroke="rgba(255,255,255,0.3)"
+                          strokeDasharray="6 3"
+                          label={{ value: "Budget", position: "right", fontSize: 11, fill: "rgba(255,255,255,0.4)" }}
+                        />
+                      )}
+                      <Area
+                        type="monotone"
+                        dataKey="loggedCumulative"
+                        name="Logged"
+                        stroke="#06B6D4"
+                        fill="rgba(6,182,212,0.15)"
+                        strokeWidth={2}
+                        dot={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="invoicedCumulative"
+                        name="Invoiced"
+                        stroke="#4ade80"
+                        fill="rgba(74,222,128,0.12)"
+                        strokeWidth={2}
+                        dot={false}
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          ) : lifetimeQuery.isLoading ? (
+            <div className="text-sm text-muted-foreground py-6 text-center">Loading overview…</div>
+          ) : null}
 
-          {/* Multi-project view */}
-          {isMultiProject && multiData && multiData.length > 0 && (
-            <MultiProjectTable responses={multiData} />
-          )}
+          {/* Section 2 — Period-scoped billing table */}
+          <div>
+            <div className="flex flex-wrap items-end gap-3 mb-4">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide self-center mr-1">Ready to invoice</p>
 
-          {/* Single project view */}
-          {singleProjectId != null && singleData && (
-            <>
-              {/* Toolbar */}
-              <div className="flex items-center gap-2 mb-3">
+              {/* Section 2 period selector */}
+              <Select value={singlePreset} onValueChange={(v) => setSinglePreset(v as BillingPreset)}>
+                <SelectTrigger className="w-40 h-8 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(PRESET_LABELS) as BillingPreset[]).map((k) => (
+                    <SelectItem key={k} value={k}>{PRESET_LABELS[k]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {singlePreset === "custom" && (
+                <>
+                  <Input type="date" className="w-36 h-8 text-sm" value={singleCustomStart} onChange={(e) => setSingleCustomStart(e.target.value)} />
+                  <span className="text-muted-foreground text-sm">–</span>
+                  <Input type="date" className="w-36 h-8 text-sm" value={singleCustomEnd} onChange={(e) => setSingleCustomEnd(e.target.value)} />
+                </>
+              )}
+
+              {billingQuery.isLoading && (
+                <span className="text-xs text-muted-foreground">Loading…</span>
+              )}
+
+              {/* Filter + Actions */}
+              <div className="flex items-center gap-2 ml-auto">
                 <Select value={filter} onValueChange={(v) => setFilter(v as FilterMode)}>
-                  <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-36 h-8 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="unbilled">Unbilled only</SelectItem>
@@ -1328,8 +1543,8 @@ export default function Billing() {
                 </Select>
 
                 {selection.size > 0 && (
-                  <span className="text-sm text-muted-foreground">
-                    Selected: <span className="text-foreground font-medium">{selection.size}</span>
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">
+                    {selection.size} selected
                     {selectedAmount > 0 && (
                       <span className="text-yellow-400 ml-1">({eur(selectedAmount)})</span>
                     )}
@@ -1338,18 +1553,18 @@ export default function Billing() {
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="default" className="gap-1" disabled={selection.size === 0}>
+                    <Button size="sm" variant="outline" className="h-8 gap-1" disabled={selection.size === 0}>
                       Mark as <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
+                  <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={() => setShowInvoiceModal(true)}>
                       <span className="h-1.5 w-1.5 rounded-full bg-green-400 mr-2 shrink-0" />
-                      Invoiced
+                      Generate invoice
                     </DropdownMenuItem>
                     <DropdownMenuItem
-                      onClick={() => updateStatusMutation.mutate({ status: "invest" })}
-                      disabled={updateStatusMutation.isPending}
+                      onClick={() => markInvestMutation.mutate()}
+                      disabled={markInvestMutation.isPending}
                     >
                       <span className="h-1.5 w-1.5 rounded-full bg-purple-400 mr-2 shrink-0" />
                       Invest
@@ -1358,15 +1573,16 @@ export default function Billing() {
                 </DropdownMenu>
 
                 {selection.size > 0 && (
-                  <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
+                  <Button size="sm" variant="ghost" className="h-8 gap-1 text-muted-foreground" onClick={() => setSelection(new Set())}>
                     <X className="h-3.5 w-3.5" />
-                    Clear selection
+                    Clear
                   </Button>
                 )}
               </div>
+            </div>
 
-              {/* Table */}
-              {singleData.roles.length === 0 ? (
+            {singleData && (
+              singleData.roles.length === 0 ? (
                 <div className="text-sm text-muted-foreground py-12 text-center">
                   No roles defined for this project.
                 </div>
@@ -1501,16 +1717,16 @@ export default function Billing() {
                         <TableCell className={cn("text-right tabular-nums", unbilledColour(singleData.totals.unbilled))}>
                           {eur(singleData.totals.unbilled)}
                         </TableCell>
-                        <TableCell className={cn("text-right tabular-nums", totalsRemainingColour)}>
+                        <TableCell className={cn("text-right tabular-nums", remainingColour(singleData.totals.remaining, singleData.totals.budget))}>
                           {eur(singleData.totals.remaining)}
                         </TableCell>
                       </TableRow>
                     </TableBody>
                   </Table>
                 </div>
-              )}
-            </>
-          )}
+              )
+            )}
+          </div>
         </>
       )}
 
@@ -1527,39 +1743,40 @@ export default function Billing() {
             }
             <History className="h-4 w-4 shrink-0" />
             <span>Invoice history</span>
-            {historyQuery.data && historyQuery.data.history.length > 0 && (
+            {invoicesQuery.data && invoicesQuery.data.invoices.length > 0 && (
               <span className="ml-1 rounded-full bg-white/8 px-1.5 py-0.5 text-xs tabular-nums">
-                {historyQuery.data.history.length}
+                {invoicesQuery.data.invoices.length}
               </span>
             )}
           </button>
 
           {historyOpen && (
             <div className="mt-3 rounded-xl border border-white/8 overflow-hidden">
-              {historyQuery.isLoading && (
+              {invoicesQuery.isLoading && (
                 <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
               )}
-              {historyQuery.isError && (
+              {invoicesQuery.isError && (
                 <p className="py-8 text-center text-sm text-destructive">Failed to load invoice history.</p>
               )}
-              {historyQuery.data && historyQuery.data.history.length === 0 && (
+              {invoicesQuery.data && invoicesQuery.data.invoices.length === 0 && (
                 <p className="py-8 text-center text-sm text-muted-foreground">No invoices recorded for this project yet.</p>
               )}
-              {historyQuery.data && historyQuery.data.history.length > 0 && (
+              {invoicesQuery.data && invoicesQuery.data.invoices.length > 0 && (
                 <Table>
                   <TableHeader>
                     <TableRow className="border-white/8 hover:bg-transparent">
                       <TableHead className="w-6 pr-0" />
                       <TableHead>Reference</TableHead>
-                      <TableHead className="whitespace-nowrap">Date Invoiced</TableHead>
+                      <TableHead className="whitespace-nowrap">Period</TableHead>
+                      <TableHead className="whitespace-nowrap">Created</TableHead>
                       <TableHead>Roles</TableHead>
                       <TableHead>Employees</TableHead>
                       <TableHead className="text-right whitespace-nowrap">Amount</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {historyQuery.data.history.map((entry, idx) => {
-                      const key = entry.reference ?? `idx-${idx}`;
+                    {invoicesQuery.data.invoices.map((entry) => {
+                      const key = String(entry.id);
                       const expanded = expandedHistory.has(key);
                       const toggleRow = () =>
                         setExpandedHistory((prev) => {
@@ -1567,9 +1784,12 @@ export default function Billing() {
                           if (next.has(key)) next.delete(key); else next.add(key);
                           return next;
                         });
-                      const dateLabel = new Date(entry.invoicedAt).toLocaleDateString("de-DE", {
+                      const dateLabel = new Date(entry.createdAt).toLocaleDateString("de-DE", {
                         day: "2-digit", month: "short", year: "numeric",
                       });
+                      const periodStr = [entry.periodStart, entry.periodEnd]
+                        .map((d) => new Date(d).toLocaleDateString("de-DE", { day: "2-digit", month: "short", year: "numeric" }))
+                        .join(" – ");
 
                       return [
                         <TableRow
@@ -1589,6 +1809,7 @@ export default function Billing() {
                               : <span className="text-muted-foreground text-sm italic">No reference</span>
                             }
                           </TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{periodStr}</TableCell>
                           <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{dateLabel}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{entry.roleCount} role{entry.roleCount !== 1 ? "s" : ""}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">{entry.employeeCount} employee{entry.employeeCount !== 1 ? "s" : ""}</TableCell>
@@ -1598,7 +1819,7 @@ export default function Billing() {
                         ...(!expanded ? [] : [
                           <TableRow key={`hist-detail-${key}`} className="border-white/8 hover:bg-transparent">
                             <TableCell />
-                            <TableCell colSpan={5} className="pb-3 pt-1">
+                            <TableCell colSpan={6} className="pb-3 pt-1">
                               <div className="flex gap-8 text-sm">
                                 <div>
                                   <p className="text-xs text-muted-foreground mb-1.5 font-medium uppercase tracking-wide">Roles</p>
@@ -1630,11 +1851,11 @@ export default function Billing() {
         </div>
       )}
 
-      {/* Mark as invoiced modal */}
+      {/* Generate invoice modal */}
       <Dialog open={showInvoiceModal} onOpenChange={setShowInvoiceModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Mark as invoiced</DialogTitle>
+            <DialogTitle>Generate invoice</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-2.5 py-2 text-sm">
@@ -1644,7 +1865,7 @@ export default function Billing() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Period</span>
-              <span className="font-medium">{periodLabel}</span>
+              <span className="font-medium">{singlePeriodLabel}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Selected</span>
@@ -1673,10 +1894,10 @@ export default function Billing() {
               Cancel
             </Button>
             <Button
-              onClick={() => updateStatusMutation.mutate({ status: "invoiced", invoiceReference: invoiceRef || undefined })}
-              disabled={updateStatusMutation.isPending}
+              onClick={() => createInvoiceMutation.mutate({ reference: invoiceRef || undefined })}
+              disabled={createInvoiceMutation.isPending}
             >
-              {updateStatusMutation.isPending ? "Saving…" : "Confirm"}
+              {createInvoiceMutation.isPending ? "Creating…" : "Generate invoice"}
             </Button>
           </DialogFooter>
         </DialogContent>
