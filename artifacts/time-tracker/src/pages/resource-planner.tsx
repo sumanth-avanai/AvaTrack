@@ -93,6 +93,8 @@ import {
   getListHolidaysQueryKey,
 } from "@workspace/api-client-react";
 import { resolveProjectColor, PROJECT_COLORS } from "@workspace/api-zod";
+import { FilterPanel } from "@/components/shared";
+import { PlannerRowCells, PLANNER_ROW_HEIGHT } from "./resource-planner-timeline";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface ProjectRole {
@@ -163,71 +165,6 @@ const EMPLOYEE_COL = 200;
 const ROW_HEIGHT = 40;
 const SIDE_BUFFER_DAYS = 30;
 
-// ── Ribbon + hours-lane booking visual constants ─────────────────────────────
-const RIBBON_H = 20;
-const HOURS_LANE_H = 48;
-const LANE_GAP = 2;
-const LANE_TOTAL_H = RIBBON_H + HOURS_LANE_H;
-const BAR_PAD_TOP = 4;
-const MAX_VISIBLE_LANES = 3;
-const ABSENCE_H = 16;
-
-/** Pixel offset from the top of the row where booking lane `laneIndex` starts. */
-function calcLaneTop(laneIndex: number): number {
-  return BAR_PAD_TOP + laneIndex * (LANE_TOTAL_H + LANE_GAP);
-}
-
-function assignLanes(
-  bookings: ResourceBookingFull[],
-): (ResourceBookingFull & { lane: number })[] {
-  const sorted = [...bookings].sort((a, b) =>
-    a.startDate.localeCompare(b.startDate),
-  );
-  const laneEnds: string[] = [];
-  return sorted.map((b) => {
-    let laneIdx = laneEnds.findIndex((endDate) => b.startDate > endDate);
-    if (laneIdx === -1) {
-      laneIdx = laneEnds.length;
-    }
-    laneEnds[laneIdx] = b.endDate;
-    return { ...b, lane: laneIdx };
-  });
-}
-
-function calcRowHeight(laneCount: number, hasAbsences: boolean): number {
-  const visible = Math.min(Math.max(laneCount, 0), MAX_VISIBLE_LANES);
-  const hasMore = laneCount > MAX_VISIBLE_LANES;
-  let contentH = 0;
-  if (visible > 0) contentH = visible * LANE_TOTAL_H + (visible - 1) * LANE_GAP;
-  if (hasMore) contentH += LANE_GAP + 16;
-  if (hasAbsences) contentH += (contentH > 0 ? LANE_GAP : 0) + ABSENCE_H;
-  if (contentH === 0) return ROW_HEIGHT;
-  return Math.max(ROW_HEIGHT, BAR_PAD_TOP + contentH + BAR_PAD_TOP);
-}
-
-/**
- * Pixel offset from the top of the timeline row where the absence lane begins.
- * Always BELOW all booking lanes so absence cells never overlap ribbon/hours content.
- */
-function calcAbsenceLaneTop(laneCount: number): number {
-  const visible = Math.min(Math.max(laneCount, 0), MAX_VISIBLE_LANES);
-  const hasMore = laneCount > MAX_VISIBLE_LANES;
-  if (visible === 0) return BAR_PAD_TOP;
-  let top = BAR_PAD_TOP + visible * (LANE_TOTAL_H + LANE_GAP);
-  if (hasMore) top += 16 + LANE_GAP;
-  return top;
-}
-
-function darkenColor(hex: string): string {
-  const c = hex.replace("#", "");
-  if (c.length !== 6) return hex;
-  const [r, g, b] = [0, 2, 4].map((i) =>
-    Math.max(0, parseInt(c.slice(i, i + 2), 16) - 50),
-  );
-  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
-}
-
-// ── Day-level segment types ───────────────────────────────────────────────────
 interface SegmentBase {
   bookingId: number;
   startOffset: number; // days from windowStart, 0-indexed inclusive
@@ -544,22 +481,6 @@ function getMonthGroups(days: Date[]): { label: string; dayCount: number }[] {
   return groups;
 }
 
-function countWeekdaysBetween(start: string, end: string): number {
-  if (!start || !end || end < start) return 0;
-  const s = parseISO(start);
-  const e = parseISO(end);
-  const totalDays = differenceInDays(e, s) + 1;
-  const fullWeeks = Math.floor(totalDays / 7);
-  const remaining = totalDays % 7;
-  let weekdays = fullWeeks * 5;
-  const startDow = s.getDay();
-  for (let i = 0; i < remaining; i++) {
-    const dow = (startDow + i) % 7;
-    if (dow !== 0 && dow !== 6) weekdays++;
-  }
-  return weekdays;
-}
-
 // Count working days (per employee mask) between two ISO date strings, inclusive
 function countMaskDaysBetween(
   start: string,
@@ -638,26 +559,6 @@ function countBookableDays(
     vacationCount,
     bookableDays: workingDays - holidayCount - vacationCount,
   };
-}
-
-function addBookableDays(
-  start: Date,
-  targetDays: number,
-  mask: number[],
-  holidayDates: Set<string>,
-  vacations: VacationRange[],
-): Date {
-  let counted = 0;
-  let d = new Date(start);
-  while (counted < targetDays) {
-    d = addDays(d, 1);
-    const ds = format(d, "yyyy-MM-dd");
-    if (!mask[getISODay(d) - 1]) continue;
-    if (holidayDates.has(ds)) continue;
-    if (vacations.some((v) => v.startDate <= ds && ds <= v.endDate)) continue;
-    counted++;
-  }
-  return d;
 }
 
 // Find the next working day at or after `d` (respects mask + holidays + absences)
@@ -1152,6 +1053,7 @@ function BookingModal({
     loggedDays: number;
     invoicedDays: number;
     reservedDays: number;
+    stalePlanDays: number;
     unplannedDays: number | null;
     freeDays: number | null;
     remainingBudgetDays: number | null;
@@ -2536,6 +2438,7 @@ function BookingModal({
               loggedDays,
               invoicedDays,
               reservedDays,
+              stalePlanDays,
               unplannedDays,
               freeDays,
               bookings: roleBookings,
@@ -2590,15 +2493,15 @@ function BookingModal({
               .sort((a, b) => a.startDate.localeCompare(b.startDate));
             const currentId = isEdit ? (state as EditModalState).booking.id : null;
 
-            // Bar geometry
+            // Bar geometry — consumption per the identity: Logged + Re-plannable
             const overshoot = Math.max(0, -unplanned);
             const barTotal = (budgetedDays ?? 0) + overshoot;
             const budgetedNum = budgetedDays ?? 0;
-            const invPct = barTotal > 0 ? Math.min((invoicedDays / barTotal) * 100, 100) : 0;
-            const resPct = barTotal > 0 ? Math.min((reservedDays / barTotal) * 100, 100 - invPct) : 0;
+            const loggedPct = barTotal > 0 ? Math.min((loggedDays / barTotal) * 100, 100) : 0;
+            const resPct = barTotal > 0 ? Math.min((reservedDays / barTotal) * 100, 100 - loggedPct) : 0;
             const budgetLinePct = barTotal > 0 ? (budgetedNum / barTotal) * 100 : 100;
             const pastMarkerPct = barTotal > 0 && pastPlanDays > 0
-              ? Math.min(((invoicedDays + reservedDays) / barTotal) * 100, budgetLinePct)
+              ? Math.min(((loggedDays + reservedDays) / barTotal) * 100, budgetLinePct)
               : 0;
 
             return (
@@ -2626,9 +2529,12 @@ function BookingModal({
                           <div className="flex justify-between"><span className="text-muted-foreground">Re-plannable</span><span className="text-blue-600 dark:text-blue-400 font-medium">{r1(reservedDays)}d</span></div>
                           <div className={`flex justify-between ${statusColor(unplanned)}`}><span>Unplanned</span><span className="font-medium">{r1(unplanned)}d</span></div>
                           <div className="flex justify-between"><span className="text-muted-foreground">Free</span><span>{freeDays != null ? r1(freeDays) + "d" : "—"}</span></div>
+                          {(stalePlanDays ?? 0) > 0.05 && (
+                            <div className="flex justify-between text-amber-700 dark:text-amber-400"><span>Stale plan</span><span className="font-medium">{r1(stalePlanDays)}d</span></div>
+                          )}
                         </div>
                         <p className="text-[11px] text-muted-foreground leading-relaxed">
-                          Budgeted = Invoiced + Re-plannable + Unplanned. Figures are live and match the Budget tab.
+                          Budget = Logged + Re-plannable + Unplanned. Stale past plan is flagged separately and never counts as consumption. Figures are live and match the Budget tab.
                         </p>
                         {showProjected && (
                           <div className={`rounded-md border px-2 py-1.5 text-xs ${unplannedProjected < 0 ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-border bg-background/60"}`}>
@@ -2661,11 +2567,11 @@ function BookingModal({
                 {/* 7b Budget bar */}
                 <div className="space-y-1">
                   <div className="relative h-3 rounded bg-muted overflow-visible">
-                    {invPct > 0 && (
-                      <div className="absolute left-0 top-0 h-full rounded-l bg-violet-600 dark:bg-violet-500" style={{ width: `${invPct}%` }} />
+                    {loggedPct > 0 && (
+                      <div className="absolute left-0 top-0 h-full rounded-l bg-violet-600 dark:bg-violet-500" style={{ width: `${loggedPct}%` }} />
                     )}
                     {resPct > 0 && (
-                      <div className="absolute top-0 h-full bg-violet-200 dark:bg-violet-800 border-r border-violet-400 dark:border-violet-600" style={{ left: `${invPct}%`, width: `${resPct}%` }} />
+                      <div className="absolute top-0 h-full bg-violet-200 dark:bg-violet-800 border-r border-violet-400 dark:border-violet-600" style={{ left: `${loggedPct}%`, width: `${resPct}%` }} />
                     )}
                     {overshoot > 0 && (
                       <>
@@ -2688,7 +2594,7 @@ function BookingModal({
                         <PopoverContent side="top" className="w-72">
                           <div className="space-y-2">
                             <p className="text-xs text-muted-foreground leading-relaxed">
-                              {r1(pastPlanDays)}d planned before today, never logged. Releasing frees this reservation — logged and future-planned work stays untouched.
+                              {r1(pastPlanDays)}d planned before today was never logged — this is stale plan. It no longer counts against the budget, but it hides slipped work. Releasing writes it off as of today; days missed after the release are flagged again.
                             </p>
                             {confirmRelease ? (
                               <div className="flex gap-2 flex-wrap">
@@ -2719,7 +2625,7 @@ function BookingModal({
                   <div className="flex justify-between text-[10px] text-muted-foreground">
                     <span>0d</span>
                     <span>{budgetedNum}d budgeted</span>
-                    {overshoot > 0 && <span className="text-destructive">{r1(invoicedDays + reservedDays)}d total</span>}
+                    {overshoot > 0 && <span className="text-destructive">{r1(loggedDays + reservedDays)}d total</span>}
                   </div>
                 </div>
 
@@ -2867,18 +2773,18 @@ function BookingModal({
           <div className="space-y-1.5">
             <div className="font-semibold text-foreground">Master identity</div>
             <pre className="rounded bg-muted px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed">
-              {`Budget = Invoiced + Re-plannable + Unplanned`}
+              {`Budget = Logged + Re-plannable + Unplanned`}
             </pre>
           </div>
 
           <div className="space-y-1.5">
             <div className="font-semibold text-foreground">Equations</div>
             <pre className="rounded bg-muted px-3 py-2 text-xs font-mono whitespace-pre-wrap leading-relaxed">
-              {`Re-plannable = Σ max(Planned − Logged, 0)   (per day, then ÷ 8)
-Re-plannable = Past Undelivered + Future Planned
-Unplanned    = Budget − Invoiced − Re-plannable
+              {`Re-plannable = Σ max(Planned − Logged, 0)   (today onwards, per day ÷ 8)
+Stale plan   = Σ max(Planned − Logged, 0)   (before today — flag, not consumption)
+Unplanned    = Budget − Logged − Re-plannable
 Free         = Budget − Logged        (operational: real work left)
-Remaining    = Budget − Invoiced      (finance: budget not yet locked)`}
+Remaining    = Budget − Invoiced      (finance: budget not yet billed)`}
             </pre>
           </div>
 
@@ -2890,9 +2796,10 @@ Remaining    = Budget − Invoiced      (finance: budget not yet locked)`}
                   ["Budget", "Days budgeted for the role."],
                   ["Planned", "Days booked across all slots (Σ planned hours ÷ 8)."],
                   ["Logged", "Hours recorded in timesheets ÷ 8."],
-                  ["Invoiced", "Logged days already billed. Locked; cannot be re-planned."],
-                  ["Re-plannable", "Planned but not yet delivered; movable."],
-                  ["Unplanned", "Budget not yet committed to a plan."],
+                  ["Invoiced", "Logged days already billed. A billing overlay — never moves capacity."],
+                  ["Re-plannable", "Future planned work not yet delivered; movable."],
+                  ["Stale plan", "Booked days before today that were never delivered. A warning to release or re-plan — not consumption."],
+                  ["Unplanned", "Budget − Logged − Re-plannable: what you can still book. Negative = over-committed."],
                   ["Free", "Real work left before the budget is burnt."],
                   ["Remaining", "Budget not yet locked/billed (finance view)."],
                 ].map(([term, desc]) => (
@@ -2911,7 +2818,7 @@ Remaining    = Budget − Invoiced      (finance: budget not yet locked)`}
               <li>Only working days (per employee mask, excluding holidays and absences) count toward planned hours.</li>
               <li>If logged hours exceed planned for a day, the over-logging floors at zero — it does not create negative re-plannable capacity.</li>
               <li>Each resource booking is one slot; re-plannable is the sum across all slots for the role.</li>
-              <li>Past undelivered plan (end date passed, logged &lt; planned) is still re-plannable and can be released to free up budget.</li>
+              <li>Past undelivered plan becomes stale: it stops counting against the budget automatically and stays flagged until released or re-planned. Releasing freezes the write-off at the release date — days missed afterwards are flagged again.</li>
             </ul>
           </div>
         </div>
@@ -3161,11 +3068,6 @@ export default function ResourcePlannerPage() {
   const [modal, setModal] = useState<AnyModalState | null>(null);
   const [vacationModal, setVacationModal] =
     useState<VacationDialogState | null>(null);
-  // Tracks which (segKey → dayIndex) is being hovered for day-specific tooltip
-  const [hoveredSegDay, setHoveredSegDay] = useState<{
-    segKey: string;
-    dayIndex: number;
-  } | null>(null);
 
   // Project shelf: set of selected project IDs for highlight (empty = no highlight)
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<number>>(
@@ -3332,17 +3234,26 @@ export default function ResourcePlannerPage() {
             id: number;
             plannedDays: number;
             budgetedDays: number | null;
+            bookedDays: number; // logged/delivered days
+            reservedDays: number;
+            stalePlanDays?: number;
           }>;
         }>;
       },
     })),
   });
 
-  // Map from roleId → {plannedDays, budgetedDays} for tooltip display
+  // Map from roleId → budget figures for the timeline bar tooltip
   const roleBudgetMap = useMemo(() => {
     const map = new Map<
       number,
-      { plannedDays: number; budgetedDays: number | null }
+      {
+        plannedDays: number;
+        budgetedDays: number | null;
+        loggedDays: number;
+        reservedDays: number;
+        stalePlanDays: number;
+      }
     >();
     projectIdsWithRoles.forEach((pid, i) => {
       const data = plannerBudgetQueries[i]?.data;
@@ -3351,6 +3262,9 @@ export default function ResourcePlannerPage() {
           map.set(role.id, {
             plannedDays: role.plannedDays,
             budgetedDays: role.budgetedDays,
+            loggedDays: role.bookedDays ?? 0,
+            reservedDays: role.reservedDays ?? 0,
+            stalePlanDays: role.stalePlanDays ?? 0,
           });
         }
       }
@@ -3597,6 +3511,20 @@ export default function ResourcePlannerPage() {
     ];
   }, [bookings, selectedProjectIds]);
 
+  // Filter panel: newly appearing projects are auto-selected (initial load
+  // selects everything) so nothing is hidden unexpectedly.
+  const knownShelfIdsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const fresh = shelfProjects.filter((p) => !knownShelfIdsRef.current.has(p.id));
+    if (fresh.length === 0) return;
+    for (const p of fresh) knownShelfIdsRef.current.add(p.id);
+    setSelectedProjectIds((prev) => {
+      const next = new Set(prev);
+      for (const p of fresh) next.add(p.id);
+      return next;
+    });
+  }, [shelfProjects]);
+
   // ── Filtered + sorted employees ─────────────────────────────────────────────
   const activeEmployees = useMemo(() => {
     return [...allActiveEmployees].sort((a: any, b: any) => {
@@ -3815,42 +3743,18 @@ export default function ResourcePlannerPage() {
     vacationDayMapByEmployee,
   ]);
 
-  // Employees with bookings matching the selected projects float to the top.
-  const visibleEmployees = useMemo(() => {
-    if (selectedProjectIds.size === 0) return activeEmployees;
-    const matching = activeEmployees.filter((emp: any) =>
-      (bookingsByEmployee[(emp as any).id] ?? []).some((b: ResourceBookingFull) =>
-        selectedProjectIds.has(b.projectId),
-      ),
-    );
-    const rest = activeEmployees.filter(
-      (emp: any) =>
-        !(bookingsByEmployee[(emp as any).id] ?? []).some(
-          (b: ResourceBookingFull) => selectedProjectIds.has(b.projectId),
-        ),
-    );
-    return [...matching, ...rest];
-  }, [activeEmployees, selectedProjectIds, bookingsByEmployee]);
+  // All employees stay visible at fixed row height (empty rows show an
+  // "Available" label); the project filter hides segments, not people.
+  const visibleEmployees = activeEmployees;
 
-  // ── Daily hours totals per employee/day (sum across ALL booking segments) ──
-  const dailyTotalsMap = useMemo(() => {
-    const result: Record<number, Record<string, number>> = {};
+  // Segments visible under the current project filter (unchecked → hidden).
+  const filteredSegmentsByEmployee = useMemo(() => {
+    const result: Record<number, Segment[]> = {};
     for (const [empIdStr, segs] of Object.entries(segmentsByEmployee)) {
-      const id = Number(empIdStr);
-      const dayTotals: Record<string, number> = {};
-      for (const seg of segs) {
-        for (let i = 0; i < seg.dailyHours.length; i++) {
-          const dateStr = format(
-            addDays(windowStart, seg.startOffset + i),
-            "yyyy-MM-dd",
-          );
-          dayTotals[dateStr] = (dayTotals[dateStr] ?? 0) + seg.dailyHours[i];
-        }
-      }
-      result[id] = dayTotals;
+      result[Number(empIdStr)] = segs.filter((seg) => selectedProjectIds.has(seg.projectId));
     }
     return result;
-  }, [segmentsByEmployee, windowStart]);
+  }, [segmentsByEmployee, selectedProjectIds]);
 
   // Window label
   const windowLabel = useMemo(() => {
@@ -4111,68 +4015,23 @@ export default function ResourcePlannerPage() {
           </div>
         </div>
 
-        {/* ── Project shelf ──────────────────────────────────────────────────── */}
+        {/* ── Project filter — searchable, client-grouped, active-count badge ── */}
         {shelfProjects.length > 0 && (
-          <div className="px-4 py-2.5 border-b border-border bg-card">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Projects
-              </span>
-              {selectedProjectIds.size > 0 && (
-                <button
-                  className="text-xs text-muted-foreground hover:text-foreground ml-auto"
-                  onClick={() => setSelectedProjectIds(new Set())}
-                >
-                  Reset
-                </button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {shelfProjects.map((p) => {
-                const isSelected = selectedProjectIds.has(p.id);
-                const hasSelection = selectedProjectIds.size > 0;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedProjectIds((prev) => {
-                        const next = new Set(prev);
-                        if (isSelected) next.delete(p.id);
-                        else next.add(p.id);
-                        return next;
-                      });
-                    }}
-                    style={{
-                      backgroundColor: p.color,
-                      boxShadow: isSelected
-                        ? `0 0 0 2px #fff, 0 0 0 4px ${p.color}`
-                        : undefined,
-                      opacity: hasSelection && !isSelected ? 0.45 : 1,
-                      transform:
-                        hasSelection && !isSelected
-                          ? "scale(0.93)"
-                          : "scale(1)",
-                      transition: "opacity 0.15s, transform 0.15s, box-shadow 0.15s",
-                    }}
-                    className="px-2.5 py-1.5 rounded-md text-left focus:outline-none"
-                  >
-                    <div
-                      className="text-[11px] leading-none mb-0.5 truncate max-w-[120px]"
-                      style={{ color: "rgba(255,255,255,0.75)" }}
-                    >
-                      {p.clientName}
-                    </div>
-                    <div
-                      className="text-[11px] font-semibold leading-none truncate max-w-[120px]"
-                      style={{ color: "#fff" }}
-                    >
-                      {p.name}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+          <div className="px-4 py-2.5 border-b border-border bg-card flex items-center">
+            <FilterPanel
+              label="Projects"
+              items={shelfProjects.map((p) => ({
+                id: p.id,
+                label: p.name,
+                group: p.clientName,
+                color: p.color,
+              }))}
+              selected={selectedProjectIds as unknown as Set<number | string>}
+              onSelectedChange={(next) =>
+                setSelectedProjectIds(new Set([...next].map(Number)))
+              }
+              searchPlaceholder="Search projects…"
+            />
           </div>
         )}
 
@@ -4363,20 +4222,11 @@ export default function ResourcePlannerPage() {
                 vacationDayMapByEmployee[empId] ??
                 new Map<string, VacationEntry>();
 
-              const baseSegments = segmentsByEmployee[empId] ?? [];
-              const laneCount =
-                baseSegments.length > 0
-                  ? Math.max(...baseSegments.map((s) => s.lane)) + 1
-                  : 0;
-              const hasAbsences = days.some((d) => {
-                const ds = format(d, "yyyy-MM-dd");
-                return holidayDateSet.has(ds) || vacationDayMap.has(ds);
-              });
-              const rowHeight = calcRowHeight(laneCount, hasAbsences);
-              const absenceLaneTop = calcAbsenceLaneTop(laneCount);
-              const hiddenCount = baseSegments.filter(
-                (s) => s.lane >= MAX_VISIBLE_LANES,
-              ).length;
+              const baseSegments = filteredSegmentsByEmployee[empId] ?? [];
+              const rowHeight = PLANNER_ROW_HEIGHT; // fixed for every row
+              const holidayNameByDate = new Map(
+                (holidaysByEmployee[empId] ?? []).map((h) => [h.date, h.name] as const),
+              );
 
               return (
                 <div
@@ -4451,556 +4301,39 @@ export default function ResourcePlannerPage() {
                       ))}
                     </div>
 
-                    {/* Per-day absence cells — holidays and vacations */}
-                    {Array.from({ length: numDays }, (_, offset) => {
-                      const day = addDays(windowStart, offset);
-                      const dayStr = format(day, "yyyy-MM-dd");
-                      const left = dayLefts[offset] ?? 0;
-                      const dw = dayWidths[offset] ?? dayWidth;
-
-                      if (holidayDateSet.has(dayStr)) {
-                        const holiday = (holidaysByEmployee[empId] ?? []).find(
-                          (h) => h.date === dayStr,
-                        );
-                        return (
-                          <Tooltip key={`h-${offset}`}>
-                            <TooltipTrigger asChild>
-                              <div
-                                className="absolute flex items-center justify-center pointer-events-auto"
-                                style={{
-                                  top: absenceLaneTop,
-                                  height: ABSENCE_H,
-                                  left,
-                                  width: dw,
-                                  backgroundColor: "rgba(156,163,175,0.18)",
-                                  zIndex: 2,
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {dayWidth >= 12 && (
-                                  <Star className="h-3 w-3 text-gray-400" />
-                                )}
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent
-                              side="top"
-                              className="text-xs space-y-0.5"
-                            >
-                              <div className="font-semibold">
-                                {holiday?.name ?? "Public holiday"}
-                              </div>
-                              <div>{format(day, "MMM d, yyyy")}</div>
-                            </TooltipContent>
-                          </Tooltip>
-                        );
-                      }
-
-                      const vacation = vacationDayMap.get(dayStr);
-                      if (vacation) {
-                        const icon =
-                          vacation.vacationType === "vacation" ? (
-                            <Sun className="h-3 w-3 text-orange-400" />
-                          ) : vacation.vacationType === "sick" ? (
-                            <Thermometer className="h-3 w-3 text-red-400" />
-                          ) : (
-                            <X className="h-3 w-3 text-gray-400" />
-                          );
-                        return (
-                          <Tooltip key={`v-${offset}`}>
-                            <TooltipTrigger asChild>
-                              <div
-                                role="button"
-                                tabIndex={0}
-                                aria-label={`Edit ${vacation.vacationType.replace(/_/g, " ")} for ${emp.name}`}
-                                className="absolute flex items-center justify-center pointer-events-auto cursor-pointer hover:brightness-90 focus:outline-none focus:ring-2 focus:ring-orange-400"
-                                style={{
-                                  top: absenceLaneTop,
-                                  height: ABSENCE_H,
-                                  left,
-                                  width: dw,
-                                  backgroundColor: "rgba(251,146,60,0.14)",
-                                  zIndex: 2,
-                                }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openEditVacationModal(vacation, emp.name);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === " ")
-                                    openEditVacationModal(vacation, emp.name);
-                                }}
-                              >
-                                {dayWidth >= 12 && icon}
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent
-                              side="top"
-                              className="text-xs space-y-0.5"
-                            >
-                              <div className="font-semibold capitalize">
-                                {vacation.vacationType.replace(/_/g, " ")}
-                              </div>
-                              <div>
-                                {format(parseISO(vacation.startDate), "MMM d")}{" "}
-                                –{" "}
-                                {format(
-                                  parseISO(vacation.endDate),
-                                  "MMM d, yyyy",
-                                )}
-                              </div>
-                              {vacation.note && (
-                                <div className="text-muted-foreground italic">
-                                  {vacation.note}
-                                </div>
-                              )}
-                              <div className="text-muted-foreground text-[11px] pt-0.5">
-                                Click to edit
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        );
-                      }
-
-                      // Empty working day — dashed border cell
-                      const isoD =
-                        day.getDay() === 0 ? 6 : day.getDay() - 1;
-                      const isWorkingDay = empMask[isoD] === 1;
-                      const dayTotal =
-                        (dailyTotalsMap[empId] ?? {})[dayStr] ?? 0;
-                      if (!isWorkingDay || dayTotal > 0) return null;
-                      return (
-                        <div
-                          key={`empty-${offset}`}
-                          style={{
-                            position: "absolute",
-                            top: calcLaneTop(0) + RIBBON_H,
-                            height: HOURS_LANE_H,
-                            left,
-                            width: dw,
-                            border: "1px dashed rgba(0,0,0,0.08)",
-                            borderRadius: 2,
-                            zIndex: 1,
-                            pointerEvents: "none",
-                          }}
-                        />
-                      );
-                    })}
-
-                    {/* "Available" label when no visible segments */}
-                    {baseSegments.length === 0 && (
-                      <div className="absolute inset-0 flex items-center px-4 pointer-events-none">
-                        <span className="text-xs text-muted-foreground/40 select-none">
-                          Available
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Booking segments — ribbon + hours-lane visual */}
-                    {baseSegments.map((seg) => {
-                      if (seg.lane >= MAX_VISIBLE_LANES) return null;
-                      const isDragging = dragGhost?.bookingId === seg.bookingId;
-                      const laneTop = calcLaneTop(seg.lane);
-                      const segLeft = dayLefts[seg.startOffset] ?? 0;
-                      const segWidth = (dayLefts[seg.endOffset + 1] ?? dayLefts[dayLefts.length - 1] ?? 0) - segLeft;
-                      const showCloseOut =
-                        !isDragging &&
-                        !seg.pastReleasedAt &&
-                        seg.bookingStartDate < todayStr &&
-                        segWidth > 32;
-                      const segKey = `seg-${seg.bookingId}-${seg.startOffset}`;
-
-                      // Repeat label positions (relative to segment start) inside the ribbon.
-                      // Week zoom → repeat at each Monday.
-                      // All other zooms → repeat at each month boundary (1st of month).
-                      // Min 60 px gap between labels so they don't pile up at small zoom levels.
-                      const ribbonRepeatLefts: number[] = [];
-                      {
-                        const isWeekZoom = zoom === "week";
-                        let lastLabelPx = -60; // allow first repeat even close to left edge
-                        for (let i = 1; i <= seg.endOffset - seg.startOffset; i++) {
-                          const d = addDays(windowStart, seg.startOffset + i);
-                          const isRepeat = isWeekZoom ? d.getDay() === 1 : d.getDate() === 1;
-                          if (isRepeat) {
-                            const px = (dayLefts[seg.startOffset + i] ?? 0) - segLeft;
-                            if (px - lastLabelPx >= 60) {
-                              ribbonRepeatLefts.push(px);
-                              lastLabelPx = px;
-                            }
-                          }
-                        }
-                      }
-
-                      const barDiv = (
-                        <div
-                          className={`absolute group/seg${isDragging ? "" : " transition-opacity"}`}
-                          style={{
-                            top: laneTop,
-                            height: LANE_TOTAL_H,
-                            left: segLeft,
-                            width: segWidth,
-                            opacity: isDragging
-                              ? 0.35
-                              : selectedProjectIds.size > 0 &&
-                                  !selectedProjectIds.has(seg.projectId)
-                                ? 0.25
-                                : 1,
-                            cursor: isDragging ? "grabbing" : "grab",
-                            zIndex: isDragging ? 5 : 4,
-                            userSelect: "none",
-                          }}
-                          onMouseMove={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const offsetX = e.clientX - rect.left;
-                            const dayIdx = Math.max(
-                              0,
-                              Math.min(
-                                Math.floor(offsetX / dayWidth),
-                                seg.dailyHours.length - 1,
-                              ),
-                            );
-                            setHoveredSegDay({ segKey, dayIndex: dayIdx });
-                          }}
-                          onMouseLeave={() => setHoveredSegDay(null)}
-                          onMouseDown={(e) => {
-                            const booking = empBookings.find(
-                              (b) => b.id === seg.bookingId,
-                            );
-                            if (booking)
-                              startBookingDrag(e, booking, "move", dayWidth);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {/* ── Period ribbon ── */}
-                          <div
-                            className="absolute overflow-hidden"
-                            style={{
-                              top: 0,
-                              left: 0,
-                              right: 0,
-                              height: RIBBON_H,
-                              borderRadius: "3px 3px 0 0",
-                              backgroundColor: seg.status === "tentative" ? `${seg.color}55` : `${seg.color}8C`,
-                              border: seg.status === "tentative" ? `1px dashed ${seg.color}99` : `1px solid ${seg.color}55`,
-                            }}
-                          >
-                            {/* Role/project name at segment start — visible whenever the bar is at least ~20 px wide */}
-                            {segWidth > 20 && (
-                              <span
-                                className="absolute pointer-events-none select-none"
-                                style={{
-                                  left: 5,
-                                  top: 0,
-                                  bottom: 0,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                  color: "#fff",
-                                  whiteSpace: "nowrap",
-                                  lineHeight: 1,
-                                }}
-                              >
-                                {seg.roleName ?? seg.projectName}
-                              </span>
-                            )}
-                            {/* Repeat label at each Monday (week zoom) or month boundary (other zooms) */}
-                            {segWidth > 20 && ribbonRepeatLefts.map((pixLeft) => (
-                              <span
-                                key={pixLeft}
-                                className="absolute pointer-events-none select-none"
-                                style={{
-                                  left: pixLeft + 5,
-                                  top: 0,
-                                  bottom: 0,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                  color: "#fff",
-                                  whiteSpace: "nowrap",
-                                  lineHeight: 1,
-                                }}
-                              >
-                                {seg.roleName ?? seg.projectName}
-                              </span>
-                            ))}
-
-                            {/* Past-released indicator */}
-                            {seg.pastReleasedAt && segWidth > 24 && (
-                              <div
-                                className="absolute top-0.5 right-1.5 pointer-events-none"
-                                style={{ zIndex: 2 }}
-                              >
-                                <Clock className="h-3 w-3" style={{ color: "#fff", opacity: 0.85 }} />
-                              </div>
-                            )}
-
-                            {/* Close Out button */}
-                            {showCloseOut && (
-                              <button
-                                type="button"
-                                className="absolute top-0.5 right-1.5 opacity-0 group-hover/seg:opacity-100 transition-opacity rounded p-0.5 hover:bg-black/15 focus:outline-none"
-                                style={{ zIndex: 6, cursor: "pointer" }}
-                                title="Close Out — release undelivered past days"
-                                onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const booking = empBookings.find((b) => b.id === seg.bookingId);
-                                  if (booking) openCloseOutModal(booking);
-                                }}
-                              >
-                                <Clock className="h-3 w-3" style={{ color: "#fff" }} />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* ── Hours lane ── */}
-                          <div
-                            className="absolute overflow-hidden"
-                            style={{
-                              top: RIBBON_H,
-                              left: 0,
-                              right: 0,
-                              height: HOURS_LANE_H,
-                              borderRadius: "0 0 3px 3px",
-                              backgroundColor: `${seg.color}0D`,
-                              border: `1px solid ${seg.color}30`,
-                              borderTop: "none",
-                            }}
-                          >
-                            {seg.dailyHours.map((h, i) => {
-                              const absDay = seg.startOffset + i;
-                              const dw = dayWidths[absDay] ?? dayWidth;
-                              const dayLeft = (dayLefts[absDay] ?? 0) - segLeft;
-                              const actualDay = addDays(windowStart, absDay);
-                              const dowAbs = actualDay.getDay();
-                              const isWe = dowAbs === 0 || dowAbs === 6;
-                              const isHolDay = holidayDateSet.has(format(actualDay, "yyyy-MM-dd"));
-                              const isNonWorking = isWe || isHolDay;
-                              const isOver = dailyCap > 0 && h > dailyCap;
-                              const fillRatio = dailyCap > 0 ? Math.min(1, h / dailyCap) : 0;
-                              const barPx = h > 0 ? Math.max(6, fillRatio * HOURS_LANE_H) : 0;
-                              const remaining = dailyCap > 0 && h > 0 && h < dailyCap
-                                ? dailyCap - h : 0;
-                              return (
-                                <div
-                                  key={i}
-                                  style={{
-                                    position: "absolute",
-                                    left: dayLeft,
-                                    width: dw,
-                                    height: "100%",
-                                    borderLeft: i > 0 ? `1px solid ${seg.color}20` : undefined,
-                                  }}
-                                >
-                                  {h > 0 && (
-                                    <div
-                                      style={{
-                                        position: "absolute",
-                                        top: 0,
-                                        left: 0,
-                                        right: 0,
-                                        height: isOver ? HOURS_LANE_H : barPx,
-                                        backgroundColor: isOver
-                                          ? "rgba(239,68,68,0.75)"
-                                          : `${seg.color}CC`,
-                                        display: "flex",
-                                        alignItems: barPx >= 18 ? "flex-start" : "center",
-                                        justifyContent: "center",
-                                        paddingTop: barPx >= 18 ? 3 : 0,
-                                      }}
-                                    >
-                                      {barPx >= 14 && dw >= 22 && (
-                                        <span
-                                          style={{
-                                            fontSize: 11,
-                                            fontWeight: 600,
-                                            color: "#fff",
-                                            lineHeight: 1,
-                                            pointerEvents: "none",
-                                            userSelect: "none",
-                                          }}
-                                        >
-                                          {h.toFixed(1).replace(/\.0$/, "")}h
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                  {/* 0h weekday: show free capacity as muted hint */}
-                                  {h === 0 && dailyCap > 0 && dw >= 22 && !isNonWorking && (
-                                    <span
-                                      style={{
-                                        position: "absolute",
-                                        top: 4,
-                                        left: 0,
-                                        right: 0,
-                                        fontSize: 11,
-                                        textAlign: "center",
-                                        color: "rgba(0,0,0,0.25)",
-                                        pointerEvents: "none",
-                                        userSelect: "none",
-                                        lineHeight: 1,
-                                      }}
-                                    >
-                                      {dailyCap.toFixed(1).replace(/\.0$/, "")}h
-                                    </span>
-                                  )}
-                                  {/* Partial booking: remaining available hours below bar */}
-                                  {remaining > 0 && !isOver && !isNonWorking && dw >= 22 && barPx < HOURS_LANE_H && (
-                                    <span
-                                      style={{
-                                        position: "absolute",
-                                        bottom: 3,
-                                        left: 0,
-                                        right: 0,
-                                        fontSize: 11,
-                                        textAlign: "center",
-                                        color: "rgba(0,0,0,0.25)",
-                                        pointerEvents: "none",
-                                        userSelect: "none",
-                                        lineHeight: 1,
-                                      }}
-                                    >
-                                      {remaining.toFixed(1).replace(/\.0$/, "")}h
-                                    </span>
-                                  )}
-                                  {/* Overbooked: show excess below bar */}
-                                  {isOver && dw >= 28 && (
-                                    <div
-                                      style={{
-                                        position: "absolute",
-                                        bottom: 2,
-                                        left: 0,
-                                        right: 0,
-                                        textAlign: "center",
-                                        fontSize: 11,
-                                        fontWeight: 700,
-                                        color: "rgb(185,28,28)",
-                                        pointerEvents: "none",
-                                        userSelect: "none",
-                                        lineHeight: 1,
-                                      }}
-                                    >
-                                      -{(h - dailyCap).toFixed(1).replace(/\.0$/, "")}h
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {/* Left resize handle — anchored to hours lane */}
-                          <div
-                            className="absolute left-0"
-                            style={{
-                              top: RIBBON_H,
-                              height: HOURS_LANE_H,
-                              width: 7,
-                              cursor: "ew-resize",
-                              zIndex: 5,
-                            }}
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              const booking = empBookings.find((b) => b.id === seg.bookingId);
-                              if (booking) startBookingDrag(e, booking, "resize-start", dayWidth);
-                            }}
-                          />
-
-                          {/* Right resize handle — anchored to hours lane */}
-                          <div
-                            className="absolute right-0"
-                            style={{
-                              top: RIBBON_H,
-                              height: HOURS_LANE_H,
-                              width: 7,
-                              cursor: "ew-resize",
-                              zIndex: 5,
-                            }}
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              const booking = empBookings.find((b) => b.id === seg.bookingId);
-                              if (booking) startBookingDrag(e, booking, "resize-end", dayWidth);
-                            }}
-                          />
-                        </div>
-                      );
-
-                      if (isDragging) {
-                        return (
-                          <div key={segKey} style={{ display: "contents" }}>
-                            {barDiv}
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <Tooltip key={segKey}>
-                          <TooltipTrigger asChild>{barDiv}</TooltipTrigger>
-                          <TooltipContent side="top" className="text-xs max-w-[240px] p-0">
-                            <div className="px-3 pt-2.5 pb-1.5">
-                              <div className="font-semibold text-gray-900">{seg.projectName}</div>
-                              {seg.clientName && (
-                                <div className="text-gray-500">{seg.clientName}</div>
-                              )}
-                            </div>
-                            <div className="px-3 pb-2 space-y-0.5 border-t border-gray-200 pt-1.5">
-                              {seg.roleName && (
-                                <div className="text-primary font-medium">
-                                  {seg.roleName}
-                                  {seg.dayRate ? ` — €${seg.dayRate.toLocaleString("de-DE")}/day` : ""}
-                                </div>
-                              )}
-                              <div className="text-gray-700">
-                                {format(parseISO(seg.bookingStartDate), "MMM d")}{" "}–{" "}
-                                {format(parseISO(seg.bookingEndDate), "MMM d, yyyy")}
-                              </div>
-                              <div className="text-gray-700">
-                                {(() => {
-                                  const dayIdx =
-                                    hoveredSegDay?.segKey === segKey ? hoveredSegDay.dayIndex : 0;
-                                  const hovDay = addDays(windowStart, seg.startOffset + dayIdx);
-                                  const dayH = seg.dailyHours[dayIdx] ?? 0;
-                                  return (
-                                    <>
-                                      <span className="font-medium">{format(hovDay, "EEE MMM d")}</span>
-                                      {" — "}
-                                      {dayH.toFixed(1).replace(/\.0$/, "")}h
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                              {seg.notes && (
-                                <div className="text-gray-500 italic">{seg.notes}</div>
-                              )}
-                              {seg.pastReleasedAt && (
-                                <div className="flex items-center gap-1 text-amber-600 font-medium">
-                                  <Clock className="h-3 w-3" />
-                                  Past plan released
-                                </div>
-                              )}
-                            </div>
-                            {seg.projectRoleId && (() => {
-                              const rb = roleBudgetMap.get(seg.projectRoleId);
-                              if (!rb || rb.budgetedDays == null) return null;
-                              const isOver = rb.plannedDays > rb.budgetedDays;
-                              return (
-                                <div
-                                  className={`px-3 py-1.5 border-t border-gray-200 ${
-                                    isOver
-                                      ? "bg-red-50 text-red-600 font-semibold"
-                                      : "bg-green-50 text-green-700"
-                                  }`}
-                                >
-                                  {isOver ? "⚠ Over budget: " : "✓ Budget: "}
-                                  {rb.plannedDays.toFixed(1)} / {rb.budgetedDays}d planned
-                                </div>
-                              );
-                            })()}
-                          </TooltipContent>
-                        </Tooltip>
-                      );
-                    })}
-
+                    {/* Day-cell timeline: fixed 64px rows, proportional
+                        fill, max 2 overlap lanes + "+N" badge, inline absences,
+                        "Available" empty rows (see resource-planner-timeline.tsx) */}
+                    <PlannerRowCells
+                      numDays={numDays}
+                      windowStart={windowStart}
+                      dayLefts={dayLefts}
+                      dayWidths={dayWidths}
+                      baseDayWidth={dayWidth}
+                      segments={baseSegments}
+                      dailyCap={dailyCap}
+                      empMask={empMask}
+                      empName={emp.name}
+                      holidayNameByDate={holidayNameByDate}
+                      vacationByDate={vacationDayMap}
+                      todayStr={todayStr}
+                      bridgeGaps={zoom !== "week"}
+                      draggingBookingId={dragGhost?.bookingId ?? null}
+                      onBarMouseDown={(e, bookingId) => {
+                        const booking = empBookings.find((b) => b.id === bookingId);
+                        if (booking) startBookingDrag(e, booking, "move", dayWidth);
+                      }}
+                      onBarResizeMouseDown={(e, bookingId, edge) => {
+                        const booking = empBookings.find((b) => b.id === bookingId);
+                        if (booking) startBookingDrag(e, booking, edge, dayWidth);
+                      }}
+                      onAbsenceClick={(v) => openEditVacationModal(v, emp.name)}
+                      onCloseOut={(bookingId) => {
+                        const booking = empBookings.find((b) => b.id === bookingId);
+                        if (booking) openCloseOutModal(booking);
+                      }}
+                      getRoleBudget={(roleId) => roleBudgetMap.get(roleId)}
+                    />
 
                     {/* Ghost bar for active drag */}
                     {dragGhost &&
@@ -5027,8 +4360,8 @@ export default function ResourcePlannerPage() {
                           <div
                             className="absolute pointer-events-none rounded-sm flex items-center px-2"
                             style={{
-                              top: calcLaneTop(0) + RIBBON_H,
-                              height: HOURS_LANE_H,
+                              top: 10,
+                              height: 44,
                               left: bounds.left,
                               width: bounds.width,
                               backgroundColor: color + "CC",
@@ -5050,20 +4383,6 @@ export default function ResourcePlannerPage() {
                           </div>
                         );
                       })()}
-
-                    {/* "+N more" indicator */}
-                    {hiddenCount > 0 && (
-                      <div
-                        className="absolute text-[11px] text-muted-foreground select-none pointer-events-none px-1"
-                        style={{
-                          top: calcLaneTop(MAX_VISIBLE_LANES),
-                          left: 4,
-                          zIndex: 4,
-                        }}
-                      >
-                        +{hiddenCount} more
-                      </div>
-                    )}
 
                     {/* Today line in row */}
                     {todayOffset !== null && (

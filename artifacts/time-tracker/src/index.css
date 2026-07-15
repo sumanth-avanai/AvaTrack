@@ -68,6 +68,34 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* ═══ AVATRACK DESIGN TOKENS (avanai CI) — Step 1 of the redesign ═══
+   Additive only: generates new utilities (bg-brand, text-navy,
+   bg-status-success-bg, …) without changing any existing token, so no
+   existing page changes appearance. Source: avatrack-design-tokens.html. */
+@theme {
+  /* Brand colors mapped to UI roles */
+  --color-brand: #25B2F9;            /* primary — actions, links, active states */
+  --color-brand-secondary: #7857F2;  /* secondary — selected states, highlights */
+  --color-navy: #002F47;             /* headings, primary text */
+  --color-sky: #6AA4FF;              /* hover / light accent */
+  --color-bg-soft: #F4F6F9;          /* page background */
+  --color-border-soft: #E2E6EC;      /* card / table borders */
+
+  /* Semantic status colors (status pills, budget thresholds, warnings) */
+  --color-status-success: #2E9E6D;
+  --color-status-success-bg: #EAF6F0;
+  --color-status-success-text: #1B7A50;
+  --color-status-warning: #E8A33D;
+  --color-status-warning-bg: #FDF3E3;
+  --color-status-warning-text: #9C6B1F;
+  --color-status-danger: #E5484D;
+  --color-status-danger-bg: #FBEAEA;
+  --color-status-danger-text: #B23336;
+  --color-status-neutral: #8A93A3;
+  --color-status-neutral-bg: #F0F1F4;
+  --color-status-neutral-text: #5C6270;
+}
+
 /* ═══ AVANAI BRAND COLORS ═══ */
 :root {
   /* Brand gradient */

@@ -25,6 +25,8 @@ A lightweight internal time-tracking web app for small agencies, branded as **Av
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 - `pnpm --filter @workspace/scripts run seed` — seed demo data
+- `pnpm --filter @workspace/time-tracker run dev:mock` — frontend only, all `/api/*` served in-browser from `src/mocks/db.json` (no backend/DB needed; for UI/UX work). Dev-only: gated on `VITE_MOCK=1`, dead code in production builds.
+- `pnpm --filter @workspace/api-server exec vitest run` — backend unit tests (incl. budget reconciliation)
 
 ## Features
 
@@ -39,6 +41,8 @@ A lightweight internal time-tracking web app for small agencies, branded as **Av
 - **Reports** — Pivot/flat reporting with 9 date presets, multi-select filters, metric selector, CSV export
 - **Project Roles (T&M)** — Per-project role management (name, day rate €/day, budgeted days, assigned employees); role selection in Timesheet "Add Project" flow; Budget tab with booked vs. budgeted per role; Allocations tab with planned vs. booked per employee per role
 - **Billing** — Revenue tracking per project: logged vs invoiced vs unbilled per role/employee; period presets (this/last month, quarter, all time, custom); 5 KPI cards; collapsible role/employee table with colour-coded unbilled amounts; "Mark all as invoiced" modal with optional invoice reference; CSV export
+- **Resource Planner** — day-cell timeline: fixed 64px row height per employee (never content-driven); per-day proportional fill (booked ÷ daily capacity) with role name overlaid; max 2 concurrent lanes per day, 3rd+ booking shows a "+N" badge with hover breakdown; absences render inline as neutral gray icon cells (star/sun/thermometer/X); employees with no bookings show an "Available" row; at month/quarter/year zoom bars bridge weekends and multi-day absences merge into one block (week zoom keeps true day cells); searchable client-grouped project FilterPanel with active-count badge; booking modal with live role-budget check and past-plan release
+- **Shared UI components** (`artifacts/time-tracker/src/components/shared/`) — 16 reusable components from the avanai CI redesign (Button, StatusPill, IconChip, BudgetBar, KpiCard, DataTable, FilterPanel, EntityPicker, PeriodPicker, ColumnVisibilityMenu, ConfirmModal, SearchInput, SharedTooltip, EmptyState, AbsenceCell, TimelineEntry). Dev gallery at `/gallery.html` in `dev:mock` (excluded from production build). Design tokens (brand + semantic status colors) live in `src/index.css` under `@theme`.
 
 ### Employee Personal Links (`/u/:token`)
 - PIN-protected personal URL per employee (route no longer requires admin session)
@@ -144,6 +148,40 @@ SUM(CASE WHEN billing_status = 'invest' THEN hours ELSE 0 END)
 - `null` otherwise (mixed or nothing)
 
 **Aggregation order:** revenue is accumulated raw (pre-`round2`) at the role level before rolling up to project/client/grand totals; `round2` is applied only at output time to each level. This avoids rounding drift.
+
+---
+
+### Budget Reconciliation (role budgets)
+
+**Source:** `artifacts/api-server/src/lib/budget-reconciliation.ts` (unit tests: `budget-reconciliation.test.ts`, 33 scenarios). Consumed by `routes/projectRoles.ts` (budget-status, `/projects/:id/budget`, `/projects/:id/allocations`) and mirrored in the frontend mock (`src/mocks/mock-api.ts`).
+
+**Core identity (always holds):**
+```
+Budget = Logged + Reserved + Unplanned
+```
+
+**Buckets:**
+```
+Logged (C)     = Σ all logged hours ÷ 8            (delivered work — invoiced or not)
+Reserved (R)   = Σ max(planned − logged, 0)        per day, days ≥ today only
+                 ("Re-plannable" in the UI: committed future work, movable)
+Stale plan (S) = Σ max(planned − logged, 0)        per day, days < today
+                 (warning flag ONLY — never counted as consumption)
+Unplanned (U)  = Budget − Logged − Reserved        (THE number to book against;
+                                                    negative ⇔ genuine over-commitment)
+Free           = Budget − Logged                   (burn indicator, ignores future plan)
+Remaining      = Budget − Invoiced                 (finance view: not yet billed)
+```
+
+**Key rules:**
+- **Invoiced is a billing overlay** — it never moves capacity figures. Invoicing an entry changes `Invoiced`/`Remaining` only, never `Unplanned`. (The pre-2026-07 model subtracted invoiced instead of logged, which made unbilled work look like open capacity and produced phantom negatives — do not regress to it.)
+- **Per-day netting** — planned vs logged hours are netted per calendar day across all bookings of the role, so overlapping bookings and moved work never double-count.
+- **Stale plan** — booked days before today that were never delivered stop counting against the budget automatically and are surfaced as `stalePlanDays` (amber "⚠ Stale plan" in Budget tab, Allocations, booking modal, planner tooltip). The PM resolves them by releasing or re-planning.
+- **Release semantics (`past_released_at`)** — the write-off is frozen at the **release date**, not a rolling "today": only days strictly before the release date stay forgiven; days missed after a release resurface as stale. Re-releasing stamps a new date (each write-off is a deliberate, dated decision). Applies in `calcRoleBudgetReconciliation`, `calcEffectiveBookingBudgetDays`, and `GET /resource-bookings/:id/past-undelivered`.
+- **Tentative bookings** are excluded from all budget math.
+- Over-logging a booked day floors undelivered at 0 (never negative reserved).
+
+**UI mapping (project roles sheet → Budget tab):** four-segment bars per role — Invoiced (green) + Logged-not-invoiced (amber) + Re-plannable (blue) + Unplanned (gray); when consumption + commitments exceed the budget the bar fills completely with a red "over by Xd" overflow segment and a budget-boundary tick. Column headers carry info (ⓘ) tooltips defining each metric.
 
 ---
 
@@ -305,6 +343,8 @@ Index: `time_entries_emp_date_idx` on `(employee_id, entry_date)`.
 | `hours_per_day` | real | NOT NULL | — | flat rate or derived from `weekday_hours` |
 | `weekday_hours` | jsonb | NULL | — | `Record<"1"\|"2"\|"3"\|"4"\|"5", number>` |
 | `notes` | text | NULL | — | |
+| `status` | varchar | NULL | — | `'confirmed'` \| `'tentative'` \| null; tentative bookings are excluded from budget math |
+| `past_released_at` | timestamptz | NULL | — | past-plan write-off timestamp; cutoff is the **release date** (see Budget Reconciliation) |
 | `created_at` | timestamptz | NOT NULL | now() | |
 | `updated_at` | timestamptz | NOT NULL | now() | auto-updated |
 
@@ -499,11 +539,16 @@ If an employee has `utilizationTarget` set, the threshold shifts: below target =
 - **Dirty guard:** unsaved changes trigger a browser `beforeunload` prompt. `Ctrl+S` triggers save.
 - **Copy-last-week:** copies the previous week's project structure (which projects/roles appear in the grid) but not the actual hours. Hours start at zero for the new week.
 
-### Resource Planner
-- **Overbooking warning:** a warning triangle appears on employee rows where total booked hours on any day exceed their daily capacity (accounting for employee working-day mask).
-- **Budget validation (booking modal):** live check against `GET /api/project-roles/:id/budget-status` while editing a booking. Shows remaining budgeted days. Warns if the new booking would exceed the role budget.
+### Resource Planner (day-cell timeline — `src/pages/resource-planner-timeline.tsx`)
+- **Fixed row height:** every employee row is exactly 64px, never content-driven. Concurrent bookings split a day cell into max 2 equal lanes; a 3rd+ concurrent booking shows a small "+N" badge (hover reveals the full breakdown) without changing row height.
+- **Day-cell rendering:** a day with 0 booked hours breaks the bar; consecutive booked days merge into one rounded run with per-day proportional fill (booked ÷ daily capacity). Partial days show one right-aligned "Xh free" chip per run (runs ≥ 90px); overbooked days get a red bottom strip and a "-Xh" chip.
+- **Coarse-zoom continuity (`bridgeGaps`, month/quarter/year):** booking bars bridge weekends (rendered solid); multi-day absences merge into one continuous block spanning weekends inside their range. Real gaps (separate bookings, part-time off-days, absences inside a booking) still break bars. Week zoom keeps true per-day cells.
+- **Absences:** inline neutral-gray cells with icons (holiday=star, vacation=sun, sick=thermometer, unpaid=X) — never stripes or color overlays; click to edit. Employees with no bookings in the window show an "Available" label at full row height.
+- **Bars show only the role name** (fallback: project name when the booking has no role); client/project/dates/rate live in the tooltip, which also shows `used / budgeted` (= logged + re-plannable) and an amber stale-plan warning when applicable.
+- **Project filter:** searchable, client-grouped FilterPanel with active-count badge; unchecking hides segments — people stay visible.
+- **Budget validation (booking modal):** live check against `GET /api/project-roles/:id/budget-status`; consumption bar = Logged + Re-plannable with a red overshoot zone past the budget line; info popover states `Budget = Logged + Re-plannable + Unplanned` and shows a Stale row when > 0. Past-plan release button writes off undelivered days as of the release date.
+- **Tentative bookings** render with a dashed border and reduced opacity; released bookings render dimmed.
 - **Project-colour bars:** bookings are rendered with the project's colour (or palette fallback from `resolveProjectColor`).
-- **Vacation/holiday markers:** absence and holiday days are shown as shaded strips on the timeline.
 
 ### Billing page
 - **Unbilled amount > 0:** yellow/amber highlight on the row.
@@ -588,9 +633,13 @@ All routes are prefixed with `/api`. Admin session required unless noted.
 | Method | Path | Auth | Query / Body | Notes |
 |--------|------|------|-------------|-------|
 | GET | `/resource-bookings` | Admin | `?employeeId, startDate, endDate` | Date filter: bookings whose range overlaps `[startDate,endDate]`. |
-| POST | `/resource-bookings` | Admin | `{ employeeId, projectId, projectRoleId?, startDate, endDate, hoursPerDay?, weekdayHours?, notes? }` | Either `hoursPerDay` or `weekdayHours` required. Side-effect: notification queue upsert. |
+| POST | `/resource-bookings` | Admin | `{ employeeId, projectId, projectRoleId?, startDate, endDate, hoursPerDay?, weekdayHours?, notes?, status? }` | Either `hoursPerDay` or `weekdayHours` required. Side-effect: notification queue upsert. |
 | PUT | `/resource-bookings/:id` | Admin | Same as POST | Full replace. Side-effect: notification queue upsert. |
-| DELETE | `/resource-bookings/:id` | Admin | — | Side-effect: removes unsent notification queue row. |
+| DELETE | `/resource-bookings/:id` | Admin | — | Returns `{ success: true }`. Side-effect: removes unsent notification queue row. |
+| GET | `/resource-bookings/:id/past-undelivered` | Admin | — | `{ pastUndeliveredDays }` — undelivered days before today; for released bookings, counts only days from the release date on. |
+| POST | `/resource-bookings/:id/release-past` | Admin | — | Stamps `past_released_at = now()` (write-off frozen at that date). Returns the updated booking. |
+| POST | `/resource-bookings/:id/unrelease` | Admin | — | Clears `past_released_at`. Returns the updated booking. |
+| POST | `/resource-bookings/release-past-bulk` | Admin | `{ projectId?, employeeId?, dryRun? }` | Bulk-release past undelivered plan; returns `{ released[] }`. |
 
 ### Project Roles (not in OpenAPI spec)
 
@@ -600,9 +649,9 @@ All routes are prefixed with `/api`. Admin session required unless noted.
 | POST | `/projects/:id/roles` | Admin | `{ name, dayRate, budgetedDays?, budgetedHours?, assignedEmployeeIds? }` | |
 | PUT | `/project-roles/:id` | Admin | Partial of above | `assignedEmployeeIds` replaces all assignments if provided. |
 | DELETE | `/project-roles/:id` | Admin | — | Cascades to assignments; sets time entry + booking role FK to null. |
-| GET | `/project-roles/:id/budget-status` | Admin | `?excludeBookingId, ?employeeId` | Returns `{ budgetedDays, plannedDays, loggedDays, availableDays, bookings[] }`. |
-| GET | `/projects/:id/budget` | Admin | — | Budget tab: booked/planned days per role with totals. |
-| GET | `/projects/:id/allocations` | Admin | — | Allocations tab: per-employee per-role planned vs booked summary. |
+| GET | `/project-roles/:id/budget-status` | Admin | `?excludeBookingId, ?employeeId` | Returns `{ budgetedDays, plannedDays, loggedDays, invoicedDays, reservedDays, stalePlanDays, unplannedDays, freeDays, remainingBudgetDays, loggedNotInvoicedDays, employeeLoggedDays, employeeInvoicedDays, bookings[] }` (see Budget Reconciliation). |
+| GET | `/projects/:id/budget` | Admin | — | Budget tab: per-role reconciliation buckets (`invoicedDays/reservedDays/stalePlanDays/unplannedDays/freeDays/…`) + logged (`bookedHours/bookedDays/bookedValue`) with totals. |
+| GET | `/projects/:id/allocations` | Admin | — | Allocations tab: per-employee per-role planned vs booked summary + reconciliation buckets per role. |
 
 ### Billing (not in OpenAPI spec)
 
@@ -690,9 +739,13 @@ All routes are prefixed with `/api`. Admin session required unless noted.
 artifacts/
   api-server/      # Express 5 backend
     src/routes/    # clients, projects, employees, holidays, timeEntries, reports, pivot, vacations, dashboard, auth, billing, resourceBookings, projectRoles, projectStatus, savedReports, employeeTimesheet
-    src/lib/       # utilization.ts, employee-availability.ts, booking-hours.ts, crypto.ts
+    src/lib/       # utilization.ts, employee-availability.ts, booking-hours.ts, budget-reconciliation.ts (+tests), crypto.ts
   time-tracker/    # React + Vite frontend
-    src/pages/     # Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Vacations, Reports, Billing, EmployeePortal, ResourcePlanner, ProjectStatus
+    src/pages/     # Dashboard, Timesheet, Clients, Projects, Employees, Holidays, Vacations, Reports, Billing, EmployeePortal, ResourcePlanner (+resource-planner-timeline.tsx day-cell renderer), ProjectStatus
+    src/components/shared/  # 16 reusable avanai-CI components (see Features)
+    src/mocks/     # dev-only mock API: db.json fixtures + fetch interceptor (VITE_MOCK=1 / `dev:mock` only)
+    gallery.html + src/gallery-main.tsx  # dev-only component gallery (not in production build)
+    vite.config.mock.ts  # mock-mode Vite config (defaults PORT/BASE_PATH, sets VITE_MOCK=1)
 lib/
   api-spec/        # openapi.yaml (source of truth)
   api-client-react/ # Generated React Query hooks
@@ -713,3 +766,6 @@ scripts/
 - `resolveProjectColor(projectId, color)` in `@workspace/api-zod` — returns the stored color or a deterministic palette fallback based on project ID
 - Never use `console.log` in server code — use `req.log` in route handlers and the singleton `logger` elsewhere
 - All dates are handled as UTC midnight; never use local-time Date methods (`getDay()` etc.) — always use `getUTC*` variants
+- **Budget identity is `Budget = Logged + Reserved + Unplanned`** (never invoiced-based) and the past-plan release cutoff is the **release date**, not "today" — see the Budget Reconciliation section. Any change to `budget-reconciliation.ts` must keep its 33 unit tests green.
+- The frontend mock (`src/mocks/`) mirrors backend route shapes AND the budget reconciliation model — when either changes, update the mock for parity (`pnpm --filter @workspace/time-tracker run dev:mock` should always demo current behaviour)
+- Design tokens (avanai CI brand + semantic status colors) are Tailwind v4 `@theme` entries in `artifacts/time-tracker/src/index.css` — there is no `tailwind.config.js`

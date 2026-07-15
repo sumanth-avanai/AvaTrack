@@ -444,10 +444,15 @@ router.get("/resource-bookings/:id/past-undelivered", async (req, res): Promise<
   if (rows.length === 0) { res.status(404).json({ error: "Booking not found" }); return; }
   const b = rows[0];
 
-  // Already released — no past undelivered days remain
+  // Released — the write-off is frozen at the RELEASE DATE: only days before
+  // it stay forgiven; misses after the release count as undelivered again.
   if (b.pastReleasedAt) {
-    res.json({ pastUndeliveredDays: 0 });
-    return;
+    const releasedUpTo = b.pastReleasedAt.toISOString().slice(0, 10);
+    if (b.endDate < releasedUpTo) {
+      res.json({ pastUndeliveredDays: 0 });
+      return;
+    }
+    if (b.startDate < releasedUpTo) b.startDate = releasedUpTo;
   }
 
   const todayStr = new Date().toISOString().slice(0, 10);

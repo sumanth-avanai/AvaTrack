@@ -1,10 +1,21 @@
 /**
- * Budget reconciliation: Invoiced | Re-plannable | Unplanned bucket model.
+ * Budget reconciliation: Logged | Re-plannable | Unplanned bucket model.
  *
- * Core identity: B = Invoiced + Reserved + Unplanned
+ * Core identity: B = Logged + Reserved + Unplanned
  *
- * Reserved ("Re-plannable") = days that are planned but not yet delivered.
- * These are movable — only invoiced work is locked.
+ * - Logged (C)   = ALL delivered work, invoiced or not. Invoicing is a billing
+ *                  overlay and never moves capacity figures.
+ * - Reserved (R) = undelivered planned days from TODAY onwards only — real
+ *                  future commitments, netted per day against logged hours.
+ * - Stale (S)    = undelivered planned days strictly BEFORE today. A
+ *                  data-quality flag ("release or re-plan"), never counted as
+ *                  consumption — this removes the double count where past
+ *                  ghost plans stacked on top of already-delivered work.
+ * - Unplanned (U)= B − C − R. Negative only on genuine over-commitment.
+ *
+ * Release semantics: `pastReleasedAt` freezes the write-off at the RELEASE
+ * DATE. Days missed after a release resurface as stale instead of being
+ * rolling-forgiven by "today".
  *
  * Per-day reconciliation avoids double-counting overlapping bookings.
  */
@@ -36,6 +47,8 @@ export interface ReconciliationResult {
   loggedDays: number;
   invoicedDays: number;
   reservedDays: number;
+  /** Undelivered planned days strictly before today (never consumption). */
+  stalePlanDays: number;
   unplannedDays: number | null;
   freeDays: number | null;
   remainingBudgetDays: number | null;
@@ -76,11 +89,15 @@ export function calcEffectiveBookingBudgetDays(
     ).budgetDays;
   }
 
-  const todayStr = today ?? new Date().toISOString().slice(0, 10);
-  if (booking.endDate < todayStr) return 0; // entirely in the past
-  const futureStart = booking.startDate >= todayStr ? booking.startDate : todayStr;
+  // Release-date cutoff: the write-off is frozen at the release date, so
+  // only days strictly before it are excluded. (`today` kept for signature
+  // compatibility; no longer used here.)
+  void today;
+  const releasedUpTo = booking.pastReleasedAt.toISOString().slice(0, 10);
+  if (booking.endDate < releasedUpTo) return 0; // entirely written off
+  const effectiveStart = booking.startDate >= releasedUpTo ? booking.startDate : releasedUpTo;
   return calcBookingHours(
-    futureStart, booking.endDate,
+    effectiveStart, booking.endDate,
     booking.hoursPerDay, booking.weekdayHours,
     avail?.holidayDates, avail?.vacationDateSet, avail?.compDayDateSet,
   ).budgetDays;
@@ -108,13 +125,17 @@ export function calcRoleBudgetReconciliation(
 
   for (const booking of bookings) {
     const holidaySet = new Set(booking.avail.holidayDates);
+    // Release-date cutoff: only days strictly before the release date stay
+    // written off — misses after the release resurface (edge-case fix).
+    const releasedUpTo = booking.pastReleasedAt
+      ? booking.pastReleasedAt.toISOString().slice(0, 10)
+      : null;
     const d = new Date(booking.startDate + "T00:00:00Z");
     const end = new Date(booking.endDate + "T00:00:00Z");
     while (d <= end) {
       const dateStr = d.toISOString().slice(0, 10);
 
-      // If booking was released and this day is strictly before today, skip it
-      if (booking.pastReleasedAt && dateStr < todayStr) {
+      if (releasedUpTo && dateStr < releasedUpTo) {
         d.setUTCDate(d.getUTCDate() + 1);
         continue;
       }
@@ -159,19 +180,24 @@ export function calcRoleBudgetReconciliation(
     totalInvoicedHours += invoiced;
   }
 
-  // ── Step 4: calculate reserved (undelivered planned) ───────────────────────
-  // For each day with any planned hours, compute how much was not yet delivered.
-  let totalUndeliveredHours = 0;
+  // ── Step 4: split undelivered planned into committed (future) vs stale ─────
+  // For each day with any planned hours, compute how much was not delivered.
+  // Days from today onwards are real commitments (Reserved); days before
+  // today are stale plan — flagged, never counted as consumption.
+  let totalReservedHours = 0;
+  let totalStaleHours = 0;
   for (const [dateStr, plannedHours] of plannedByDay.entries()) {
     const loggedHours = loggedByDay.get(dateStr)?.total ?? 0;
     const undelivered = Math.max(plannedHours - loggedHours, 0);
-    totalUndeliveredHours += undelivered;
+    if (dateStr >= todayStr) totalReservedHours += undelivered;
+    else totalStaleHours += undelivered;
   }
 
-  // ── Step 5: derive canonical bucket values ──────────────────────────────────
+  // ── Step 5: derive canonical bucket values (B = Logged + Reserved + Unplanned)
   const loggedDays = round2(totalLoggedHours / 8);
   const invoicedDays = round2(totalInvoicedHours / 8);
-  const reservedDays = round2(totalUndeliveredHours / 8);
+  const reservedDays = round2(totalReservedHours / 8);
+  const stalePlanDays = round2(totalStaleHours / 8);
   const loggedNotInvoicedDays = round2(loggedDays - invoicedDays);
 
   // plannedDays = total booking days (sum over all bookings; kept for reference)
@@ -179,8 +205,10 @@ export function calcRoleBudgetReconciliation(
   for (const h of plannedByDay.values()) totalPlannedHours += h;
   const plannedDays = round2(totalPlannedHours / 8);
 
+  // Unplanned subtracts LOGGED (all delivered work), never invoiced — billing
+  // state must not move capacity. Negative ⇔ genuine over-commitment.
   const unplannedDays = budgetedDays != null
-    ? round2(budgetedDays - invoicedDays - reservedDays)
+    ? round2(budgetedDays - loggedDays - reservedDays)
     : null;
   const freeDays = budgetedDays != null
     ? round2(budgetedDays - loggedDays)
@@ -193,6 +221,7 @@ export function calcRoleBudgetReconciliation(
     loggedDays,
     invoicedDays,
     reservedDays,
+    stalePlanDays,
     unplannedDays,
     freeDays,
     remainingBudgetDays,

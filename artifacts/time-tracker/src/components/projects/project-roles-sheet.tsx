@@ -35,7 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Info } from "lucide-react";
 import { useListEmployees } from "@workspace/api-client-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -59,6 +59,8 @@ interface BudgetRole extends ProjectRole {
   utilization: number | null;
   invoicedDays: number;
   reservedDays: number;
+  /** Undelivered plan before today — warning flag, never consumption. */
+  stalePlanDays?: number;
   unplannedDays: number | null;
   freeDays: number | null;
   remainingBudgetDays: number | null;
@@ -74,6 +76,7 @@ interface BudgetResponse {
     bookedValue: number;
     invoicedDays: number;
     reservedDays: number;
+    stalePlanDays?: number;
     unplannedDays: number;
     freeDays: number;
     remainingBudgetDays: number;
@@ -98,6 +101,7 @@ interface AllocationRole {
   bookedDays: number;
   invoicedDays: number;
   reservedDays: number;
+  stalePlanDays?: number;
   unplannedDays: number | null;
   freeDays: number | null;
   remainingBudgetDays: number | null;
@@ -509,11 +513,36 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Role</TableHead>
-                          <TableHead className="text-right">Budget</TableHead>
-                          <TableHead className="text-right">Invoiced</TableHead>
-                          <TableHead className="text-right">Re-plannable</TableHead>
-                          <TableHead className="text-right">Unplanned</TableHead>
-                          <TableHead className="text-right">Free (not logged)</TableHead>
+                          <TableHead className="text-right">
+                            <span className="inline-flex items-center gap-1">Budget
+                              <Info className="h-3 w-3 text-muted-foreground/60" aria-label="Budget info" role="img">
+                                <title>Days budgeted for this role (× day rate = value). Identity: Budget = Logged + Re-plannable + Unplanned.</title>
+                              </Info></span>
+                          </TableHead>
+                          <TableHead className="text-right">
+                            <span className="inline-flex items-center gap-1">Invoiced
+                              <Info className="h-3 w-3 text-muted-foreground/60" aria-label="Invoiced info" role="img">
+                                <title>Delivered work already billed. A billing overlay — it never changes how much you can book.</title>
+                              </Info></span>
+                          </TableHead>
+                          <TableHead className="text-right">
+                            <span className="inline-flex items-center gap-1">Re-plannable
+                              <Info className="h-3 w-3 text-muted-foreground/60" aria-label="Re-plannable info" role="img">
+                                <title>Booked future work not yet delivered (from today onwards). Committed but movable. Past undelivered plan is flagged as stale instead.</title>
+                              </Info></span>
+                          </TableHead>
+                          <TableHead className="text-right">
+                            <span className="inline-flex items-center gap-1">Unplanned
+                              <Info className="h-3 w-3 text-muted-foreground/60" aria-label="Unplanned info" role="img">
+                                <title>Budget − Logged − Re-plannable. THE number to book against. Negative = over-committed.</title>
+                              </Info></span>
+                          </TableHead>
+                          <TableHead className="text-right">
+                            <span className="inline-flex items-center gap-1">Free (not logged)
+                              <Info className="h-3 w-3 text-muted-foreground/60" aria-label="Free info" role="img">
+                                <title>Budget − Logged. Work left to deliver, ignoring future bookings — a burn indicator, not booking capacity.</title>
+                              </Info></span>
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -556,46 +585,94 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                     </Table>
                   </div>
 
-                  {/* Stacked-bar identity visualisation per role */}
+                  {/* Stacked-bar identity visualisation per role.
+                      Four segments: Invoiced + Logged (not invoiced) + Re-plannable
+                      + Unplanned. When consumption + commitments exceed the budget,
+                      the bar fills completely, a red overflow segment shows the
+                      overrun, and a tick marks where the budget ends — so an
+                      over-committed role can never look like open capacity. */}
                   <div className="space-y-3">
                     {budget.roles.filter((r) => r.budgetedDays != null && r.budgetedDays > 0).map((role) => {
                       const b = role.budgetedDays!;
-                      const invPct = Math.max(0, Math.min((role.invoicedDays / b) * 100, 100));
-                      const resPct = Math.max(0, Math.min((role.reservedDays / b) * 100, 100 - invPct));
-                      const unplPct = Math.max(0, Math.min(((role.unplannedDays ?? 0) / b) * 100, 100 - invPct - resPct));
+                      const invoiced = Math.max(0, role.invoicedDays);
+                      const delivered = Math.max(0, role.loggedNotInvoicedDays); // logged, not yet invoiced
+                      const committed = Math.max(0, role.reservedDays);
+                      const used = invoiced + delivered + committed;
+                      const over = Math.max(0, Math.round((used - b) * 10) / 10);
+                      const unplanned = Math.max(0, role.unplannedDays ?? 0);
+                      const scale = Math.max(b, used); // over-budget bars extend past the budget tick
+                      const pct = (v: number) => (v / scale) * 100;
                       return (
                         <div key={role.id} className="space-y-1">
                           <div className="flex justify-between text-xs text-muted-foreground">
                             <span className="font-medium text-foreground">{role.name}</span>
-                            <span>{fmtDays(b)} budget</span>
+                            {over > 0 ? (
+                              <span className="font-medium text-destructive">over by {fmtDays(over)} · {fmtDays(b)} budget</span>
+                            ) : (
+                              <span>{fmtDays(b)} budget</span>
+                            )}
                           </div>
-                          <div className="flex h-3 rounded-full overflow-hidden bg-muted">
-                            {invPct > 0 && (
+                          <div className="relative flex h-3 rounded-full overflow-hidden bg-muted">
+                            {invoiced > 0 && (
                               <div
-                                title={`Invoiced: ${fmtDays(role.invoicedDays)}`}
-                                style={{ width: `${invPct}%` }}
+                                title={`Invoiced: ${fmtDays(invoiced)}`}
+                                style={{ width: `${pct(invoiced)}%` }}
                                 className="bg-green-500 dark:bg-green-600"
                               />
                             )}
-                            {resPct > 0 && (
+                            {delivered > 0 && (
                               <div
-                                title={`Re-plannable: ${fmtDays(role.reservedDays)}`}
-                                style={{ width: `${resPct}%` }}
+                                title={`Logged, not invoiced: ${fmtDays(delivered)}`}
+                                style={{ width: `${pct(delivered)}%` }}
+                                className="bg-amber-400 dark:bg-amber-500"
+                              />
+                            )}
+                            {committed > 0 && (
+                              <div
+                                title={`Re-plannable: ${fmtDays(committed)}`}
+                                style={{ width: `${pct(committed)}%` }}
                                 className="bg-blue-400 dark:bg-blue-500"
                               />
                             )}
-                            {unplPct > 0 && (
-                              <div
-                                title={`Unplanned: ${fmtDays(role.unplannedDays ?? 0)}`}
-                                style={{ width: `${unplPct}%` }}
-                                className="bg-muted-foreground/20"
-                              />
+                            {over > 0 ? (
+                              <>
+                                <div
+                                  title={`Over budget: ${fmtDays(over)}`}
+                                  style={{ width: `${pct(over)}%` }}
+                                  className="bg-red-500 dark:bg-red-600"
+                                />
+                                {/* budget boundary tick */}
+                                <div
+                                  aria-hidden
+                                  className="absolute top-[-2px] bottom-[-2px] w-[2px] bg-foreground/70"
+                                  style={{ left: `${pct(b)}%` }}
+                                  title={`Budget: ${fmtDays(b)}`}
+                                />
+                              </>
+                            ) : (
+                              unplanned > 0 && (
+                                <div
+                                  title={`Unplanned: ${fmtDays(unplanned)}`}
+                                  style={{ width: `${pct(unplanned)}%` }}
+                                  className="bg-muted-foreground/20"
+                                />
+                              )
                             )}
                           </div>
-                          <div className="flex gap-3 text-xs text-muted-foreground">
-                            <span><span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />Invoiced {fmtDays(role.invoicedDays)}</span>
-                            <span><span className="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1" />Re-plannable {fmtDays(role.reservedDays)}</span>
-                            {role.unplannedDays != null && <span>Unplanned {fmtDays(role.unplannedDays)}</span>}
+                          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                            <span><span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1" />Invoiced {fmtDays(invoiced)}</span>
+                            <span><span className="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1" />Logged (not invoiced) {fmtDays(delivered)}</span>
+                            <span><span className="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1" />Re-plannable {fmtDays(committed)}</span>
+                            {over > 0 ? (
+                              <span className="font-medium text-destructive"><span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1" />Over by {fmtDays(over)}</span>
+                            ) : (
+                              role.unplannedDays != null && <span>Unplanned {fmtDays(role.unplannedDays)}</span>
+                            )}
+                            {(role.stalePlanDays ?? 0) > 0.05 && (
+                              <span className="font-medium text-amber-700 dark:text-amber-400" title="Booked days before today that were never delivered. Not counted against the budget — release or re-plan them.">
+                                ⚠ Stale plan {fmtDays(role.stalePlanDays!)}
+                              </span>
+                            )}
                           </div>
                         </div>
                       );
@@ -638,6 +715,12 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                         <div className="text-xs text-muted-foreground">Remaining budget</div>
                         <div className="font-medium">{fmtDays(budget.totals.remainingBudgetDays)}</div>
                       </div>
+                      {(budget.totals.stalePlanDays ?? 0) > 0.05 && (
+                        <div title="Booked days before today that were never delivered. Not counted against the budget — release or re-plan them.">
+                          <div className="text-xs text-amber-700 dark:text-amber-400">⚠ Stale plan</div>
+                          <div className="font-medium text-amber-700 dark:text-amber-400">{fmtDays(budget.totals.stalePlanDays!)}</div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </>
@@ -671,6 +754,9 @@ export function ProjectRolesSheet({ project, open, onClose }: Props) {
                               <span>Re-plannable: <span className="text-blue-600 dark:text-blue-400 font-medium">{fmtDays(role.reservedDays)}</span></span>
                               {role.unplannedDays != null && (
                                 <span>Unplanned: <span className={`font-medium ${role.unplannedDays < 0 ? "text-destructive" : "text-foreground"}`}>{fmtDays(role.unplannedDays)}</span></span>
+                              )}
+                              {(role.stalePlanDays ?? 0) > 0.05 && (
+                                <span title="Booked days before today that were never delivered — release or re-plan.">Stale: <span className="font-medium text-amber-700 dark:text-amber-400">{fmtDays(role.stalePlanDays!)}</span></span>
                               )}
                             </div>
                           </div>

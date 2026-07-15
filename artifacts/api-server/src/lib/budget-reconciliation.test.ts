@@ -1,12 +1,19 @@
 import { describe, it, expect } from "vitest";
 import {
   calcRoleBudgetReconciliation,
+  calcEffectiveBookingBudgetDays,
   type ReconciliationBooking,
   type ReconciliationTimeEntry,
 } from "./budget-reconciliation";
 
-// All scenarios use Mon-Fri 8h/day flat bookings with no holidays or vacations,
-// so every weekday in the range contributes 8h.
+// Corrected model under test (B = Logged + Reserved + Unplanned):
+// - Unplanned subtracts LOGGED (all delivered work), never invoiced
+// - Reserved = undelivered planned days from `today` onwards only
+// - stalePlanDays = undelivered planned days before `today` (flag, not consumption)
+// - release write-off is frozen at the release DATE, not rolling "today"
+// A fixed `today` (2026-06-03, a Wednesday) makes every scenario deterministic.
+
+const TODAY = new Date("2026-06-03T12:00:00Z");
 
 const emptyAvail = {
   holidayDates: [] as string[],
@@ -14,12 +21,11 @@ const emptyAvail = {
   compDayDateSet: new Set<string>(),
 };
 
-// Helper: build a flat-rate booking covering exactly `days` working days
-// (no weekends; we pick date ranges that are all Mon-Fri for clean arithmetic)
 function flatBooking(
   startDate: string,
   endDate: string,
   hoursPerDay = 8,
+  pastReleasedAt: Date | null = null,
 ): ReconciliationBooking {
   return {
     startDate,
@@ -27,12 +33,11 @@ function flatBooking(
     hoursPerDay,
     weekdayHours: null,
     employeeId: 1,
+    pastReleasedAt,
     avail: emptyAvail,
   };
 }
 
-// Helper: build invoiced / non-invoiced time entries for a date range
-// (all weekdays in the range at 8h/day)
 function buildEntries(
   startDate: string,
   days: number,
@@ -56,184 +61,151 @@ function buildEntries(
   return entries;
 }
 
-// ── Scenario 1 ────────────────────────────────────────────────────────────────
-// B=20, Plan 10d May + 10d June, Logged 10d May + 2d June, Invoiced 10d (May).
-// → Logged=12, Invoiced=10, Reserved=8, Unplanned=2, RemainingBudget=10, Free=8.
-// Identity: 10+8+2=20 ✓
-describe("Scenario 1 — fully invoiced May, partial June delivery", () => {
-  // May 4 (Mon) – May 15 (Fri) = 10 working days
-  // Jun 1 (Mon) – Jun 12 (Fri) = 10 working days
+describe("Scenario 1 - fully invoiced May, partial June delivery", () => {
   const bookings: ReconciliationBooking[] = [
     flatBooking("2026-05-04", "2026-05-15"),
     flatBooking("2026-06-01", "2026-06-12"),
   ];
-
-  // Logged 10d in May (all invoiced), 2d in June (not invoiced)
   const timeEntries: ReconciliationTimeEntry[] = [
     ...buildEntries("2026-05-04", 10, true),
     ...buildEntries("2026-06-01", 2, false),
   ];
+  const r = calcRoleBudgetReconciliation(20, bookings, timeEntries, TODAY);
 
-  it("loggedDays = 12", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.loggedDays).toBe(12);
-  });
-
-  it("invoicedDays = 10", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.invoicedDays).toBe(10);
-  });
-
-  it("reservedDays = 8 (8 undelivered days in June)", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.reservedDays).toBe(8);
-  });
-
-  it("unplannedDays = 2", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.unplannedDays).toBe(2);
-  });
-
-  it("remainingBudgetDays = 10", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.remainingBudgetDays).toBe(10);
-  });
-
-  it("freeDays = 8", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.freeDays).toBe(8);
-  });
-
-  it("identity: Invoiced + Reserved + Unplanned = B", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.invoicedDays! + r.reservedDays + r.unplannedDays!).toBeCloseTo(20);
-  });
+  it("loggedDays = 12", () => expect(r.loggedDays).toBe(12));
+  it("invoicedDays = 10", () => expect(r.invoicedDays).toBe(10));
+  it("reservedDays = 8 (Jun 3-12 undelivered, all future)", () => expect(r.reservedDays).toBe(8));
+  it("stalePlanDays = 0", () => expect(r.stalePlanDays).toBe(0));
+  it("unplannedDays = 0 (20 - 12 logged - 8 reserved)", () => expect(r.unplannedDays).toBe(0));
+  it("remainingBudgetDays = 10 (billing view: B - invoiced)", () => expect(r.remainingBudgetDays).toBe(10));
+  it("freeDays = 8 (B - logged)", () => expect(r.freeDays).toBe(8));
+  it("identity: Logged + Reserved + Unplanned = B", () =>
+    expect(r.loggedDays + r.reservedDays + r.unplannedDays!).toBeCloseTo(20));
 });
 
-// ── Scenario 2 ────────────────────────────────────────────────────────────────
-// B=20, Plan 10d May + 10d June, Logged 8d May + 2d June, Invoiced 8d (May).
-// → Logged=10, Invoiced=8, Reserved=10, Unplanned=2, RemainingBudget=12, LoggedNotInvoiced=2.
-// Identity: 8+10+2=20 ✓
-describe("Scenario 2 — partial May invoiced, undelivered in both months", () => {
+describe("Scenario 2 - stale May days split out of reserved", () => {
   const bookings: ReconciliationBooking[] = [
     flatBooking("2026-05-04", "2026-05-15"),
     flatBooking("2026-06-01", "2026-06-12"),
   ];
-
-  // Logged 8d in May (all invoiced), 2d in June (not invoiced)
   const timeEntries: ReconciliationTimeEntry[] = [
     ...buildEntries("2026-05-04", 8, true),
     ...buildEntries("2026-06-01", 2, false),
   ];
+  const r = calcRoleBudgetReconciliation(20, bookings, timeEntries, TODAY);
 
-  it("loggedDays = 10", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.loggedDays).toBe(10);
-  });
-
-  it("invoicedDays = 8", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.invoicedDays).toBe(8);
-  });
-
-  it("reservedDays = 10 (2 undelivered May + 8 undelivered June)", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.reservedDays).toBe(10);
-  });
-
-  it("unplannedDays = 2", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.unplannedDays).toBe(2);
-  });
-
-  it("remainingBudgetDays = 12", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.remainingBudgetDays).toBe(12);
-  });
-
-  it("loggedNotInvoicedDays = 2", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.loggedNotInvoicedDays).toBe(2);
-  });
-
-  it("identity: Invoiced + Reserved + Unplanned = B", () => {
-    const r = calcRoleBudgetReconciliation(20, bookings, timeEntries);
-    expect(r.invoicedDays! + r.reservedDays + r.unplannedDays!).toBeCloseTo(20);
-  });
+  it("loggedDays = 10", () => expect(r.loggedDays).toBe(10));
+  it("invoicedDays = 8", () => expect(r.invoicedDays).toBe(8));
+  it("reservedDays = 8 (June only - future)", () => expect(r.reservedDays).toBe(8));
+  it("stalePlanDays = 2 (May 14-15, never delivered)", () => expect(r.stalePlanDays).toBe(2));
+  it("unplannedDays = 2 (20 - 10 - 8)", () => expect(r.unplannedDays).toBe(2));
+  it("loggedNotInvoicedDays = 2", () => expect(r.loggedNotInvoicedDays).toBe(2));
+  it("identity: Logged + Reserved + Unplanned = B", () =>
+    expect(r.loggedDays + r.reservedDays + r.unplannedDays!).toBeCloseTo(20));
 });
 
-// ── Scenario 3 ────────────────────────────────────────────────────────────────
-// B=50, Plan 10d May + 10d June (30d never planned),
-// Logged 15d May (invoiced) + 2d June (not invoiced).
-// → Logged=17, Invoiced=15, Reserved=8, Unplanned=27, Free=33.
-// Identity: 15+8+27=50 ✓
-describe("Scenario 3 — over-delivered May, large unplanned buffer", () => {
+describe("Scenario 3 - over-delivered May, large unplanned buffer", () => {
   const bookings: ReconciliationBooking[] = [
     flatBooking("2026-05-04", "2026-05-15"),
     flatBooking("2026-06-01", "2026-06-12"),
   ];
-
-  // 15d logged in May (invoiced) — 5 extra days over the 10-day plan
-  // 2d logged in June (not invoiced)
-  // We need 15 working days starting May 4. May has: May 4-15 = 10d, May 18-22 = 5d → total 15d
-  const mayEntries = [
+  const timeEntries: ReconciliationTimeEntry[] = [
     ...buildEntries("2026-05-04", 10, true),
     ...buildEntries("2026-05-18", 5, true),
+    ...buildEntries("2026-06-01", 2, false),
   ];
-  const juneEntries = buildEntries("2026-06-01", 2, false);
-  const timeEntries = [...mayEntries, ...juneEntries];
+  const r = calcRoleBudgetReconciliation(50, bookings, timeEntries, TODAY);
 
-  it("loggedDays = 17", () => {
-    const r = calcRoleBudgetReconciliation(50, bookings, timeEntries);
-    expect(r.loggedDays).toBe(17);
-  });
+  it("loggedDays = 17", () => expect(r.loggedDays).toBe(17));
+  it("invoicedDays = 15", () => expect(r.invoicedDays).toBe(15));
+  it("reservedDays = 8", () => expect(r.reservedDays).toBe(8));
+  it("unplannedDays = 25 (50 - 17 - 8)", () => expect(r.unplannedDays).toBe(25));
+  it("freeDays = 33", () => expect(r.freeDays).toBe(33));
+  it("identity: Logged + Reserved + Unplanned = B", () =>
+    expect(r.loggedDays + r.reservedDays + r.unplannedDays!).toBeCloseTo(50));
+});
 
-  it("invoicedDays = 15", () => {
-    const r = calcRoleBudgetReconciliation(50, bookings, timeEntries);
-    expect(r.invoicedDays).toBe(15);
-  });
+// The "phantom negative" fix: booked Jun 1-12 (10d) never delivered there;
+// work actually happened May 4-15 (logged+invoiced). today = Jul 1.
+// OLD math: unplanned = 15 - 10 invoiced - 10 reserved = -5 (phantom).
+// NEW math: unplanned = 15 - 10 logged - 0 reserved = +5, stale = 10 flagged.
+describe("Scenario 4 - work delivered on other days than booked (stale, no double count)", () => {
+  const r = calcRoleBudgetReconciliation(
+    15,
+    [flatBooking("2026-06-01", "2026-06-12")],
+    buildEntries("2026-05-04", 10, true),
+    new Date("2026-07-01T12:00:00Z"),
+  );
 
-  it("reservedDays = 8 (June plan 10d − logged 2d; May over-delivered so 0 undelivered)", () => {
-    const r = calcRoleBudgetReconciliation(50, bookings, timeEntries);
-    expect(r.reservedDays).toBe(8);
-  });
+  it("stalePlanDays = 10 (whole booking undelivered, in the past)", () =>
+    expect(r.stalePlanDays).toBe(10));
+  it("reservedDays = 0", () => expect(r.reservedDays).toBe(0));
+  it("unplannedDays = +5 - not the phantom -5 of the old model", () =>
+    expect(r.unplannedDays).toBe(5));
+});
 
-  it("unplannedDays = 27", () => {
-    const r = calcRoleBudgetReconciliation(50, bookings, timeEntries);
-    expect(r.unplannedDays).toBe(27);
-  });
+describe("Scenario 5 - unplanned is invariant under invoicing", () => {
+  const bookings = [flatBooking("2026-06-08", "2026-06-19")]; // 10d, all future
+  const notInvoiced = calcRoleBudgetReconciliation(
+    20, bookings, buildEntries("2026-05-04", 12, false), TODAY);
+  const invoiced = calcRoleBudgetReconciliation(
+    20, bookings, buildEntries("2026-05-04", 12, true), TODAY);
 
-  it("freeDays = 33", () => {
-    const r = calcRoleBudgetReconciliation(50, bookings, timeEntries);
-    expect(r.freeDays).toBe(33);
-  });
-
-  it("identity: Invoiced + Reserved + Unplanned = B", () => {
-    const r = calcRoleBudgetReconciliation(50, bookings, timeEntries);
-    expect(r.invoicedDays! + r.reservedDays + r.unplannedDays!).toBeCloseTo(50);
+  it("unplanned = -2 before invoicing (real over-commitment, visible early)", () =>
+    expect(notInvoiced.unplannedDays).toBe(-2));
+  it("unplanned = -2 after invoicing - unchanged", () =>
+    expect(invoiced.unplannedDays).toBe(-2));
+  it("only the billing overlay differs", () => {
+    expect(notInvoiced.invoicedDays).toBe(0);
+    expect(invoiced.invoicedDays).toBe(12);
+    expect(notInvoiced.loggedDays).toBe(invoiced.loggedDays);
   });
 });
 
-// ── Edge cases ────────────────────────────────────────────────────────────────
+// Booking May 4-15 (10d), nothing delivered, released May 11.
+// today = Jun 3: May 4-8 written off; May 11-15 missed AFTER the release
+// and must resurface as stale (old logic silently forgave them too).
+describe("Scenario 6 - release-date cutoff", () => {
+  const released = flatBooking("2026-05-04", "2026-05-15", 8, new Date("2026-05-11T09:00:00Z"));
+
+  it("reconciliation: stalePlanDays = 5 (May 11-15 resurface)", () => {
+    const r = calcRoleBudgetReconciliation(20, [released], [], TODAY);
+    expect(r.stalePlanDays).toBe(5);
+    expect(r.reservedDays).toBe(0);
+    expect(r.plannedDays).toBe(5); // released days are out of plan entirely
+  });
+
+  it("calcEffectiveBookingBudgetDays counts days from the release date on", () => {
+    expect(calcEffectiveBookingBudgetDays(released, emptyAvail)).toBe(5);
+  });
+
+  it("booking fully before the release date is entirely written off", () => {
+    const fullyReleased = flatBooking("2026-05-04", "2026-05-08", 8, new Date("2026-05-11T09:00:00Z"));
+    expect(calcEffectiveBookingBudgetDays(fullyReleased, emptyAvail)).toBe(0);
+  });
+});
+
 describe("Edge cases", () => {
-  it("null budget → all budget-derived fields are null", () => {
+  it("null budget - budget-derived fields are null, buckets still computed", () => {
     const r = calcRoleBudgetReconciliation(
       null,
-      [flatBooking("2026-05-04", "2026-05-08")],
-      [{ entryDate: "2026-05-04", hours: 8, isInvoiced: false }],
+      [flatBooking("2026-06-08", "2026-06-12")],
+      [{ entryDate: "2026-06-08", hours: 8, isInvoiced: false }],
+      TODAY,
     );
     expect(r.unplannedDays).toBeNull();
     expect(r.freeDays).toBeNull();
     expect(r.remainingBudgetDays).toBeNull();
     expect(r.loggedDays).toBe(1);
-    expect(r.reservedDays).toBe(4); // 5d planned − 1d logged
+    expect(r.reservedDays).toBe(4); // 5d planned - 1d logged, all future
   });
 
-  it("no bookings, no entries → all zeros (budget fields still computed)", () => {
-    const r = calcRoleBudgetReconciliation(10, [], []);
+  it("no bookings, no entries - all zeros (budget fields still computed)", () => {
+    const r = calcRoleBudgetReconciliation(10, [], [], TODAY);
     expect(r.loggedDays).toBe(0);
     expect(r.invoicedDays).toBe(0);
     expect(r.reservedDays).toBe(0);
+    expect(r.stalePlanDays).toBe(0);
     expect(r.unplannedDays).toBe(10);
     expect(r.freeDays).toBe(10);
     expect(r.remainingBudgetDays).toBe(10);
@@ -241,11 +213,11 @@ describe("Edge cases", () => {
   });
 
   it("over-delivery on a booked day clamps undelivered to 0", () => {
-    // Plan 1d, log 2d → undelivered = 0
-    const bookings = [flatBooking("2026-05-04", "2026-05-04")];
-    const entries = [{ entryDate: "2026-05-04", hours: 16, isInvoiced: false }];
-    const r = calcRoleBudgetReconciliation(5, bookings, entries);
+    const bookings = [flatBooking("2026-06-08", "2026-06-08")];
+    const entries = [{ entryDate: "2026-06-08", hours: 16, isInvoiced: false }];
+    const r = calcRoleBudgetReconciliation(5, bookings, entries, TODAY);
     expect(r.reservedDays).toBe(0);
     expect(r.loggedDays).toBe(2);
+    expect(r.unplannedDays).toBe(3); // 5 - 2 logged - 0 reserved
   });
 });

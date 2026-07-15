@@ -347,6 +347,7 @@ router.get("/project-roles/:id/budget-status", async (req, res): Promise<void> =
     loggedDays: reconciliation.loggedDays,
     invoicedDays: reconciliation.invoicedDays,
     reservedDays: reconciliation.reservedDays,
+    stalePlanDays: reconciliation.stalePlanDays,
     unplannedDays: reconciliation.unplannedDays,
     freeDays: reconciliation.freeDays,
     remainingBudgetDays: reconciliation.remainingBudgetDays,
@@ -364,7 +365,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
 
   const roles = await getRolesForProject(projectId);
   if (roles.length === 0) {
-    res.json({ roles: [], totals: { budgetedDays: 0, budgetedHours: 0, budgetValue: 0, bookedHours: 0, bookedValue: 0, invoicedDays: 0, reservedDays: 0, unplannedDays: 0, freeDays: 0, remainingBudgetDays: 0, loggedNotInvoicedDays: 0 } });
+    res.json({ roles: [], totals: { budgetedDays: 0, budgetedHours: 0, budgetValue: 0, bookedHours: 0, bookedValue: 0, invoicedDays: 0, reservedDays: 0, stalePlanDays: 0, unplannedDays: 0, freeDays: 0, remainingBudgetDays: 0, loggedNotInvoicedDays: 0 } });
     return;
   }
 
@@ -507,6 +508,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
       utilization,
       invoicedDays: recon.invoicedDays,
       reservedDays: recon.reservedDays,
+      stalePlanDays: recon.stalePlanDays,
       unplannedDays: recon.unplannedDays,
       freeDays: recon.freeDays,
       remainingBudgetDays: recon.remainingBudgetDays,
@@ -515,6 +517,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
   });
 
   const round1 = (n: number) => Math.round(n * 10) / 10;
+  const totalStalePlanDays = rolesWithBudget.reduce((s, r) => s + (r.stalePlanDays ?? 0), 0);
 
   res.json({
     roles: rolesWithBudget,
@@ -526,6 +529,7 @@ router.get("/projects/:projectId/budget", async (req, res): Promise<void> => {
       bookedValue: Math.round(totalBookedValue * 100) / 100,
       invoicedDays: round1(totalInvoicedDays),
       reservedDays: round1(totalReservedDays),
+      stalePlanDays: round1(totalStalePlanDays),
       unplannedDays: round1(totalUnplannedDays),
       freeDays: round1(totalFreeDays),
       remainingBudgetDays: round1(totalRemainingBudgetDays),
@@ -773,6 +777,7 @@ router.get("/projects/:projectId/allocations", async (req, res): Promise<void> =
       bookedDays: roleBookedDays,
       invoicedDays: recon.invoicedDays,
       reservedDays: recon.reservedDays,
+      stalePlanDays: recon.stalePlanDays,
       unplannedDays: recon.unplannedDays,
       freeDays: recon.freeDays,
       remainingBudgetDays: recon.remainingBudgetDays,
