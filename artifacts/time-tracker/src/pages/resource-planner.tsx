@@ -1123,8 +1123,10 @@ function BookingModal({
     calcResult && calcResult.totalHours > 0 ? calcResult.totalHours : null;
 
   // Past undelivered days (for release button): fetched server-side so that
-  // logged hours are subtracted per booking, not role-wide. Disabled when
-  // already released or no booking id.
+  // logged hours are subtracted per booking, not role-wide. Also enabled for
+  // ALREADY-RELEASED bookings — the endpoint applies the release-date cutoff,
+  // so days missed AFTER a release surface here again and can be re-released
+  // (a fresh release stamps a new cutoff date).
   const editBookingId = isEdit ? (state as EditModalState).booking.id : null;
   const editBookingReleased = isEdit ? !!(state as EditModalState).booking.pastReleasedAt : false;
   const { data: pastUndeliveredData } = useQuery<{ pastUndeliveredDays: number }>({
@@ -1136,10 +1138,80 @@ function BookingModal({
       if (!res.ok) throw new Error("Failed to fetch past undelivered days");
       return res.json();
     },
-    enabled: isEdit && !!editBookingId && !editBookingReleased,
+    enabled: isEdit && !!editBookingId,
     staleTime: 30_000,
   });
-  const pastPlanDays = editBookingReleased ? 0 : (pastUndeliveredData?.pastUndeliveredDays ?? 0);
+  const pastPlanDays = pastUndeliveredData?.pastUndeliveredDays ?? 0;
+
+  // Per-slot past-undelivered (stale) days — powers the "⚠ Xd stale" chips in
+  // the slots list and the "Release all" action in the role-budget popover.
+  const staleSlotIds = useMemo(
+    () =>
+      roleId
+        ? allBookings
+            .filter((b) => b.employeeId === employeeId && String(b.projectRoleId) === roleId)
+            .map((b) => b.id)
+        : [],
+    [allBookings, employeeId, roleId],
+  );
+  const slotStaleQueries = useQueries({
+    queries: staleSlotIds.map((id) => ({
+      queryKey: ["booking-past-undelivered", id],
+      queryFn: async () => {
+        const res = await fetch(`/api/resource-bookings/${id}/past-undelivered`, {
+          credentials: "include",
+        });
+        if (!res.ok) throw new Error("Failed to fetch past undelivered days");
+        return res.json() as Promise<{ pastUndeliveredDays: number }>;
+      },
+      staleTime: 30_000,
+    })),
+  });
+  const slotStaleMap = useMemo(() => {
+    const m = new Map<number, number>();
+    staleSlotIds.forEach((id, i) => m.set(id, slotStaleQueries[i]?.data?.pastUndeliveredDays ?? 0));
+    return m;
+  }, [staleSlotIds, slotStaleQueries]);
+
+  // "Release all stale on this role": releases every booking on the role that
+  // still carries undelivered past plan — executed per slot underneath, so the
+  // audit trail and per-slot Undo stay intact. Two-step confirm in the UI.
+  const releaseAllQc = useQueryClient();
+  const [confirmReleaseAll, setConfirmReleaseAll] = useState(false);
+  const [releasingAll, setReleasingAll] = useState(false);
+  const releaseAllStaleOnRole = async () => {
+    setReleasingAll(true);
+    try {
+      const roleBookings = allBookings.filter((b) => String(b.projectRoleId) === roleId);
+      let releasedCount = 0;
+      let releasedDays = 0;
+      for (const b of roleBookings) {
+        const res = await fetch(`/api/resource-bookings/${b.id}/past-undelivered`, {
+          credentials: "include",
+        });
+        if (!res.ok) continue;
+        const { pastUndeliveredDays } = (await res.json()) as { pastUndeliveredDays: number };
+        if (pastUndeliveredDays > 0.05) {
+          await releaseMut.mutateAsync(b.id);
+          releasedCount++;
+          releasedDays += pastUndeliveredDays;
+        }
+      }
+      toast({
+        title:
+          releasedCount > 0
+            ? `Released ${Math.round(releasedDays * 10) / 10}d stale plan across ${releasedCount} slot${releasedCount === 1 ? "" : "s"}`
+            : "No stale plan to release",
+      });
+      releaseAllQc.invalidateQueries({ queryKey: ["booking-past-undelivered"] });
+      releaseAllQc.invalidateQueries({ queryKey: ["role-budget-status"] });
+    } catch {
+      toast({ title: "Failed to release stale plan", variant: "destructive" });
+    } finally {
+      setReleasingAll(false);
+      setConfirmReleaseAll(false);
+    }
+  };
 
   // Days this slot actually books against the role budget — RELEASE-AWARE and
   // computed inline (not via a memo) so it always tracks the latest edits and
@@ -1157,8 +1229,11 @@ function BookingModal({
         workingDaysMask, holidayDates, vacations,
       ).budgetDays;
     if (!editBookingReleased) return calc(startDate);
-    if (endDate < slotTodayStr) return 0;
-    return calc(startDate >= slotTodayStr ? startDate : slotTodayStr);
+    // Release-date cutoff: a released booking books its days from the release
+    // date onwards (not from "today") — matching the backend reconciliation.
+    const relCut = ((state as EditModalState).booking.pastReleasedAt ?? slotTodayStr).slice(0, 10);
+    if (endDate < relCut) return 0;
+    return calc(startDate >= relCut ? startDate : relCut);
   })();
 
   // Weekday-mode derived values
@@ -2530,7 +2605,41 @@ function BookingModal({
                           <div className={`flex justify-between ${statusColor(unplanned)}`}><span>Unplanned</span><span className="font-medium">{r1(unplanned)}d</span></div>
                           <div className="flex justify-between"><span className="text-muted-foreground">Free</span><span>{freeDays != null ? r1(freeDays) + "d" : "—"}</span></div>
                           {(stalePlanDays ?? 0) > 0.05 && (
-                            <div className="flex justify-between text-amber-700 dark:text-amber-400"><span>Stale plan</span><span className="font-medium">{r1(stalePlanDays)}d</span></div>
+                            <div className="col-span-2 flex items-center justify-between text-amber-700 dark:text-amber-400">
+                              <span>Stale plan</span>
+                              <span className="flex items-center gap-2">
+                                <span className="font-medium">{r1(stalePlanDays)}d</span>
+                                {confirmReleaseAll ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="text-[11px] font-medium underline disabled:opacity-50"
+                                      disabled={releasingAll}
+                                      onClick={releaseAllStaleOnRole}
+                                    >
+                                      {releasingAll ? "Releasing…" : "Confirm release all"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-[11px] underline text-muted-foreground"
+                                      disabled={releasingAll}
+                                      onClick={() => setConfirmReleaseAll(false)}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="text-[11px] underline"
+                                    title="Write off all undelivered past plan on this role. Executed per slot — each release is recorded on its booking and reversible there."
+                                    onClick={() => setConfirmReleaseAll(true)}
+                                  >
+                                    Release all
+                                  </button>
+                                )}
+                              </span>
+                            </div>
                           )}
                         </div>
                         <p className="text-[11px] text-muted-foreground leading-relaxed">
@@ -2692,9 +2801,17 @@ function BookingModal({
                             {isCur && <span className="text-primary font-semibold">●</span>}
                             <span className="truncate">{format(parseISO(b.startDate), "d MMM")} – {format(parseISO(b.endDate), "d MMM yy")}</span>
                             {rel && <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground border border-border rounded px-1"><Clock className="h-2.5 w-2.5" /> released</span>}
+                            {(slotStaleMap.get(b.id) ?? 0) > 0.05 && (
+                              <span
+                                className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 rounded px-1"
+                                title="Undelivered past plan on this slot — open it to release, or use “Release all” in the budget details."
+                              >
+                                ⚠ {r1(slotStaleMap.get(b.id) ?? 0)}d stale
+                              </span>
+                            )}
                             {isCur && <span className="text-[10px] text-primary">this slot</span>}
                           </span>
-                          <span className="shrink-0 ml-2 text-muted-foreground">{r1(bd)}d{b.endDate < todayStr && !rel ? " · has past" : ""}</span>
+                          <span className="shrink-0 ml-2 text-muted-foreground">{r1(bd)}d</span>
                         </div>
                       );
                     })}
